@@ -1,337 +1,309 @@
-#nowarn "9" // disable warning for StructLayoutAttribute
-
 namespace Stowage
-
 open System
-open System.Runtime.InteropServices
-open System.Security
+open System.IO
+open System.Threading
+open System.Threading.Tasks
 open Data.ByteString
+open Stowage.LMDB_FFI
 
+/// Stowage above a memory-mapped database.
+///
+/// This uses the memory mapped file database LMDB under the hood.
+/// LMDB is a read-optimized database, but offers effective write
+/// performance - at least faster than 
+module LMDB =
+    type Key = DB.Key
+    type Val = DB.Val
+    type KVMap = DB.KVMap
 
-// slice of LMDB API and FFI used for Stowage
-//  I could use the LightningDB package, but I'd still mostly use
-[< SecuritySafeCriticalAttribute >]
-module internal LMDB =
-    type MDB_env = nativeint    // opaque MDB_env*
-    type MDB_txn = nativeint    // opaque MDB_txn*
-    type MDB_dbi = uint32       // database ids are simple ints
-    type MDB_cursor = nativeint // opaque MDB_cursor*
-    type MDB_cursor_op = int    // an enumeration
-    type size_t = unativeint    // C size values
-    type mdb_mode_t = int       // Unix-style permissions
+    /// MDB storage will support values up to 64MB.
+    let maxValLen = (64 * 1024 * 1024)
 
-    [< Struct; StructLayoutAttribute(LayoutKind.Sequential) >]
-    type MDB_val =
-        val size : size_t
-        val data : nativeint
-        new(s,d) = { size = s; data = d }
+    let maxSafeKeyLen = 255
+    let minSafeKeyLen = 1
+    let inline safeKeyByte (b:byte) : bool = 
+        ((126uy >= b) && (b >= 35uy))
 
-    let defaultMode : mdb_mode_t = 0o660
+    /// Safe keys are limited as follows:
+    ///   contain only ASCII bytes in 35..126
+    ///   size limit between 1 and 255 bytes
+    /// Other keys will be mangled.
+    let safeKey (k:ByteString) : bool =
+        (maxSafeKeyLen >= k.Length) &&
+        (k.Length >= minSafeKeyLen) &&
+        BS.forall safeKeyByte k
 
-    // Environment Flags
-    let MDB_NOSYNC   =  0x10000u    // writer handles sync explicitly
-    let MDB_WRITEMAP =  0x80000u    // avoid extra malloc/copy on write
-    let MDB_NOTLS    = 0x200000u    // using lightweight threads
-    let MDB_NOLOCK   = 0x400000u    // specialized locking model
-    
-    // Database Flags
-    let MDB_CREATE  = 0x40000u  // create DB if it doesn't exist
+    /// Mangle unsafe keys, rewriting to !SecureHash.
+    /// Secure hash is the first 160 bits of RscHash.
+    let mangle (k:ByteString) : Key =
+        if safeKey k then k else
+        BS.cons (byte '!') (BS.take 32 (RscHash.hash k))
 
-    // Write Flags
-    let MDB_RESERVE = 0x10000u  // reserve space for writing data
-
-    // Cursor Ops
-    let MDB_FIRST = 0
-    let MDB_NEXT  = 8           // next cursor item
-    let MDB_SET_RANGE = 17      // next key after request
-
-    // Transaction Flags
-    let MDB_RDONLY = 0x20000u
-
-    // Specially handled Error codes
-    let MDB_NOTFOUND = (-30798)
-
-    module Native = 
-        // API native methods
-        //
-        // Note: I'm not happy with .Net's conversion of strings. But I don't 
-        // use anything outside of ASCII within Stowage. 
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-        extern nativeint mdb_strerror(int errno);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_env_create([<Out>] MDB_env& env);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_env_open(MDB_env env, string path, uint32 flags, mdb_mode_t mode);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern void mdb_env_close(MDB_env env);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_env_sync(MDB_env env, int force); 
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_env_set_mapsize(MDB_env env, size_t size);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_env_set_maxdbs(MDB_env env, MDB_dbi dbs);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_txn_begin(MDB_env env, MDB_txn parent, uint32 flags, [<Out>] MDB_txn& txn);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_txn_commit(MDB_txn txn);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_dbi_open(MDB_txn txn, string name, uint32 flags, [<Out>] MDB_dbi& dbi); 
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_get(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, [<Out>] MDB_val& data);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_put(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, MDB_val& data, uint32 flags);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_del(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, nativeint nullData);
-            // note: not using DUPSORT in Stowage; data argument should be 0n
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-        extern int mdb_cursor_open(MDB_txn txn, MDB_dbi dbi, MDB_cursor& cursor);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-        extern void mdb_cursor_close(MDB_cursor cursor);
-
-        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-        extern int mdb_cursor_get(MDB_cursor cursor, MDB_val& key, nativeint nullData, MDB_cursor_op op);
-            // currently using cursors only to browse available keys
-
-        // I don't need cursor put or cursor del at this time.
-        // I also don't currently close or dispose of a DB.
-
-    // Stowage shouldn't be seeing errors, so I won't waste complexity
-    // budget on sophisticated error handling. 
-    exception LMDBError of int
-
-    let reportError (e : int) : unit =
-        let msgPtr = Native.mdb_strerror(e)
-        let msgStr = 
-            if (IntPtr.Zero = msgPtr) then "(null)" else
-            Marshal.PtrToStringAnsi(msgPtr)
-        printf "LMDB Error %d: %s" e msgStr
-        raise (LMDBError e)
-
-    let inline check (e : int) : unit =
-        if (0 <> e) then reportError(e) 
-
-    let mdb_assertions (env : MDB_env) : unit =
-        assert((2 * Marshal.SizeOf<nativeint>()) = Marshal.SizeOf<MDB_val>())
+    module private I =
+        type WriteBatch = BTree<Val>
         
+        // to guard Stowage hashes against timing attacks, we'll not
+        // use the full RscHash for lookups. Instead, I use just the
+        // first 180 bits, then verify the remaining 180 bits with a
+        // constant time equality check.
+        type StowKey = ByteString 
+        let stowKeyLen = (RscHash.size / 2)
+        let stowKeyRem = RscHash.size - stowKeyLen
+        do assert(stowKeyRem >= stowKeyLen)
+        type StowData = (struct(RscHash * ByteString))
+        type StowBuff = Map<StowKey,StowData>
+        
+        type EphID = uint64
+        let inline ephId (s:ByteString) : EphID =
+            ByteString.Hash64 (BS.take 16 s)
 
-    let mdb_env_create () : MDB_env =
-        let mutable env = IntPtr.Zero
-        check(Native.mdb_env_create(&env))
-        assert (IntPtr.Zero <> env)
-        mdb_assertions env
-        env
-
-    /// note: give size here in megabytes, not bytes
-    let mdb_env_set_mapsize (env : MDB_env) (maxSizeMB : int) : unit =
-        assert(maxSizeMB > 0)
-        let maxSizeBytes = (1024UL * 1024UL) * (uint64 maxSizeMB)
-        check(Native.mdb_env_set_mapsize(env, unativeint maxSizeBytes))
-
-    let mdb_env_set_maxdbs (env : MDB_env) (maxDBs : int) : unit =
-        assert (maxDBs > 0)
-        check(Native.mdb_env_set_maxdbs(env, uint32 maxDBs))
-
-    let mdb_env_open (env : MDB_env) (path : string) (flags : uint32) =
-        check(Native.mdb_env_open(env,path,flags,defaultMode))
-
-    let mdb_env_close (env : MDB_env) : unit =
-        Native.mdb_env_close(env)
-
-    let mdb_env_sync (env : MDB_env) : unit =
-        check(Native.mdb_env_sync(env,1))
-
-    let mdb_readwrite_txn_begin (env : MDB_env) : MDB_txn =
-        let mutable txn = IntPtr.Zero
-        check(Native.mdb_txn_begin(env, IntPtr.Zero, 0u, &txn))
-        assert(IntPtr.Zero <> txn)
-        txn
-
-    let mdb_rdonly_txn_begin (env : MDB_env) : MDB_txn =
-        let mutable txn = IntPtr.Zero
-        check(Native.mdb_txn_begin(env, IntPtr.Zero, MDB_RDONLY, &txn))
-        assert(IntPtr.Zero <> txn)
-        txn
-
-    /// MDB transactions always succeed. 
-    /// We just can't have more than one writer transaction at a time.
-    let mdb_txn_commit (txn : MDB_txn) : unit =
-        check(Native.mdb_txn_commit(txn))
-
-    let mdb_dbi_open (txn : MDB_txn) (db : string) : MDB_dbi =
-        let mutable dbi = 0u
-        check(Native.mdb_dbi_open(txn, db, MDB_CREATE, &dbi))
-        dbi
-
-    // zero-copy get (copy neither key nor result)
-    let mdb_getZC (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : MDB_val option =
-        BS.withPinnedBytes key (fun kAddr -> 
-            let mutable mdbKey = MDB_val(unativeint key.Length, kAddr)
-            let mutable mdbVal = MDB_val()
-            let e = Native.mdb_get(txn, db, &mdbKey, &mdbVal)
-            if(MDB_NOTFOUND = e) then None else
-            check e
-            Some mdbVal)
-    
-    // check to see if a key already exists in the database
-    // (lookup but don't copy!)
-    let inline mdb_contains (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : bool =
-        mdb_getZC txn db key |> Option.isSome
-
-    // copy an unmanaged MDB_val to a managed byte array
-    let copyVal (v : MDB_val) : byte[] =
-        if(0un = v.size) then Array.empty else
-        let len = int (v.size)
-        assert ((0 < len) && ((unativeint len) = v.size))
-        let arr : byte[] = Array.zeroCreate len
-        Marshal.Copy(v.data, arr, 0, len)
-        arr
-
-    let inline val2bytes (v : MDB_val) : ByteString =
-        BS.unsafeCreateA (copyVal v) 
-    
-    // lookup a value in the database, copies the bytes
-    let inline mdb_get (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : ByteString option =
-        mdb_getZC txn db key |> Option.map val2bytes
-
-    // allocate space to write a value
-    let mdb_reserve (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) (len : int) : nativeint =
-        BS.withPinnedBytes key (fun keyAddr ->
-            let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
-            let mutable mdbVal = MDB_val(unativeint len, IntPtr.Zero)
-            check(Native.mdb_put(txn, db, &mdbKey, &mdbVal, MDB_RESERVE))
-            assert(IntPtr.Zero <> mdbVal.data)
-            mdbVal.data)
-
-    // write or modify a value 
-    let inline mdb_put (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) (v : ByteString) : unit =
-        let dst = mdb_reserve txn db key v.Length
-        Marshal.Copy(v.UnsafeArray, v.Offset, dst, v.Length)
-
-    // delete key-value pair, returns whether item exists.
-    let mdb_del (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : bool =
-        BS.withPinnedBytes key (fun keyAddr ->
-            let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
-            let e = Native.mdb_del(txn,db,&mdbKey,IntPtr.Zero)
-            if(MDB_NOTFOUND = e) then false else check(e); true)
-
-
-    // I find LMDB cursors to be rather awkward. They don't translate
-    // cleanly to F# sequences. 
-    let mdb_cursor_open (txn : MDB_txn) (dbi : MDB_dbi) : MDB_cursor =
-        let mutable crs = IntPtr.Zero
-        check(Native.mdb_cursor_open(txn, dbi, &crs))
-        assert(IntPtr.Zero <> crs)
-        crs
-
-    let inline mdb_cursor_close (crs : MDB_cursor) : unit =
-        Native.mdb_cursor_close(crs)
-
-    let mdb_cursor_seek_key_first (crs : MDB_cursor) : ByteString option =
-        let mutable mdbKey = MDB_val()
-        let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_FIRST)
-        if(MDB_NOTFOUND = e) then None else
-        check(e)
-        Some(val2bytes mdbKey)
-
-    // seek for key equal or greater than the argument, if any.
-    let mdb_cursor_seek_key_ge (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
-        if BS.isEmpty key then mdb_cursor_seek_key_first crs else
-        BS.withPinnedBytes key (fun keyAddr ->
-            let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
-            let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_SET_RANGE)
-            if(MDB_NOTFOUND = e) then None else
-            check(e)
-            Some(val2bytes mdbKey))
-
-    // seek to next key in iterator. 
-    let mdb_cursor_next_key (crs : MDB_cursor) : (ByteString option) =
-        let mutable mdbKey = MDB_val()
-        let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_NEXT)
-        if(MDB_NOTFOUND = e) then None else
-        check(e)
-        Some(val2bytes mdbKey)
-
-    let mdb_cursor_seek_key_gt (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
-        let kGE = mdb_cursor_seek_key_ge crs key
-        match kGE with
-        | Some kEQ when (kEQ = key) -> mdb_cursor_next_key crs
-        | _ -> kGE
-
-    type private MDBKeyEnumerator =
-        val         private crs  : MDB_cursor
-        val         private seek : ByteString
-        val mutable private ini  : bool
-        val mutable private fin  : bool
-        val mutable private cur  : ByteString
-
-        new (txn : MDB_txn, dbi : MDB_dbi, from : ByteString) =
-            { crs = mdb_cursor_open txn dbi
-              seek = from
-              ini = true
-              fin = true
-              cur = BS.empty
-            }
-
-        member private e.Init() : unit =
-            e.ini <- false
-            let firstKey = mdb_cursor_seek_key_gt (e.crs) (e.seek)
-            e.cur <- defaultArg firstKey (BS.empty)
-            e.fin <- Option.isNone firstKey
-
-        member private e.Step() : unit =
-            if(e.ini) then e.Init() else
-            if(e.fin) then () else
-            let nextKey = mdb_cursor_next_key (e.crs)
-            e.cur <- defaultArg nextKey (BS.empty)
-            e.fin <- Option.isNone nextKey
-
-        member private e.Close() : unit =
-            mdb_cursor_close (e.crs)
+        // Our ephemeron table both locks the refct table and allows me
+        // to delay decrefs that might occur after concurrent writes so
+        // we don't prematurely GC any resources.
+        type Ephemerons =
+            val table : RCTable.Table
+            val mutable decrefs : ResizeArray<EphID>
+            val mutable delay : bool
             
-        interface System.Collections.Generic.IEnumerator<ByteString> with
-            member e.Current with get() = e.cur
-        interface System.Collections.IEnumerator with
-            member e.Current with get() = box e.cur
-            member e.MoveNext() = e.Step(); not e.fin
-            member e.Reset() = e.ini <- true
-        interface System.IDisposable with
-            member e.Dispose() = e.Close()
+            new() = 
+                { table = new RCTable.Table()
+                  decrefs = new ResizeArray<EphID>()
+                  delay = false
+                }
 
-    /// Construct a sequence that returns keys lexicographically starting
-    /// after the given key (not including said key). It's important that
-    /// this sequence does not survive longer than the transaction argument.
-    let mdb_keys_from (txn : MDB_txn) (dbi : MDB_dbi) (from : ByteString) : seq<ByteString> =
-        let mkEnum() = new MDBKeyEnumerator(txn,dbi,from)
-        { new seq<ByteString> with
-            member x.GetEnumerator() =
-                mkEnum() :> System.Collections.Generic.IEnumerator<ByteString> 
-            member x.GetEnumerator() =
-                mkEnum() :> System.Collections.IEnumerator
-        }
+            member this.DelayDecrefs () = lock this (fun () -> 
+                this.delay <- true)
+            member this.PassDecrefs () = lock this (fun () ->
+                this.decrefs.ForEach(fun k -> this.table.Decref k)
+                this.decrefs <- new ResizeArray<EphID>()
+                this.delay <- false)
+            member this.Incref (k:EphID) : unit = lock this (fun () -> 
+                this.table.Incref k)
+            member this.Decref (k:EphID) : unit = lock this (fun () ->
+                if this.delay 
+                    then this.decrefs.Add k
+                    else this.table.Decref k)
+            member this.Contains (k:EphID) : bool = lock this (fun () -> 
+                this.table.Contains k)
 
-    /// Enumerate all the keys from a database. See also: mdb_keys_from.
-    let inline mdb_keys (txn : MDB_txn) (dbi : MDB_dbi) : seq<ByteString> =
-        mdb_keys_from txn dbi (BS.empty)
 
-    /// Capture a slice of up to nMax keys as an array.
-    let mdb_slice_keys txn dbi keyMin nMax : ByteString[] =
-        mdb_keys_from txn dbi keyMin 
-            |> Seq.truncate nMax 
-            |> Seq.toArray
+        type FileLock = FileStream
+        let lockFile (name : string) : FileLock =
+            new FileStream(
+                    name, 
+                    FileMode.OpenOrCreate, 
+                    FileAccess.ReadWrite, 
+                    FileShare.None,
+                    8,
+                    FileOptions.DeleteOnClose)
+
+        // Simply count concurrent readers. Allow wait for zero readers. 
+        type ReadLock =
+            val mutable rc : nativeint
+            new () = { rc = 0n }
+            member rdlock.Acquire() = lock rdlock (fun () ->
+                rdlock.rc <- (rdlock.rc + 1n))
+            member rdlock.Release() = lock rdlock (fun () ->
+                assert(0n <> rdlock.rc)
+                rdlock.rc <- (rdlock.rc - 1n)
+                if (0n = rdlock.rc)
+                    then Monitor.PulseAll(rdlock))
+            member rdlock.Wait() = lock rdlock (fun () ->
+                while (0n <> rdlock.rc) do
+                    Monitor.Wait(rdlock))
+
+
+        // Due to the entanglement of of concurrency issues, I haven't found
+        // a convenient model to break this into smaller components. OTOH, 
+        // it isn't critical to do so.
+        type Database =
+
+            // MDB layer tables.
+            val mdb_env  : MDB_env  // LMDB database
+            val dbi_data : MDB_dbi  // root key-value pairs
+            val dbi_stow : MDB_dbi  // binary Stowage resources
+            val dbi_rfct : MDB_dbi  // table with positive refcts
+            val dbi_zero : MDB_dbi  // table with zero-refct items
+            val flock    : FileLock // resist accidental concurrency
+
+            val ephtbl           : Ephemerons   // track resources in memory
+            val mutable rdlock   : ReadLock     // track concurrent readers
+            val mutable write    : KVMap        // new write batch
+            val mutable stow     : StowBuff     // batch of stowage resources
+            val mutable sbsz     : unativeint   // stowage buffer approx size
+            val mutable sbthresh : unativeint   // max sbsz before flush
+
+            val wlock            : Object       // single writer lock
+            val mutable writing  : KVMap        // flushing write batch
+            val mutable stowing  : StowBuff     // recently stowed data
+
+            // consider: stats for how much data is processed.
+           
+            new (path:string, maxSizeMB:int) =
+                Directory.CreateDirectory(path) |> ignore
+                let flock = lockFile (Path.Combine(path,"lock"))
+                let env = mdb_env_create ()
+                mdb_env_set_mapsize env maxSizeMB
+                mdb_env_set_maxdbs env 4
+                let envFlags = MDB_NOSYNC ||| MDB_WRITEMAP ||| 
+                               MDB_NOTLS ||| MDB_NOLOCK
+                mdb_env_open env path envFlags
+                let tx = mdb_readwrite_txn_begin env
+                let dbi_data = mdb_dbi_open tx "/"
+                let dbi_stow = mdb_dbi_open tx "$"
+                let dbi_rfct = mdb_dbi_open tx "#"
+                let dbi_zero = mdb_dbi_open tx "0"
+                mdb_txn_commit tx
+                { mdb_env  = env
+                  dbi_data = dbi_data
+                  dbi_stow = dbi_stow
+                  dbi_rfct = dbi_rfct
+                  dbi_zero = dbi_zero
+                  flock    = flock
+                  ephtbl   = new Ephemerons()
+                  rdlock   = new ReadLock()
+                  wlock    = new System.Object()
+                  write    = BTree.empty
+                  writing  = BTree.empty
+                  stow     = Map.empty
+                  sbsz     = 0un
+                  sbthresh = unativeint (4 * 1000 * 1000)
+                }
+
+            member db.Close() = 
+                mdb_env_sync (db.env)
+                mdb_env_close (db.env)
+
+        let withRTX (db : Database) (action : MDB_txn -> 'x) : 'x =
+            let rdlock = lock db (fun () ->
+                db.rdlock.Acquire()
+                db.rdlock)
+            try let tx = mdb_rdonly_txn_begin (db.mdb_env)
+                try action tx
+                finally mdb_txn_commit tx
+            finally rdlock.Release()
+
+        // locate resource in database, if it is available. This will search
+        // recently buffered stowage before the LMDB layer. Uses constant time
+        // to compare the last 40 bytes of RscHash to resist timing attacks.
+        let tryLoadRsc (db : Database) (h : RscHash) : ByteString option =
+            if (RscHash.size <> h.Length) 
+                then invalidArg "h" "invalid resource hash"
+            let struct(sb0,sb1) = lock db (fun () -> 
+                struct(db.stow, db.stowing))
+            let inSB0 = tryFindRscSB h sb0
+            if Option.isSome inSB0 then inSB0 else
+            let inSB1 = tryFindRscSB h sb1
+            if Option.isSome inSB1 then inSB1 else
+            let vOpt = withRTX db (fun tx -> 
+                mdb_get tx (db.dbi_stow) (BS.take stowKeyLen h))
+            match vOpt with
+            | Some rv when (ByteString.CTEq (BS.drop stowKeyLen h) (BS.take stowKeyRem rv)) ->
+                Some (BS.drop stowKeyRem rv)
+            | _ -> None
+
+        // read a recent value for a key. If there was a write to the key
+        // earlier in the smae thread, that value or a later one is read.
+        let readKey (db : Database) (k : Key) : Val =
+            let struct(wb0,wb1) = lock db (fun () ->
+                struct(db.write, db.writing))
+            match BTree.find k wb0 with
+            | Some v -> v
+            | None ->
+                match BTree.find k wb1 with
+                | Some v -> v
+                | None -> withRTX db (fun tx -> mdb_get tx (db.dbi_data) k)
+
+        let inline leftBiasedUnion (a:BTree<'x>) (b:BTree<'x>) : BTree<'x> =
+            if BTree.isEmpty b then a else
+            BTree.foldBack (BTree.add) a b
+
+        let safeWrite k vOpt =
+            // testing key against LMDB limits here
+            let okKey = (511 >= k.Length) && (k.Length >= 1)
+            if not okKey then false else
+            match vOpt with
+            | Some v -> (maxValLen >= v.Length) 
+            | None -> true
+
+        // write a batch of updates. Does not flush updates.
+        let writeBatch (db : Database) (wb : KVMap) : unit =
+            if not (BTree.forall safeWrite wb)
+                then invalidArg "wb" "invalid write batch"
+            lock db (fun () ->
+                db.write <- leftBiasedUnion wb (db.write))
+
+        // Add to stowage batch, returning incref'd RscHash. Actual write
+        // is delayed until flush, but maintains db.sbsz so we may decide
+        // to auto-flush whenever we have a fair amount of buffered data.
+        let stowRsc (db : Database) (v : ByteString) : RscHash =
+            if (v.Length > maxValLen)
+                then invalidArg "v" "oversized value"
+            let h = RscHash.hash v
+            db.ephtbl.Incref h
+            lock db (fun () ->
+                db.stow <- Map.add (BS.take stowKeyLen h) (struct(h,v))
+                db.sbsz <- unativeint (200 + v.Length) + db.sbsz) 
+            h
+
+        // positive reference counts are encoded using EncVarNat.
+        // zero counts are encoded in a separate table for iteration.
+        type RC = uint64
+        let refctBytes (rc:RC) : ByteString =
+            ByteStream.write (fun dst ->
+                ByteStream.reserve (EncVarNat.size rc) dst
+                EncVarNat.write rc dst)
+
+        // read a durable reference count
+        let dbGetRefct (db:Database) (rtx:MDB_txn) (sk:StowKey) : RC =
+            match mdb_get rtx (db.dbi_rfct) sk with
+            | Some v -> ByteStream.read (EncVarNat.read) v
+            | None -> 0UL
+
+        // set durable reference count. Ensures that stowkey appears
+        // in either the rfct or zero database, but not both.
+        let dbSetRefct (db:Database) (wtx:MDB_txn) (sk:StowKey) (rc:RC) : unit =
+            if (0UL = rc) then
+                mdb_del wtx (db.dbi_rfct) sk |> ignore<bool>
+                mdb_put wtx (db.dbi_zero) sk (BS.empty)
+            else
+                mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
+                mdb_put wtx (db.dbi_rfct) sk (refctBytes rc)
+
+        let inline dbHasRsc (db:Database) (rtx:MDB_txn) (h:RscHash) : bool =
+            mdb_contains rtx (db.dbi_stow) (BS.take stowKeyLen h)
+
+        // delete a resource and its reference counts
+        let dbDelRsc (db:Database) (wtx:MDB_txn) (sk:StowKey) : unit =
+            assert(stowKeyLen = sk.Length)
+            mdb_del wtx (db.dbi_rfct) sk |> ignore<bool>
+            mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
+            mdb_del wtx (db.dbi_stow) sk |> ignore<bool>
+        
+        // add resource to stowage table (doesn't touch refcts)
+        let dbAddRsc (db:Database) (wtx:MDB_txn) (h:RscHash) (v:ByteString) : unit =
+            assert(RscHash.size = h.Length)
+            let sk = BS.take stowKeyLen h
+            let rem = BS.drop stowKeyLen h
+            let dst = mdb_reserve wtx (db.stow) sk (rem.Length + v.Length)
+            Marshal.Copy(rem.UnsafeArray, rem.Offset, dst, rem.Length)
+            Marshal.Copy(v.UnsafeArray, v.Offset, (dst + nativeint rem.Length), v.Length)
+
+        // write a key-value pair; write `None` to delete the key.
+        // an empty value is distinct from non-existent.
+        let dbWriteKeyVal (db:Database) (wtx:MDB_txn) (k:Key) (vOpt:Val) : unit =
+            match vOpt with
+            | Some v -> mdb_put wtx (db.dbi_data) k v
+            | None -> mdb_del wtx (db.dbi_data) k |> ignore<bool>
+
+        
+        // Perform pending writes and GC as needed.
+        // Assumes and requires the write lock. 
+        let dbWriteFrame (db:Database) : unit = 
+            // some assumptions
+            assert(Monitor.IsEntered(db.wlock)) // require write lock
+            assert(not (Monitor.IsEntered(db))) // forbid database lock
+            assert(BTree.isEmpty (db.writing) && Map.isEmpty (db.stowing))
 
 
 

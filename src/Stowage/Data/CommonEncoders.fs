@@ -2,8 +2,9 @@ namespace Stowage
 open Data.ByteString
 
 /// A VarNat is an efficient encoding for a natural number in 
-/// base128, high bit from each byte to indicate whether the
-/// byte is the final one.
+/// base128. The high bit in each byte is `1` to indicate there
+/// are bytes remaining. This is an efficient encoding when most
+/// encoded values are close to zero.
 module EncVarNat =
 
     let rec private sizeLoop ct n = 

@@ -47,7 +47,7 @@ module Codec =
 
     /// Read full bytestring as value, or raise ByteStream.ReadError
     let inline readBytes (c:Codec<'T>) (db:Stowage) (b:ByteString) : 'T =
-        ByteStream.read b (read c db) 
+        ByteStream.read (read c db) b
 
     /// Read full bytestring as value, or return None.
     let inline tryReadBytes (c:Codec<'T>) (db:Stowage) (b:ByteString) : 'T option =

@@ -15,6 +15,10 @@ let ``hash test`` () =
     let h1 = RscHash.hash h0
     let h2 = RscHash.hash h1
     let h3 = RscHash.hash h2
+    printfn "h0: %s" (BS.toString h0)
+    printfn "h1: %s" (BS.toString h1)
+    printfn "h2: %s" (BS.toString h2)
+    printfn "h3: %s" (BS.toString h3)
     Assert.Equal<string>(BS.toString h1, "HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG")
     Assert.Equal<string>(BS.toString h2, "BRqMkFknGGncjKTdrTGMjFFHlGlFmmGGNmcFGPSmGbstsLtpdJnhLNKS")
     Assert.Equal<string>(BS.toString h3, "NLsTsGdQrtFLfDtHJcmqDSmMsDRjnMpCFlkqGfLdgSRhFtTsGqhJrfNN")

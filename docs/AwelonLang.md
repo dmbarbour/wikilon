@@ -103,7 +103,9 @@ It is possible to identify binaries by their *secure hash*. Doing so has many ni
 
 Secure hash resources may appear anywhwere an Awelon word may appear, and are interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, and their semantics ultimately depend on the local definitions for `zero`, `succ`, `null`, and `cons`. 
 
-Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. Some example hashes, chained from the word `test`:
+Awelon uses the 360-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 72 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. 
+
+Some example hashes, chained from the word `test`:
         
         HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG
         BRqMkFknGGncjKTdrTGMjFFHlGlFmmGGNmcFGPSmGbstsLtpdJnhLNKS

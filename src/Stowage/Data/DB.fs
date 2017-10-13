@@ -17,23 +17,16 @@ type TVar<'V> = interface end
 type DB =
     inherit Stowage
 
-    /// Register a durable TVar. 
+    /// Register a durable TVar.
     ///
-    /// The key at this layer is an arbitrary string, but it may be 
-    /// escaped or mangled at the backend. If a key is registered 
-    /// more than once, the same type and codec must be used every
-    /// time. The DB may cache registrations and return the same 
-    /// TVar each time.
+    /// A registration takes a bytestring key and a codec, and creates
+    /// a variable with an optional value where `None` represents the
+    /// non-existence or deletion of a key. If a key is registered more 
+    /// than once, an equivalent codec of the same type must be used at
+    /// each registration. In return, registrations should be cached.
     ///
-    /// Registrations may be expensive (even when cached) so if the
-    /// variable will be used frequently, prefer to cache explicitly.
-    ///
-    /// For durable TVars, values are always optional. The value None
-    /// represents deletion or non-existence of the key, and is simply
-    /// treated as a valid variable state.
-    ///
-    /// Note: Clients should not assume implicit compaction. If the
-    /// compaction is essential, write compacted values explicitly.
+    /// Writes to durable TVars are not automatically durable. Instead,
+    /// the DB must be explicitly flushed to serialize writes to disk.
     abstract member Register : ByteString -> Codec<'V> -> TVar<'V option>
 
     /// Allocate an ephemeral TVar.
@@ -61,9 +54,11 @@ type DB =
     /// For performance reasons, it's preferable to avoid serializing
     /// most intermediate data. Thus, writes may be buffered in memory
     /// until explicitly flushed. Flushing within a transaction will
-    /// cause the DB to flush after a successful commit but before we
+    /// cause the DB to flush upon a successful commit but before we
     /// return from Transact, so it's a convenient way to mark the 
     /// whole transaction 'durable'.
+    ///
+    /// Naturally, only durable TVars are preserved.
     abstract member Flush : unit -> unit
 
     /// Perform Hierarchical Transaction.
@@ -147,7 +142,7 @@ module DB =
                   Data = data 
                   Durability = dur
                 }
-            override v.GetHashCode() = hash (v.UID)
+            override v.GetHashCode() = 4567 * (int v.UID)
             override x.Equals yobj =
                 match yobj with
                 | :? DBVar as y -> (x.UID = y.UID)

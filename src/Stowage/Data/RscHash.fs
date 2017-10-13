@@ -2,12 +2,14 @@ namespace Stowage
 open Data.ByteString
 open Konscious.Security.Cryptography
 
-/// A RscHash is simply a 56-character bytestring encoded using
+/// A RscHash is simply a 72-character bytestring encoded using
 /// an unusual base32 alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST.
 ///
-/// This string is computed from the Blake2B 280-bit secure hash
+/// This string is computed from the Blake2B 360-bit secure hash
 /// of a binary, and is used as a name or capability to read a
-/// binary resource. 
+/// binary resource.
+///
+/// Note on 10/11/2017: from 280 bits to 360 bits.
 type RscHash = ByteString
 
 module RscHash =
@@ -15,7 +17,7 @@ module RscHash =
     let alphabet = "bcdfghjklmnpqrstBCDFGHJKLMNPQRST"
 
     /// number of bits encoded in hash
-    let hashBitLen : int = 280
+    let hashBitLen : int = 360
 
     let inline private hdiv n = 
         assert (0 = (hashBitLen % n))
@@ -69,8 +71,10 @@ module RscHash =
 
     // perform a base32 encoding of the Blake2 hash.
     let private b32enc (src : byte[]) : byte[] =
-        assert ((35 = src.Length) && (56 = size))
+        assert ((45 = src.Length) && (72 = size))
         let dst = Array.zeroCreate size
+        do b32e40 dst src 8
+        do b32e40 dst src 7
         do b32e40 dst src 6
         do b32e40 dst src 5
         do b32e40 dst src 4
@@ -86,23 +90,11 @@ module RscHash =
         let bytes = alg.ComputeHash(s.UnsafeArray, s.Offset, s.Length)
         BS.unsafeCreateA (b32enc bytes)
 
-    /// compute a hash result from binary
-    let hashArray (src : byte[]) : byte[] = 
-        use alg = new HMACBlake2B(hashBitLen)
-        b32enc (alg.ComputeHash(src))
-
-    /// compute a hash result from stream
-    let hashStream (src : System.IO.Stream) : byte[] = 
-        use alg = new HMACBlake2B(hashBitLen)
-        b32enc (alg.ComputeHash(src))
-
-
     /// Fold over RscHash dependencies represented within a value.
     ///
-    /// This finds substrings that look like hashes. They must have the
-    /// appropriate size and character set, and be separated by non-hash
-    /// characters. This function should be the same used for conservative
-    /// GC in Stowage databases.
+    /// Find substrings that look like hashes - appropriate size and
+    /// character set, separated by non-hash characters. Useful for
+    /// conservative GC of resources.
     let rec foldHashDeps (fn : 's -> RscHash -> 's) (s:'s) (v:ByteString) : 's =
         if (v.Length < size) then s else
         let hv' = BS.dropWhile (not << isHashByte) v

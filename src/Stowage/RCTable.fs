@@ -29,10 +29,9 @@ module internal RCTable =
     //
     // Meanwhile, the 58-bit IDs provide reasonable resistance to
     // hash collisions. We'll still likely have a few collisions in
-    // a billion references. But I think this is acceptable, it only
-    // hurts precision of Stowage GC a little bit.
-
-
+    // a billion references. But for Stowage, we shouldn't have a 
+    // billion refs in memory (since that would cost a hundred gigs)
+    // and a few collisions isn't going to hurt much.
     [<Struct>]
     type Elem = 
         val v : uint64

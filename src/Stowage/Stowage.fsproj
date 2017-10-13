@@ -3,10 +3,9 @@
     <TargetFramework>netstandard1.6</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="LMDB.fs" />
     <Compile Include="RCTable.fs" />
-    <Compile Include="Memory.fs" />
-    <Compile Include="MDB.fs" />
+    <Compile Include="LMDBFFI.fs" />
+    <Compile Include="LMDB.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FSharp.Core" Version="4.1.*" />

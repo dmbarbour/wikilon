@@ -175,7 +175,7 @@ module ByteStream =
     /// Note: This will raise a ReadError if we're NOT at the end-of-stream
     /// after performing a read. You might need to add a final readRem if 
     /// you aren't at the end of stream.
-    let read (b:ByteString) (reader:Src -> 'X) : 'X =
+    let read (reader:Src -> 'X) (b:ByteString) : 'X =
         let src = new Src(b)
         let x = reader src
         if not (eos src) then raise ReadError
