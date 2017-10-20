@@ -74,7 +74,6 @@ module internal I =
     // cases where a lot of intermediate data is constructed, especially when
     // the stowage buffer is large and writes are infrequent.
     let dbWriteFrame db commitList stowedRsc =
-        let wtx = mdb_readwrite_txn_begin (db.env) 
 
         // Compute write batch, overwritten data, newly stowed resources
         let tryCommit ((rd,ws,tcs) : Commit) wb =

@@ -52,13 +52,12 @@ type DB =
     /// Flush writes to durable storage layer.
     ///
     /// For performance reasons, it's preferable to avoid serializing
-    /// most intermediate data. Thus, writes may be buffered in memory
-    /// until explicitly flushed. Flushing within a transaction will
-    /// cause the DB to flush upon a successful commit but before we
-    /// return from Transact, so it's a convenient way to mark the 
-    /// whole transaction 'durable'.
+    /// most intermediate data. Thus writes may be buffered in memory
+    /// until explicitly flushed. Flush within a transaction is applied
+    /// upon successful commit, and effectively marks the transaction
+    /// durable. 
     ///
-    /// Naturally, only durable TVars are preserved.
+    /// Naturally, only durable TVars are preserved in durable storage.
     abstract member Flush : unit -> unit
 
     /// Perform Hierarchical Transaction.
@@ -81,14 +80,10 @@ module DB =
     type Val = ByteString option
     type KVMap = BTree<Val>
 
-    /// Storage represents access to a simple binary key-value database
-    /// that supports atomic batched updates to several keys and does its
-    /// own GC for Stowage resources. The database may have constraints 
-    /// on keys, so the Mangle operation can escape or rewrite keys as 
-    /// needed (e.g. taking a secure hash for oversized keys).
-    ///
-    /// Relevantly, this is a bare minimum database API sufficient to
-    /// implement an efficient DB if assuming exclusive write access.
+    /// Storage represents a simple key-value database with Stowage,
+    /// such that values serve as durable stowage roots. Assuming we
+    /// have exclusive write access, we may use a Storage to produce
+    /// a DB.
     type Storage =
         inherit Stowage
         abstract member Mangle     : ByteString -> Key

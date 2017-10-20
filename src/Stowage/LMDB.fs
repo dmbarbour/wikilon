@@ -86,7 +86,6 @@ module LMDB =
             member this.Contains (k:EphID) : bool = lock this (fun () -> 
                 this.table.Contains k)
 
-
         type FileLock = FileStream
         let lockFile (name : string) : FileLock =
             new FileStream(
@@ -112,10 +111,8 @@ module LMDB =
                 while (0n <> rdlock.rc) do
                     Monitor.Wait(rdlock))
 
-
-        // Due to the entanglement of of concurrency issues, I haven't found
-        // a convenient model to break this into smaller components. OTOH, 
-        // it isn't critical to do so.
+        // Due to the entanglement with concurrency, GC, etc. I haven't 
+        // found a convenient model to break this into small components.
         type Database =
 
             // MDB layer tables.
@@ -129,15 +126,11 @@ module LMDB =
             val ephtbl           : Ephemerons   // track resources in memory
             val mutable rdlock   : ReadLock     // track concurrent readers
             val mutable write    : KVMap        // new write batch
-            val mutable stow     : StowBuff     // batch of stowage resources
-            val mutable sbsz     : unativeint   // stowage buffer approx size
-            val mutable sbthresh : unativeint   // max sbsz before flush
+            val mutable stow     : StowBuff     // new stowage resources
 
-            val wlock            : Object       // single writer lock
+            val wlock            : Object       // one writer at a time!
             val mutable writing  : KVMap        // flushing write batch
-            val mutable stowing  : StowBuff     // recently stowed data
-
-            // consider: stats for how much data is processed.
+            val mutable stowing  : StowBuff     // flushing stowed data
            
             new (path:string, maxSizeMB:int) =
                 Directory.CreateDirectory(path) |> ignore
@@ -166,8 +159,7 @@ module LMDB =
                   write    = BTree.empty
                   writing  = BTree.empty
                   stow     = Map.empty
-                  sbsz     = 0un
-                  sbthresh = unativeint (4 * 1000 * 1000)
+                  stowing  = Map.empty
                 }
 
             member db.Close() = 
@@ -185,12 +177,11 @@ module LMDB =
 
         // locate resource in database, if it is available. This will search
         // recently buffered stowage before the LMDB layer. Uses constant time
-        // to compare the last 40 bytes of RscHash to resist timing attacks.
+        // to compare stowKeyRem bytes of RscHash to resist timing attacks.
         let tryLoadRsc (db : Database) (h : RscHash) : ByteString option =
             if (RscHash.size <> h.Length) 
                 then invalidArg "h" "invalid resource hash"
-            let struct(sb0,sb1) = lock db (fun () -> 
-                struct(db.stow, db.stowing))
+            let struct(sb0,sb1) = lock db (fun () -> struct(db.stow, db.stowing))
             let inSB0 = tryFindRscSB h sb0
             if Option.isSome inSB0 then inSB0 else
             let inSB1 = tryFindRscSB h sb1
@@ -202,17 +193,19 @@ module LMDB =
                 Some (BS.drop stowKeyRem rv)
             | _ -> None
 
+        let inline dbReadKey (db:Database) (rtx:MDB_txn) (k : Key) =
+            mdb_get rtx (db.dbi_data) k
+
         // read a recent value for a key. If there was a write to the key
         // earlier in the smae thread, that value or a later one is read.
         let readKey (db : Database) (k : Key) : Val =
-            let struct(wb0,wb1) = lock db (fun () ->
-                struct(db.write, db.writing))
-            match BTree.find k wb0 with
+            let struct(wb0,wb1) = lock db (fun () -> struct(db.write,db.writing))
+            match BTree.tryFind k wb0 with
             | Some v -> v
             | None ->
-                match BTree.find k wb1 with
+                match BTree.tryFind k wb1 with
                 | Some v -> v
-                | None -> withRTX db (fun tx -> mdb_get tx (db.dbi_data) k)
+                | None -> withRTX db (fun rtx -> dbReadKey db rtx k)
 
         let inline leftBiasedUnion (a:BTree<'x>) (b:BTree<'x>) : BTree<'x> =
             if BTree.isEmpty b then a else
@@ -233,29 +226,30 @@ module LMDB =
             lock db (fun () ->
                 db.write <- leftBiasedUnion wb (db.write))
 
-        // Add to stowage batch, returning incref'd RscHash. Actual write
-        // is delayed until flush, but maintains db.sbsz so we may decide
-        // to auto-flush whenever we have a fair amount of buffered data.
+        // Add to stowage batch, returning incref'd RscHash.
+        // Does not flush! The caller may need to perform a
+        // flush after we have enough pending data.
         let stowRsc (db : Database) (v : ByteString) : RscHash =
             if (v.Length > maxValLen)
                 then invalidArg "v" "oversized value"
             let h = RscHash.hash v
             db.ephtbl.Incref h
             lock db (fun () ->
-                db.stow <- Map.add (BS.take stowKeyLen h) (struct(h,v))
-                db.sbsz <- unativeint (200 + v.Length) + db.sbsz) 
+                db.stow <- Map.add (BS.take stowKeyLen h) (struct(h,v)) (db.stow))
             h
+
 
         // positive reference counts are encoded using EncVarNat.
         // zero counts are encoded in a separate table for iteration.
         type RC = uint64
         let refctBytes (rc:RC) : ByteString =
             ByteStream.write (fun dst ->
-                ByteStream.reserve (EncVarNat.size rc) dst
+                ByteStream.reserve 16 dst
                 EncVarNat.write rc dst)
 
         // read a durable reference count
         let dbGetRefct (db:Database) (rtx:MDB_txn) (sk:StowKey) : RC =
+            assert(stowKeyLen = sk.Length)
             match mdb_get rtx (db.dbi_rfct) sk with
             | Some v -> ByteStream.read (EncVarNat.read) v
             | None -> 0UL
@@ -263,6 +257,7 @@ module LMDB =
         // set durable reference count. Ensures that stowkey appears
         // in either the rfct or zero database, but not both.
         let dbSetRefct (db:Database) (wtx:MDB_txn) (sk:StowKey) (rc:RC) : unit =
+            assert(stowKeyLen = sk.Length)
             if (0UL = rc) then
                 mdb_del wtx (db.dbi_rfct) sk |> ignore<bool>
                 mdb_put wtx (db.dbi_zero) sk (BS.empty)
@@ -270,16 +265,13 @@ module LMDB =
                 mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
                 mdb_put wtx (db.dbi_rfct) sk (refctBytes rc)
 
-        let inline dbHasRsc (db:Database) (rtx:MDB_txn) (h:RscHash) : bool =
-            mdb_contains rtx (db.dbi_stow) (BS.take stowKeyLen h)
-
         // delete a resource and its reference counts
         let dbDelRsc (db:Database) (wtx:MDB_txn) (sk:StowKey) : unit =
             assert(stowKeyLen = sk.Length)
             mdb_del wtx (db.dbi_rfct) sk |> ignore<bool>
             mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
             mdb_del wtx (db.dbi_stow) sk |> ignore<bool>
-        
+
         // add resource to stowage table (doesn't touch refcts)
         let dbAddRsc (db:Database) (wtx:MDB_txn) (h:RscHash) (v:ByteString) : unit =
             assert(RscHash.size = h.Length)
@@ -296,14 +288,78 @@ module LMDB =
             | Some v -> mdb_put wtx (db.dbi_data) k v
             | None -> mdb_del wtx (db.dbi_data) k |> ignore<bool>
 
-        
-        // Perform pending writes and GC as needed.
-        // Assumes and requires the write lock. 
-        let dbWriteFrame (db:Database) : unit = 
-            // some assumptions
-            assert(Monitor.IsEntered(db.wlock)) // require write lock
-            assert(not (Monitor.IsEntered(db))) // forbid database lock
-            assert(BTree.isEmpty (db.writing) && Map.isEmpty (db.stowing))
+        let inline writePending (db:Database) : bool =
+            let inactive = BTree.isEmpty (db.writing) && Map.isEmpty (db.stowing)
+            not inactive
+
+        // GC is sophisticated enough to warrant a dedicated object,
+        // to handle the various reference count tracking and quotas.
+        type GC =
+            val db  : Database
+            val wtx : MDB_txn
+            val mutable rcu : Map<StowKey,RC>
+            val mutable quota : int // for incremental GC
+
+
+        // flush pending writes and stowage data. Perform some GC. Return
+        let dbFlush (db:Database) (gcFlush:bool) : uint64 = lock (db.wlock) (fun () ->
+            assert(not (Monitor.IsEntered(db)))
+            if writePending db 
+                then failwith "invalid DB state: prior write failed!"
+
+            // delay decrefs for anything written during flush.
+            db.ephtbl.DelayDecrefs()
+            use onExitPassDecrefs =
+                { new System.IDisposable with
+                    member __.Dispose() = db.ephtbl.PassDecrefs()
+                }
+
+            // write buffers are held in Database until commit, but
+            // are immediately separated from new incoming writes
+            lock db (fun () ->
+                db.writing <- db.write
+                db.stowing <- db.stow
+                db.write <- BTree.empty
+                db.stow <- Map.empty)
+
+            let performFlush = gcFlush || writePending db 
+            if not performFlush then () else
+
+            let wtx = mdb_readwrite_txn_begin (db.mdb_env)
+
+            // For GC, capture values being overwritten. Then overwrite.
+            let overwriting = BTree.map (fun k _ -> dbReadKey db wtx k) (db.writing)
+            BTree.iter (dbWriteKeyVal db wtx) (db.writing)
+
+            // For stowage, filter known resources. Write the remainder.
+            let isNewRsc sk _ = not (mdb_contains wtx (db.dbi_stow) sk) 
+            db.stowing <- Map.filter isNewRsc (db.stowing)
+            Map.iter (fun _ (struct(h,v)) -> dbAddRsc db wtx h v) (db.stowing)
+
+            // Compute reference count updates and perform GC. This is
+            // ordered such that all increfs occur before any decrefs,
+            // and decrefs occur before we examine zero-refct updates.
+            BTree.iter (fun _ v -> gc.AddVal v) (db.writing)
+            Map.iter (fun _ (struct(_,v)) -> gc.AddVal (Some v)) (db.stowing)
+            BTree.iter (fun _ v -> gc.DelVal v) (overwriting)
+            Map.iter (fun sk _ -> gc.NewRsc sk) (db.stowing)
+            gc.RunPending() // incremental GC and expired ephemerons 
+
+            // after GC completes, write modified reference counts.
+            Map.iter (dbSetRefct db wtx) (gc.rcu)
+
+            mdb_txn_commit wtx // write the new frame
+            let oldReaders = lock db (fun () ->
+                let oldReadLock = db.rdlock
+                db.rdlock <- new ReadLock()
+                oldReadLock)
+            mdb_env_sync (db.mdb_env) // flush to disk
+            oldReaders.Wait() // wait on readers of old frame
+            lock db (fun () -> 
+                db.writing <- BTree.empty
+                db.stowing <- Map.empty)
+
+
 
 
 
