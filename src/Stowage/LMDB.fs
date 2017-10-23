@@ -3,6 +3,8 @@ open System
 open System.IO
 open System.Threading
 open System.Threading.Tasks
+open System.Runtime.InteropServices
+open System.Collections.Generic
 open Data.ByteString
 open Stowage.LMDB_FFI
 
@@ -52,10 +54,15 @@ module LMDB =
         do assert(stowKeyRem >= stowKeyLen)
         type StowData = (struct(RscHash * ByteString))
         type StowBuff = Map<StowKey,StowData>
+        let tryFindRscSB (h:RscHash) (sb:StowBuff) : ByteString option =
+            match Map.tryFind (BS.take stowKeyLen h) sb with
+            | Some (struct(h',v)) when (ByteString.CTEq h h') -> Some v
+            | _ -> None 
         
         type EphID = uint64
-        let inline ephId (s:ByteString) : EphID =
-            ByteString.Hash64 (BS.take 16 s)
+        let inline skEphId (s:StowKey) : EphID = 
+            assert(stowKeyLen = s.Length)
+            ByteString.Hash64 s
 
         // Our ephemeron table both locks the refct table and allows me
         // to delay decrefs that might occur after concurrent writes so
@@ -98,18 +105,18 @@ module LMDB =
 
         // Simply count concurrent readers. Allow wait for zero readers. 
         type ReadLock =
-            val mutable rc : nativeint
-            new () = { rc = 0n }
+            val mutable rc : unativeint
+            new () = { rc = 0un }
             member rdlock.Acquire() = lock rdlock (fun () ->
-                rdlock.rc <- (rdlock.rc + 1n))
+                rdlock.rc <- (rdlock.rc + 1un))
             member rdlock.Release() = lock rdlock (fun () ->
-                assert(0n <> rdlock.rc)
-                rdlock.rc <- (rdlock.rc - 1n)
-                if (0n = rdlock.rc)
+                assert(0un < rdlock.rc)
+                rdlock.rc <- (rdlock.rc - 1un)
+                if (0un = rdlock.rc)
                     then Monitor.PulseAll(rdlock))
             member rdlock.Wait() = lock rdlock (fun () ->
-                while (0n <> rdlock.rc) do
-                    Monitor.Wait(rdlock))
+                while (0un < rdlock.rc) do
+                    Monitor.Wait(rdlock) |> ignore<bool>)
 
         // Due to the entanglement with concurrency, GC, etc. I haven't 
         // found a convenient model to break this into small components.
@@ -127,10 +134,15 @@ module LMDB =
             val mutable rdlock   : ReadLock     // track concurrent readers
             val mutable write    : KVMap        // new write batch
             val mutable stow     : StowBuff     // new stowage resources
+            val mutable sbsz     : int          // ~ data in stowage buffer
 
             val wlock            : Object       // one writer at a time!
             val mutable writing  : KVMap        // flushing write batch
             val mutable stowing  : StowBuff     // flushing stowed data
+
+            // stats for feedback
+            val mutable ct_stow  : uint64       // resources stowed
+            val mutable ct_del   : uint64       // resources deleted
            
             new (path:string, maxSizeMB:int) =
                 Directory.CreateDirectory(path) |> ignore
@@ -159,12 +171,16 @@ module LMDB =
                   write    = BTree.empty
                   writing  = BTree.empty
                   stow     = Map.empty
+                  sbsz     = 0
                   stowing  = Map.empty
+                  ct_stow  = 0UL
+                  ct_del   = 0UL
                 }
 
             member db.Close() = 
-                mdb_env_sync (db.env)
-                mdb_env_close (db.env)
+                mdb_env_sync (db.mdb_env)
+                mdb_env_close (db.mdb_env)
+                db.flock.Dispose()
 
         let withRTX (db : Database) (action : MDB_txn -> 'x) : 'x =
             let rdlock = lock db (fun () ->
@@ -181,7 +197,8 @@ module LMDB =
         let tryLoadRsc (db : Database) (h : RscHash) : ByteString option =
             if (RscHash.size <> h.Length) 
                 then invalidArg "h" "invalid resource hash"
-            let struct(sb0,sb1) = lock db (fun () -> struct(db.stow, db.stowing))
+            let struct(sb0,sb1) = lock db (fun () -> 
+                struct(db.stow, db.stowing))
             let inSB0 = tryFindRscSB h sb0
             if Option.isSome inSB0 then inSB0 else
             let inSB1 = tryFindRscSB h sb1
@@ -199,7 +216,8 @@ module LMDB =
         // read a recent value for a key. If there was a write to the key
         // earlier in the smae thread, that value or a later one is read.
         let readKey (db : Database) (k : Key) : Val =
-            let struct(wb0,wb1) = lock db (fun () -> struct(db.write,db.writing))
+            let struct(wb0,wb1) = lock db (fun () -> 
+                struct(db.write, db.writing))
             match BTree.tryFind k wb0 with
             | Some v -> v
             | None ->
@@ -211,7 +229,7 @@ module LMDB =
             if BTree.isEmpty b then a else
             BTree.foldBack (BTree.add) a b
 
-        let safeWrite k vOpt =
+        let safeWrite (k:Key) (vOpt:Val) =
             // testing key against LMDB limits here
             let okKey = (511 >= k.Length) && (k.Length >= 1)
             if not okKey then false else
@@ -226,21 +244,26 @@ module LMDB =
             lock db (fun () ->
                 db.write <- leftBiasedUnion wb (db.write))
 
-        // Add to stowage batch, returning incref'd RscHash.
-        // Does not flush! The caller may need to perform a
-        // flush after we have enough pending data.
+        // reduce sizes to prevent overflow issues, together with
+        // maximum lengths this shouldn't be a problem.
+        let inline sbSize (bytes:int) : int = (3 + (bytes >>> 7))
+
+        // Add to stowage batch for next flush operation. Does not
+        // flush automatically, but records rough size of stowage.
         let stowRsc (db : Database) (v : ByteString) : RscHash =
             if (v.Length > maxValLen)
                 then invalidArg "v" "oversized value"
             let h = RscHash.hash v
-            db.ephtbl.Incref h
-            lock db (fun () ->
-                db.stow <- Map.add (BS.take stowKeyLen h) (struct(h,v)) (db.stow))
+            let sk = BS.take stowKeyLen h
+            db.ephtbl.Incref (skEphId sk)
+            lock db (fun () -> 
+                db.stow <- Map.add sk (struct(h,v)) (db.stow)
+                db.sbsz <- db.sbsz + (sbSize (v.Length)))
             h
 
-
-        // positive reference counts are encoded using EncVarNat.
-        // zero counts are encoded in a separate table for iteration.
+        // reference counts are natural numbers, encoded using EncVarNat.
+        // However, zero counts are recorded implicitly in separate table
+        // (dbi_zero) for incremental GC and ephemeral roots.
         type RC = uint64
         let refctBytes (rc:RC) : ByteString =
             ByteStream.write (fun dst ->
@@ -254,8 +277,17 @@ module LMDB =
             | Some v -> ByteStream.read (EncVarNat.read) v
             | None -> 0UL
 
-        // set durable reference count. Ensures that stowkey appears
-        // in either the rfct or zero database, but not both.
+        // delete a resource and its reference counts. It's possible
+        // that this is a false resource (due to conservative GC) or
+        // a locally unknown resource. But we delete when there are 
+        // no references remaining.
+        let dbDelRsc (db:Database) (wtx:MDB_txn) (sk:StowKey) : unit =
+            assert(stowKeyLen = sk.Length)
+            mdb_del wtx (db.dbi_rfct) sk |> ignore<bool>
+            mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
+            let bDropped = mdb_del wtx (db.dbi_stow) sk 
+            if bDropped then db.ct_del <- (db.ct_del + 1UL)
+
         let dbSetRefct (db:Database) (wtx:MDB_txn) (sk:StowKey) (rc:RC) : unit =
             assert(stowKeyLen = sk.Length)
             if (0UL = rc) then
@@ -265,21 +297,15 @@ module LMDB =
                 mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
                 mdb_put wtx (db.dbi_rfct) sk (refctBytes rc)
 
-        // delete a resource and its reference counts
-        let dbDelRsc (db:Database) (wtx:MDB_txn) (sk:StowKey) : unit =
-            assert(stowKeyLen = sk.Length)
-            mdb_del wtx (db.dbi_rfct) sk |> ignore<bool>
-            mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
-            mdb_del wtx (db.dbi_stow) sk |> ignore<bool>
-
         // add resource to stowage table (doesn't touch refcts)
         let dbAddRsc (db:Database) (wtx:MDB_txn) (h:RscHash) (v:ByteString) : unit =
             assert(RscHash.size = h.Length)
             let sk = BS.take stowKeyLen h
             let rem = BS.drop stowKeyLen h
-            let dst = mdb_reserve wtx (db.stow) sk (rem.Length + v.Length)
+            let dst = mdb_reserve wtx (db.dbi_stow) sk (rem.Length + v.Length)
             Marshal.Copy(rem.UnsafeArray, rem.Offset, dst, rem.Length)
             Marshal.Copy(v.UnsafeArray, v.Offset, (dst + nativeint rem.Length), v.Length)
+            db.ct_stow <- (db.ct_stow + 1UL)
 
         // write a key-value pair; write `None` to delete the key.
         // an empty value is distinct from non-existent.
@@ -289,25 +315,135 @@ module LMDB =
             | None -> mdb_del wtx (db.dbi_data) k |> ignore<bool>
 
         let inline writePending (db:Database) : bool =
-            let inactive = BTree.isEmpty (db.writing) && Map.isEmpty (db.stowing)
+            let inactive = BTree.isEmpty (db.writing) 
+                        && Map.isEmpty (db.stowing)
             not inactive
 
-        // GC is sophisticated enough to warrant a dedicated object,
-        // to handle the various reference count tracking and quotas.
+        // The GC task is sophisticated enough to have its own object.
+        // 
+        // Durable reference counts are held in the Database, and we must
+        // also delay GC based on ephemeral references (Ephemerons table)
+        // or incremental GC quotas (so we don't delay writers too much).
+        // To avoid fine-grained updates, all reference counts should also
+        // be computed in memory and serialized in one batch.
+        //
+        // GC assumes that, once an object reaches 0 refct within a batch,
+        // it will not incref again. Ephemeral resources might incref in a
+        // future batch, but not this one. Consequently, increfs should run
+        // before anything else.
+        //
+        // The current GC strategy is essentially breadth-first, but will
+        // delete recursively within the limits of quotas.
         type GC =
             val db  : Database
             val wtx : MDB_txn
-            val mutable rcu : Map<StowKey,RC>
-            val mutable quota : int // for incremental GC
+            val mutable rfct  : Map<StowKey,RC> 
+            val queue : Queue<StowKey>    // pending GC targets
+            val mutable quota : int       // GC effort quota
+            new(db,wtx) = 
+              { db = db
+                wtx = wtx
+                rfct = Map.empty
+                queue = new Queue<StowKey>()
+                quota = GC.DefaultQuota
+              }
 
+            // The amount of incremental GC is based on a flat quota,
+            // plus a small quota per incref to ensure GC can keep up
+            // with a busy writer.
+            static member DefaultQuota = 2000
+            static member IncrefQuota = 2
+            static member NewRscQuota = 2
 
-        // flush pending writes and stowage data. Perform some GC. Return
-        let dbFlush (db:Database) (gcFlush:bool) : uint64 = lock (db.wlock) (fun () ->
+            // add a deletion task for a given StowKey. Constrained
+            // by quota and ephemeral resources. Deletion is delayed
+            // until the `RunToCompletion` loop.
+            member gc.AddDeleteTask (sk:StowKey) : unit = 
+                let blockGC = (0 = gc.quota)
+                           || (gc.db.ephtbl.Contains (skEphId sk)) 
+                if blockGC then () else
+                gc.quota <- (gc.quota - 1)
+                gc.queue.Enqueue sk
+
+            member gc.SetRefct (sk:StowKey) (rc:RC) : unit =
+                assert(stowKeyLen = sk.Length)
+                gc.rfct <- Map.add sk rc (gc.rfct)
+                if (0UL = rc) then gc.AddDeleteTask sk
+
+            member gc.GetRefct (sk:StowKey) : RC =
+                match Map.tryFind sk (gc.rfct) with
+                | Some rc -> rc
+                | None -> dbGetRefct (gc.db) (gc.wtx) sk
+
+            member gc.NewRsc (sk:StowKey) : unit = 
+                // do not modify refct, but ensure one is written
+                gc.quota <- (gc.quota + GC.NewRscQuota)
+                gc.SetRefct sk (gc.GetRefct sk)
+
+            member gc.Incref (h:RscHash) : unit =
+                gc.quota <- (gc.quota + GC.IncrefQuota)
+                assert(RscHash.size = h.Length)
+                let sk = BS.take stowKeyLen h
+                let rc = gc.GetRefct sk 
+                gc.SetRefct sk (rc + 1UL)
+
+            member gc.Decref (h:RscHash) : unit =
+                assert(RscHash.size = h.Length)
+                let sk = BS.take stowKeyLen h
+                let rc = gc.GetRefct sk
+                if(0UL = rc) then failwith "negative refct" else
+                gc.SetRefct sk (rc - 1UL)
+
+            member inline gc.AddVal (v:Val) : unit =
+                match v with
+                | Some s -> RscHash.iterHashDeps (gc.Incref) s
+                | None -> () 
+
+            member inline gc.RemVal (v:Val) : unit =
+                match v with
+                | Some s -> RscHash.iterHashDeps (gc.Decref) s
+                | None -> ()
+
+            member gc.ScanPending() : unit =
+                // scan dbi_zero table for items we may delete.
+                let ks = mdb_keys_from (gc.wtx) (gc.db.dbi_zero) (BS.empty)
+                use e = ks.GetEnumerator()
+                while((0 < gc.quota) && (e.MoveNext())) do
+                    let sk = e.Current
+                    let tryGC = not (Map.containsKey sk (gc.rfct))
+                    if tryGC then gc.AddDeleteTask sk
+
+            member gc.Delete (sk:StowKey) : unit =
+                assert(0UL = (gc.GetRefct sk))
+                gc.rfct <- Map.remove sk (gc.rfct)
+                mdb_get (gc.wtx) (gc.db.dbi_stow) sk
+                    |> Option.map (BS.drop stowKeyRem)
+                    |> gc.RemVal
+                dbDelRsc (gc.db) (gc.wtx) sk
+
+            member gc.RunToCompletion () : unit =
+                // perform GC until no new tasks are enqueued.
+                while(0 < gc.queue.Count) do
+                    gc.Delete (gc.queue.Dequeue())
+
+            member gc.FlushRefcts () : unit = 
+                // write final reference counts to the database
+                Map.iter (dbSetRefct (gc.db) (gc.wtx)) (gc.rfct)
+
+            member gc.Perform () : unit =
+                gc.ScanPending()
+                gc.RunToCompletion()
+                gc.FlushRefcts()
+
+        // flush pending writes and stowage data, and performs GC.
+        // The `gcFlush` flag can force flush when no write is pending.
+        let dbFlush (db:Database) (gcFlush:bool) : unit = lock (db.wlock) (fun () ->
             assert(not (Monitor.IsEntered(db)))
             if writePending db 
                 then failwith "invalid DB state: prior write failed!"
 
-            // delay decrefs for anything written during flush.
+            // delay decrefs during flush to simplify reasoning about
+            // correctness. This must occur before we access
             db.ephtbl.DelayDecrefs()
             use onExitPassDecrefs =
                 { new System.IDisposable with
@@ -320,14 +456,16 @@ module LMDB =
                 db.writing <- db.write
                 db.stowing <- db.stow
                 db.write <- BTree.empty
-                db.stow <- Map.empty)
+                db.stow <- Map.empty
+                db.sbsz <- 0)
 
+            // potential for early escape
             let performFlush = gcFlush || writePending db 
             if not performFlush then () else
 
             let wtx = mdb_readwrite_txn_begin (db.mdb_env)
 
-            // For GC, capture values being overwritten. Then overwrite.
+            // Write our new roots. Remember old roots for GC purposes.
             let overwriting = BTree.map (fun k _ -> dbReadKey db wtx k) (db.writing)
             BTree.iter (dbWriteKeyVal db wtx) (db.writing)
 
@@ -336,19 +474,16 @@ module LMDB =
             db.stowing <- Map.filter isNewRsc (db.stowing)
             Map.iter (fun _ (struct(h,v)) -> dbAddRsc db wtx h v) (db.stowing)
 
-            // Compute reference count updates and perform GC. This is
-            // ordered such that all increfs occur before any decrefs,
-            // and decrefs occur before we examine zero-refct updates.
+            // update reference counts and perform GC.
+            let gc = new GC(db,wtx)
             BTree.iter (fun _ v -> gc.AddVal v) (db.writing)
             Map.iter (fun _ (struct(_,v)) -> gc.AddVal (Some v)) (db.stowing)
-            BTree.iter (fun _ v -> gc.DelVal v) (overwriting)
+            BTree.iter (fun _ v -> gc.RemVal v) (overwriting)
             Map.iter (fun sk _ -> gc.NewRsc sk) (db.stowing)
-            gc.RunPending() // incremental GC and expired ephemerons 
+            gc.Perform()
 
-            // after GC completes, write modified reference counts.
-            Map.iter (dbSetRefct db wtx) (gc.rcu)
-
-            mdb_txn_commit wtx // write the new frame
+            // write and flush the transaction
+            mdb_txn_commit wtx
             let oldReaders = lock db (fun () ->
                 let oldReadLock = db.rdlock
                 db.rdlock <- new ReadLock()
@@ -358,8 +493,86 @@ module LMDB =
             lock db (fun () -> 
                 db.writing <- BTree.empty
                 db.stowing <- Map.empty)
+            ) // unlock db.wlock
+
+        // flush only if we're past a given threshold.
+        let inline sbFlush (thresh:int) (db:Database) : unit =
+            let sbFull = (db.sbsz) > (sbSize thresh)
+            if sbFull then dbFlush db false
+
+    /// LMDB based Storage.
+    ///
+    /// A new Storage must be given the path and the memory map size
+    /// in megabytes, which also determines the maximum file size and
+    /// address space consumption. 
+    ///
+    /// New stowage is buffered in memory until a threshold is reached
+    /// or explicitly flushed with other writes. The motivation for this
+    /// is to amortize synchronization costs across a larger write batch.
+    /// Default threshold is a couple megabytes, but it may be configured.
+    type Storage =
+        val private db : I.Database
+        val mutable private sbthresh : int
+        new(path:string,maxSizeMB:int) = 
+            { db = new I.Database(path,maxSizeMB) 
+              sbthresh = 2_000_000
+            }
+        
+        /// Configure Stowage Threshold (in bytes).
+        member this.SetStowageThreshold (bytes:int) : unit =
+            this.sbthresh <- bytes
+            this.FlushStowage()
+
+        // flush only if we've surpassed our threshold
+        member private this.FlushStowage() = 
+            I.sbFlush (this.sbthresh) (this.db)
+
+        /// Force a Stowage GC step. 
+        ///
+        /// GC is normally perfomed incrementally with writes upon Flush.
+        /// This operation acts as a false write-flush just to perform 
+        /// some GC. This may collect a couple thousand items in one step.
+        /// You can use StowageStats if you need feedback about the amount
+        /// deleted. 
+        member this.GC() : unit = I.dbFlush (this.db) true
+
+        /// Trivial Statistics
+        /// 
+        /// This returns a pair of integers indicating a count of resources
+        /// (stowed * deleted) by the current process. Only includes actual
+        /// writes or deletions at the LMDB layer. 
+        member this.StowageStats() : (uint64 * uint64) =
+            lock (this.db.wlock) (fun () ->
+                (this.db.ct_stow, this.db.ct_del))
 
 
+        interface Stowage with
+            member this.Load h =
+                match I.tryLoadRsc (this.db) h with
+                | Some v -> v
+                | None -> raise (MissingRsc (this :> Stowage, h))
+            member this.Stow v =
+                let h = I.stowRsc (this.db) v
+                this.FlushStowage()
+                h
+            member this.Incref h = 
+                assert (RscHash.size = h.Length)
+                let sk = BS.take (I.stowKeyLen) h
+                this.db.ephtbl.Incref (I.skEphId sk)
+            member this.Decref h =
+                assert (RscHash.size = h.Length)
+                let sk = BS.take (I.stowKeyLen) h
+                this.db.ephtbl.Decref (I.skEphId sk)
 
+        interface DB.Storage with
+            member this.Mangle k = mangle k
+            member this.Read k = I.readKey (this.db) k
+            member this.WriteBatch wb = I.writeBatch (this.db) wb
+            member this.Flush () = I.dbFlush (this.db) false
 
+    /// Open an LMDB storage as a Stowage Database.
+    /// Composes `new LMDB.Storage` and `DB.fromStorage`
+    let inline openDB (path:string) (maxSizeMB:int) : DB =
+        let s = new Storage(path,maxSizeMB) 
+        DB.fromStorage (s :> DB.Storage)
 
