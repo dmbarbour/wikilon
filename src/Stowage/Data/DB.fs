@@ -79,17 +79,20 @@ module DB =
     type Key = ByteString
     type Val = ByteString option
     type KVMap = BTree<Val>
+    type Sync = Lazy<unit>
 
     /// Storage represents a simple key-value database with Stowage,
     /// such that values serve as durable stowage roots. Assuming we
     /// have exclusive write access, we may use a Storage to produce
     /// a DB.
+    ///
+    /// The return value for a WriteBatch is a simple lazy value to
+    /// await synchronization with the backing store.
     type Storage =
         inherit Stowage
         abstract member Mangle     : ByteString -> Key
         abstract member Read       : Key -> Val     
-        abstract member WriteBatch : KVMap -> unit 
-        abstract member Flush      : unit -> unit
+        abstract member WriteBatch : KVMap -> Sync
 
     module private StorageDB =
         // GOAL: Create a DB from a Storage!
@@ -258,7 +261,7 @@ module DB =
             val mutable ss : Snapshot
             val mutable roots : RootsCache
             val mutable buffer : Writes
-            val mutable flushing : Lazy<unit>
+            val mutable flushing : Lazy<Sync>
             val mutable tm_clean : int
 
             new(s:Storage) =
@@ -267,7 +270,7 @@ module DB =
                   ss = new Snapshot()
                   roots = BTree.empty
                   buffer = Map.empty
-                  flushing = lazy ()
+                  flushing = lazy(lazy())
                   tm_clean = 0
                 }
 
@@ -354,28 +357,25 @@ module DB =
 
             // flush the database
             //
-            // goals: concurrent flush from multiple threads should
-            // leverage parallelism for serialization and may overlap
-            // in time (instead of acting as sequential flushes). No
-            // serializing while holding mutex.
-            // 
-            // To achieve this, I use `flushing` to ensure sequential
-            // order for write-batch submissions, with each thread first
-            // serializing its own writes before waiting on other threads.
-            // And the backend is flushed after we've submitted in order.
+            // Concurrent flush from multiple threads can parallelize
+            // serialization of each write-batch, rather than run in
+            // sequence. However, we must ensure flushes are ordered
+            // in terms of write batches. I use the lazy 'flushing' to
+            // order write batches without holding the lock too long.
             member db.Flush() : unit =
-                let flush = lock (db.mutex) (fun () ->
+                let flushing = lock (db.mutex) (fun () ->
                     let wb = db.buffer
                     db.buffer <- Map.empty
-                    let prior_flush = db.flushing
+                    let prior = db.flushing // potentially concurrent
                     db.flushing <- lazy (
-                        let ws = serializeWrites wb // concurrent with prior
-                        prior_flush.Force()         // wait for prior Write
-                        db.store.WriteBatch ws      // write updates
-                        System.GC.KeepAlive(wb))    // guard DBVars, VRefs
+                        let ws = serializeWrites wb         // concurrent with prior
+                        prior.Force() |> ignore<Sync>       // wait for flush but not sync
+                        let sync = db.store.WriteBatch ws   // write updates
+                        System.GC.KeepAlive(wb)             // guard DBVars, VRefs
+                        sync)
                     db.flushing)
-                flush.Force()    // serialize and submit our write batch
-                db.store.Flush() // flush write batch to durable storage
+                let sync : Sync = flushing.Force()
+                sync.Force()     
                 db.Cleanup()     // potential cleanup of roots cache
             
             interface DB with
@@ -498,9 +498,9 @@ module DB =
             //
             // A transaction may fail if the parent TX was concurrently
             // updated in a manner that invalidates a read by the child.
-            // If the transaction succeeds, we can filter our read-set
-            // based on the parent's writes (i.e. we logically read from
-            // the point of commit to the TX except for a read-only TX).
+            // If the transaction succeeds, we filter the read-set based
+            // on the parent's write set (hence we logically read from 
+            // the moment of commit).
             member private tx.Commit (rs:Reads) (ws:Writes) : bool =
                 // snapshot consistency implies read-only transactions succeed
                 if Map.isEmpty ws then true else
