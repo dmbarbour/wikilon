@@ -57,11 +57,15 @@ Newlines and tabs are among the rejected characters. However, humans will freque
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower case alpha and may otherwise contain lower case alphas, digits, and the underscore. As a regular expression, this is: `[a-z][a-z_0-9]*`. There is also a size limit: words must not surpass 48 characters in length. Most words should be much smaller. But in context of editable views, words might have internal structure.
+Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is also a size limit: words must not surpass 63 characters in length.
 
-Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition.
+Words are evaluated in context of a *Dictionary*. Each word is defined by an Awelon program, using other words. Valid definitions must form a directed acyclic graph and be block balanced (i.e. no unmatched `[` or `]` block characters). The formal semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
-The four primitive words `a`, `b`, `c`, and `d` may not be defined. The four words `zero`, `succ`, `null`, and `cons` must be defined for natural numbers, embedded texts, and binary resources to become usable.
+Although structure within a word has no semantic properties, it may have connotations and conventions. For example, we might associate `foo_type` or `foo_doc` with `foo` in context of a linter or development environment. Lightweight namespaces are also feasible.
+
+The four primitive words `a`, `b`, `c`, and `d` cannot be redefined. The four words `zero`, `succ`, `null`, and `cons` should be defined to support natural numbers, embedded texts, and binary resources.
+
+*Aside:* A trivial cyclic definition of a word to itself is equivalent to an undefined word, and may be considered the default.
 
 ## Natural Numbers
 
@@ -101,34 +105,35 @@ It is possible to identify binaries by their *secure hash*. Doing so has many ni
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
 
-Secure hash resources may appear anywhwere an Awelon word may appear, and are interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, and their semantics ultimately depend on the local definitions for `zero`, `succ`, `null`, and `cons`. 
+Secure hash resources may appear anywhwere an Awelon word may appear, and are interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, and their semantics ultimately depend on the local definitions for `zero`, `succ`, `null`, and `cons`.
 
-Awelon uses the 360-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 72 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. 
+Awelon uses the 320-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 64 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. 
 
 Some example hashes, chained from the word `test`:
-        
-        HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG
-        BRqMkFknGGncjKTdrTGMjFFHlGlFmmGGNmcFGPSmGbstsLtpdJnhLNKS
-        NLsTsGdQrtFLfDtHJcmqDSmMsDRjnMpCFlkqGfLdgSRhFtTsGqhJrfNN
+
+        rmqJNQQmpNmKlkRtsbjnjdmbLQdpKqNlndkNKKpnGDLkmtQLPNgBBQTRrJgjdhdl
+        cctqFDRNPkprCkMhKbsTDnfqCFTfSHlTfhBMLHmhGkmgJkrBblNTtQhgkQGQbffF
+        bKHFQfbHrdkGsLmGhGNqDBdfbPhnjJQjNmjmgHmMntStsNgtmdqmngNnNFllcrNb
+        qLDGfKtQHhhTthNTDMMqDMDKnrCTpSSBHHBjDNtsKrTdNRGgtmtqQFTdGjsnfJDR
 
         Base32 Alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST
             encoding 0..31 respectively
 
-We can safely neglect the theoretical concern of secure hash collisions. Physical corruption of dictionaries is of greater concern in practice. If collision becomes a concern in the future, it is possible to transitively rewrite entire Awelon systems to use a more robust hash. I won't further belabor the issue.
+We can safely neglect the theoretical concern of secure hash collisions. Even if hash collision becomes a concern in the future, it is feasible to transitively rewrite entire Awelon systems to use a more robust hash. In practice, physical corruption should be a greater concern. I won't further belabor the issue.
 
 Awelon runtime systems must know where to seek secure hash resources, whether that be in a filesystem, database, web server, or content distribution network. Using *Stowage* annotations, Awelon runtime systems may also compute new secure hash resources during evaluation, treating this external space as a persistent virtual memory or a binary data server.
 
-Secure hash resources are frequently subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective, due to the acyclic and high-latency nature of secure hash references. 
+Secure hash resources are generally subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective due to the acyclic and high-latency nature of secure hash resources.
 
 *Security Note:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat a secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should resist timing attacks that might leak secure hashes.
 
 ## Dictionary
 
-Awelon words are defined in a dictionary. Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon doesn't specify the dictionary representation, but I imagine de-facto standards will arise around the import, export, sharing, and backup of dictionaries.
+Awelon words are defined in a dictionary. Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon doesn't specify a dictionary representation. I hope for de-facto standards to arise around the import, export, sharing, and backup of dictionaries, and potentially dictionaries as first-class values.
 
-Definitions for words must form a directed acyclic graph. Trivial cycles, such as `foo = foo`, should be treated as deleting the word from the dictionary. Non-trivial cycles should be treated as errors. Cyclic behavior or structure should instead use fixpoint combinators, cf. *Fixpoints and Loops* below.
+Definitions for words must form a directed acyclic graph. Cyclic behavior must use anonymous recursion via fixpoint combinators, cf. *Fixpoints and Loops* below. Assigning a trivial cycle such as `foo = foo` may be treated as equivalent to deleting word `foo` from the dictionary.
 
-Dictionaries will usually be manipulated through services, such as a web application or a [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) filesystem layer. The use of such a layer is also necessary to provide useful *Editable Views*.
+Dictionaries are usually manipulated through services, such as a web application or a [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) filesystem adapter. The use of such layers is also necessary to provide useful *Editable Views*.
 
 See also *Hierarchical Dictionaries*. Dictionaries may contain dictionaries.
 
@@ -180,13 +185,13 @@ Annotations are defined by the runtime. In case of porting code, runtimes that d
 
 Stowage is a simple idea, summarized by rewrite rules:
 
-        [large binary](stow) => %secureHash
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
+        [large binary](stow) => %secureHash
 
-Stowage allows secure hash resources to be constructed at runtime and removed from working memory until later required. Essentially, this gives us a functional, persistent virtual memory model. Further, the hashes can be useful at the client side, e.g. simplifying progressive disclosure, structural diffs, memoization and caching, or efficient binary download.
+Stowage allows secure hash resources to be constructed at runtime and removed from working memory until later required. Essentially, this gives us a functional, persistent virtual memory model. Further, these hashes can be used efficiently together with memoization as a basis for incremental computing for very large systems.
 
-What "large value" means is heuristic. But should be simple, predictable to maximize structure sharing and simplify reproducable computation. A simple option is that anything smaller than `stow_threshold` bytes should be inlined, while anything larger is stowed. 
+What "large value" means is heuristic, but should be reproducible. If configured, it should be configurable from the dictionary, perhaps by defining `stow_threshold`. It might also be useful to support a few different size thresholds, enabling use of `(stow_small)` vs. `(stow_large)`.
 
 ## Evaluation
 
@@ -207,7 +212,7 @@ Awelon's basic evaluation strategy is simple:
 
 Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-This is really just a recommended default strategy. A runtime may adjust this at its own discretion, so long as it preserves semantics. Annotations will also affect evaluation strategy. With annotations we could precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large but infrequently referenced data to disk, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
+This is really just a recommended default strategy. A runtime may adjust this at its own discretion, so long as it preserves semantics. Annotations will also affect evaluation strategy, for example `[A](eval)` could force evaluation of `A` before passing the value onwards. With annotations we could precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large but infrequently referenced data to disk, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
 
 ## Value Words
 
@@ -261,17 +266,15 @@ The essential idea is to record a computation and its result, and then to lookup
 
         [computation](memo)
 
-The main challenge for effective memoization is precise lookup. Irrelevant differences between similar dictionaries should not interfere with this lookup. Hence, our lookup might compare not just a representation of the computation, but also a reasonably precise representation for arities and definitions of its dependencies, e.g. via transitive memoization. (The acyclic structure of valid Awelon code helps here.) However, even imprecise implementations for memoization can be effective and useful in practice.
+The main challenge for effective memoization is precise lookup. Irrelevant differences between very similar dictionaries should not interfere with this lookup. Ideally, even comments and basic data plumbing can be excluded. Hence, our lookup might operate on a partially optimized representation of the computation that potentially knows about types and arities. However, even imprecise implementations of memoization can be effective and useful. The sophistication of memoization is left to the runtime.
 
-To support incremental computing, memoization must be combined with cache-friendly computing patterns. Persistent data structures with stowage are especially useful. For example, if we memoize a computed monoidal value for each node in a persistent tree, computing a slightly different tree could easily reuse most of the memoization effort.
+To support incremental computing, memoization must be combined with cache-friendly computing patterns and data structures. Persistent data structures leveraging stowage - finger trees, tries - are especially useful. For example, if we memoize a computed monoidal value for each node in a persistent tree, computing a slightly different tree could easily reuse most of the memoization effort.
 
 ## Static Linking
 
 Consider a redirect, `foo = bar`. When we link `foo`, we'll always link `bar`. This is due to the lazy evaluation rule: we won't link `foo` unless doing so also results in rewrites other than a trivial inlining of foo's definition. Hence, we could skip the intermediate rewrite to word `bar` and simply rewrite to bar's definition. Transitively, we can say foo's static link definition is bar's static link definition.
 
-This isn't limited to redirects. Similar analysis can be performed in context of arity annotations and type analysis. It is feasible to optimize static link definitions far beyond simple evaluation. 
-
-A `[code](link)` annotation could make static link optimizations explicit.
+This isn't limited to redirects. Similar analysis can be performed in context of arity annotations and type analysis. It is feasible to optimize static link definitions far beyond simple evaluation. Annotations could make static link optimizations explicit and visible in the program.
 
 ## Optimization
 
