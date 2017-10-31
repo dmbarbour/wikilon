@@ -80,8 +80,8 @@ module LVRef =
 
         [<Struct>]
         type Obj =
-            val tc  : int 
-            val sz  : uint32
+            val tc  : int       // touch count upon cache
+            val sz  : uint32    // cache size
             val ref : System.WeakReference // WeakRef of `Cached`
             new(tc,sz,ref) = { tc = tc; sz = sz; ref = ref }
 
@@ -91,7 +91,7 @@ module LVRef =
             val mutable elems : Obj[]   // resizable
             val mutable count : int
             new() = 
-                { elems = Array.empty 
+                { elems = Array.empty
                   count = 0 
                 }
 
@@ -117,7 +117,7 @@ module LVRef =
             if(f.count = f.elems.Length) 
                 then cfGrow f
             f.elems.[f.count] <- o
-            f.count <- (1 + f.count)
+            f.count <- (f.count + 1)
 
         // removal assumes order within frame is irrelevant
         let cfRemoveAt (f:CacheFrame) (ix:int) : unit =

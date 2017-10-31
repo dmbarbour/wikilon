@@ -17,14 +17,14 @@ module EncVarNat =
     let rec private whb (n:uint64) (dst:ByteDst) : unit =
         if (0UL = n) then () else
         whb (n >>> 7) dst
-        let lob = byte (n &&& 0x7FUL)
-        ByteStream.writeByte lob dst
+        let b = 0x80uy ||| byte (n &&& 0x7FUL)
+        ByteStream.writeByte b dst
 
     /// Write a VarNat to an output stream.
     let write (n:uint64) (dst:ByteDst) : unit =
         whb (n >>> 7) dst
-        let lob = 0x80uy ||| byte (n &&& 0x7FUL)
-        ByteStream.writeByte lob dst
+        let b = byte (n &&& 0x7FUL)
+        ByteStream.writeByte b dst
 
     let rec private readLoop (acc:uint64) (src:ByteSrc) : uint64 =
         let b = ByteStream.readByte src
@@ -133,7 +133,6 @@ module EncBytesRaw =
             member __.Read db src = read src
             member __.Compact db b = struct(b, size b)
         }
-
 
 module EncPair =
     /// Codec combinator for structural pair.
@@ -334,5 +333,9 @@ module EncBTree =
     let codec (cV:Codec<'V>) =
         let cKV = EncPair.codec (EncBytes.codec) cV
         Codec.view (EncArray.codec' cKV) (BTree.ofArray) (BTree.toArray)
+
+/// Encode a String via array.
+module EncString =
+    let codec = Codec.view (EncBytes.codec) (BS.toString) (BS.fromString)
 
 

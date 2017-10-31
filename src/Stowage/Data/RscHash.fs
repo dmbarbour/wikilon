@@ -2,14 +2,14 @@ namespace Stowage
 open Data.ByteString
 open Konscious.Security.Cryptography
 
-/// A RscHash is simply a 72-character bytestring encoded using
+/// A RscHash is simply a secure hash of fixed size encoded using
 /// an unusual base32 alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST.
 ///
-/// This string is computed from the Blake2B 360-bit secure hash
+/// This string is computed from the Blake2B 320-bit secure hash
 /// of a binary, and is used as a name or capability to read a
 /// binary resource.
 ///
-/// Note on 10/11/2017: from 280 bits to 360 bits.
+/// Note on 10/27/2017: changed to 320 bits.
 type RscHash = ByteString
 
 module RscHash =
@@ -17,7 +17,7 @@ module RscHash =
     let alphabet = "bcdfghjklmnpqrstBCDFGHJKLMNPQRST"
 
     /// number of bits encoded in hash
-    let hashBitLen : int = 360
+    let hashBitLen : int = 320
 
     let inline private hdiv n = 
         assert (0 = (hashBitLen % n))
@@ -71,9 +71,8 @@ module RscHash =
 
     // perform a base32 encoding of the Blake2 hash.
     let private b32enc (src : byte[]) : byte[] =
-        assert ((45 = src.Length) && (72 = size))
+        assert ((40 = src.Length) && (64 = size))
         let dst = Array.zeroCreate size
-        do b32e40 dst src 8
         do b32e40 dst src 7
         do b32e40 dst src 6
         do b32e40 dst src 5

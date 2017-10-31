@@ -86,13 +86,25 @@ module DB =
     /// have exclusive write access, we may use a Storage to produce
     /// a DB.
     ///
-    /// The return value for a WriteBatch is a simple lazy value to
-    /// await synchronization with the backing store.
+    /// WriteBatch must be atomic and return a value to await durable
+    /// synchronization with the backing store. Read must be consistent
+    /// with prior WriteBatch operations even if synchronization hasn't
+    /// completed.
+    ///
+    /// Many databases cannot support arbitrary keys, so we support
+    /// a `Mangle` operation to rewrite and escape problematic keys
+    /// once rather than per write. Oversized keys can be rewritten
+    /// using a secure hash.
     type Storage =
         inherit Stowage
         abstract member Mangle     : ByteString -> Key
         abstract member Read       : Key -> Val     
         abstract member WriteBatch : KVMap -> Sync
+
+    /// Flush storage (via writing empty batch). 
+    let flushStorage (s:Storage) : unit =
+        let sync = s.WriteBatch (BTree.empty)
+        sync.Force()
 
     module private StorageDB =
         // GOAL: Create a DB from a Storage!
@@ -363,19 +375,19 @@ module DB =
             // in terms of write batches. I use the lazy 'flushing' to
             // order write batches without holding the lock too long.
             member db.Flush() : unit =
-                let flushing = lock (db.mutex) (fun () ->
+                let write = lock (db.mutex) (fun () ->
                     let wb = db.buffer
                     db.buffer <- Map.empty
                     let prior = db.flushing // potentially concurrent
                     db.flushing <- lazy (
                         let ws = serializeWrites wb         // concurrent with prior
-                        prior.Force() |> ignore<Sync>       // wait for flush but not sync
-                        let sync = db.store.WriteBatch ws   // write updates
+                        prior.Force() |> ignore<Sync>       // await prior WriteBatch
+                        let sync = db.store.WriteBatch ws   // apply new WriteBatch
                         System.GC.KeepAlive(wb)             // guard DBVars, VRefs
                         sync)
                     db.flushing)
-                let sync : Sync = flushing.Force()
-                sync.Force()     
+                let sync = write.Force()
+                sync.Force()  
                 db.Cleanup()     // potential cleanup of roots cache
             
             interface DB with
@@ -517,6 +529,7 @@ module DB =
                     tx.rs <- Map.foldBack addReadDep rs (tx.rs)
                     tx.ws <- leftBiasedUnion ws (tx.ws)
                     true)
+
 
     /// Create a DB from a Storage.
     ///
