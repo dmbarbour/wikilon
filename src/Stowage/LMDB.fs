@@ -21,25 +21,37 @@ module LMDB =
     /// MDB storage will support values up to 64MB.
     let maxValLen = (64 * 1024 * 1024)
 
-    let maxSafeKeyLen = 255
+    /// LMDB keys may range from 1..511 bytes in size. Although, use
+    /// of large keys is strongly discouraged for efficiency reasons.
+    let maxSafeKeyLen = 511
     let minSafeKeyLen = 1
-    let inline safeKeyByte (b:byte) : bool = 
+
+    /// Bytes for an unmangled key are in 35..126, i.e. the printable
+    /// subset of ASCII excluding !, ", and whitespace.
+    let safeKeyByte (b:byte) : bool = 
         ((126uy >= b) && (b >= 35uy))
 
-    /// Safe keys are limited as follows:
-    ///   contain only ASCII bytes in 35..126
-    ///   size limit between 1 and 255 bytes
-    /// Other keys will be mangled.
+    /// This function tests whether a key must be rewritten, returning
+    /// `true` if the key is safe as is. This looks at the size of the
+    /// key and tests safeKeyByte for every byte.
     let safeKey (k:ByteString) : bool =
         (maxSafeKeyLen >= k.Length) &&
         (k.Length >= minSafeKeyLen) &&
         BS.forall safeKeyByte k
 
-    /// Mangle unsafe keys, rewriting to !SecureHash.
-    /// Secure hash is the first 160 bits of RscHash.
+    /// Mangle unsafe keys, rewriting to !SecureHash. 
     let mangle (k:ByteString) : Key =
         if safeKey k then k else
         BS.cons (byte '!') (BS.take 32 (RscHash.hash k))
+
+    /// LMDB Storage Statistics.
+    type Stats =
+        { root_count : uint64 // How many key-value roots.
+          root_bytes : uint64 // Approx key-value data in bytes.
+          stow_count : uint64 // How many stowage resources. 
+          stow_bytes : uint64 // Approx stowage data in bytes.
+          rfct_bytes : uint64 // Stowage reference count overhead.
+        }
 
     module private I =
         type WriteBatch = BTree<Val>
@@ -120,7 +132,7 @@ module LMDB =
 
         // Multiple writers may share a flush operation. I'll use TCS
         // to improve precision so we don't flush again unnecessarily.
-        type Waiting = TaskCompletionSource<unit>
+        type TCS = TaskCompletionSource<unit>
 
         // For approximating stowage buffer sizes, I'll add a little
         // overhead per item and shift sizes to avoid overflow.
@@ -141,19 +153,19 @@ module LMDB =
             val ephtbl           : Ephemerons   // track resources in memory
             val mutable rdlock   : ReadLock     // track concurrent readers
             val mutable write    : KVMap        // new write batch
-            val mutable sync     : Waiting list // clients awaiting commit
+            val mutable sync     : TCS list     // clients awaiting sync
             val mutable stow     : StowBuff     // new stowage resources
             val mutable halt     : bool         // graceful shutdown
 
-            // active work
+            // active work, held in memory until write completes
             val mutable writing  : KVMap        // flushing write batch
             val mutable stowing  : StowBuff     // flushing stowed data
 
-            // buffer control for stowage
+            // buffer control options for stowage
             val mutable sbsize   : int          // data in stowage buffer
             val mutable sbthresh : int          // limit for stowage buffer
             static member DefaultSBThresh = 2_000_000
-           
+            
             new (path:string, maxSizeMB:int) =
                 Directory.CreateDirectory(path) |> ignore
                 let flock = lockFile (Path.Combine(path,"lock"))
@@ -265,7 +277,8 @@ module LMDB =
 
         let validWrite (k:Key) (vOpt:Val) =
             // testing key against LMDB limits here
-            let okKey = (511 >= k.Length) && (k.Length >= 1)
+            let okKey = (maxSafeKeyLen >= k.Length) 
+                     && (k.Length >= minSafeKeyLen)
             if not okKey then false else
             match vOpt with
             | Some v -> (maxValLen >= v.Length) 
@@ -275,20 +288,20 @@ module LMDB =
         let writeBatch (db : Database) (wb : KVMap) : DB.Sync =
             if not (BTree.forall validWrite wb)
                 then invalidArg "wb" "invalid write batch"
-            let tcs = new TaskCompletionSource<unit>()
+            let tcs = new TCS()
             lock db (fun () ->
                 db.write <- leftBiasedUnion wb (db.write)
                 db.sync <- (tcs :: db.sync)
                 Monitor.PulseAll(db))
-            lazy (tcs.Task.Result)
+            lazy(tcs.Task.Result)
 
         // signal DB to write, return immediately
         let signal (db:Database) : unit =
             writeBatch db (BTree.empty) |> ignore<DB.Sync>
 
         // reference counts are natural numbers, encoded using EncVarNat.
-        // However, zero counts are recorded implicitly in separate table
-        // (dbi_zero) for incremental GC and ephemeral roots.
+        // Zero counts are represented instead by keeping the reference in
+        // the dbi_zero table to simplify GC.
         type RC = uint64
         let refctBytes (rc:RC) : ByteString =
             ByteStream.write (fun dst ->
@@ -307,6 +320,7 @@ module LMDB =
         // a locally unknown resource. But we delete when there are 
         // no references remaining.
         let dbDelRsc (db:Database) (wtx:MDB_txn) (sk:StowKey) : unit =
+            //printfn "LMDB Stowage DEL: %s" (BS.toString sk)
             assert(stowKeyLen = sk.Length)
             mdb_del wtx (db.dbi_rfct) sk |> ignore<bool>
             mdb_del wtx (db.dbi_zero) sk |> ignore<bool>
@@ -323,6 +337,7 @@ module LMDB =
 
         // add resource to stowage table (doesn't touch refcts)
         let dbAddRsc (db:Database) (wtx:MDB_txn) (h:RscHash) (v:ByteString) : unit =
+            //printfn "LMDB Stowage ADD: %s" (BS.toString (BS.take stowKeyLen h))
             assert(RscHash.size = h.Length)
             let sk = BS.take stowKeyLen h
             let rem = BS.drop stowKeyLen h
@@ -337,6 +352,22 @@ module LMDB =
             | Some v -> mdb_put wtx (db.dbi_data) k v
             | None -> mdb_del wtx (db.dbi_data) k |> ignore<bool>
 
+        let stat_bytes (s:MDB_stat) : uint64 =
+            let pgct = (s.branch_pages + s.leaf_pages + s.overflow_pages)
+            uint64 pgct * uint64 (s.psize)
+
+        let readStats (db:Database) : Stats = 
+            withRTX db (fun rtx ->
+                let sRoots = mdb_stat rtx (db.dbi_data)
+                let sStow = mdb_stat rtx (db.dbi_stow)
+                let sZero = mdb_stat rtx (db.dbi_zero)
+                let sRfct = mdb_stat rtx (db.dbi_rfct)
+                { root_count = uint64 (sRoots.entries)
+                  root_bytes = stat_bytes sRoots
+                  stow_count = uint64 (sStow.entries)
+                  stow_bytes = stat_bytes sStow
+                  rfct_bytes = (stat_bytes sZero) + (stat_bytes sRfct)
+                })
 
         // The GC task is sophisticated enough to have its own object.
         // 
@@ -394,7 +425,9 @@ module LMDB =
                 | None -> dbGetRefct (gc.db) (gc.wtx) sk
 
             member gc.NewRsc (sk:StowKey) : unit = 
-                // do not modify refct, but ensure one is written
+                // most new resources have a zero refct initially, but
+                // it's possible to reference a resource before stowing
+                // (leading to MissingRsc exceptions).
                 gc.quota <- (gc.quota + GC.NewRscQuota)
                 gc.SetRefct sk (gc.GetRefct sk)
 
@@ -454,32 +487,13 @@ module LMDB =
                 gc.FlushRefcts()
                 if(0 = gc.quota) then signal (gc.db) // for incremental GC
 
-        let inline dbHasWork (db:Database) : bool =
-            let noWork = (List.isEmpty (db.sync))
-                      && (BTree.isEmpty (db.write))
-                      && (db.sbsize < db.sbthresh)
-            not noWork
-
-        let inline dbAwaitWork (db:Database) : unit =
-            lock db (fun () ->
-                if not (dbHasWork db)
-                    then Monitor.Wait(db) |> ignore<bool>)
-
-        let rec dbWriterLoop (db:Database) : unit = 
-            dbAwaitWork db
-
-            // delay decrefs during write to simplify reasoning about
-            // GC behavior. This prevents us from deleting resources 
-            // that might be rooted in db.write or db.stow
+        let dbWriteFrame (db:Database) : bool =
+            // prevent potential GC of concurrently rooted resources. 
             db.ephtbl.DelayDecrefs()
-            use onExitPassDecrefs =
-                { new System.IDisposable with
-                    member __.Dispose() = db.ephtbl.PassDecrefs()
-                }
 
             // write buffers are held in Database until commit, but
             // are immediately separated from new incoming writes
-            let struct(syncing,halt) = lock db (fun () ->
+            let struct(syncing,halting) = lock db (fun () ->
                 db.writing <- db.write
                 db.stowing <- db.stow
                 let syncing = db.sync
@@ -507,6 +521,7 @@ module LMDB =
             BTree.iter (fun _ v -> gc.RemVal v) (overwriting)
             Map.iter (fun sk _ -> gc.NewRsc sk) (db.stowing)
             gc.Perform()
+            db.ephtbl.PassDecrefs() // allow decrefs after GC
 
             // write and flush the transaction
             mdb_txn_commit wtx
@@ -515,15 +530,30 @@ module LMDB =
                 db.rdlock <- new ReadLock()
                 oldReadLock)
             mdb_env_sync (db.mdb_env) // flush to disk
-            let reportSync (tcs:Waiting) = tcs.SetResult()
+            let reportSync (tcs:TCS) = tcs.SetResult()
             List.iter reportSync syncing
             oldReaders.Wait() // wait on readers of old frame
             lock db (fun () -> // clear old read buffers
                 db.writing <- BTree.empty
                 db.stowing <- Map.empty)
+            halting 
 
-            // halt or continue as needed.
-            if halt then () else dbWriterLoop db
+        let inline dbHasWork (db:Database) : bool =
+            let noWork = (List.isEmpty (db.sync))
+                      && (BTree.isEmpty (db.write))
+                      && (db.sbsize < db.sbthresh)
+            not noWork
+
+        let inline dbAwaitWork (db:Database) : unit =
+            lock db (fun () ->
+                if not (dbHasWork db)
+                    then Monitor.Wait(db) |> ignore<bool>)
+
+        let rec dbWriterLoop (db:Database) : unit = 
+            dbAwaitWork db
+            let halting = dbWriteFrame db
+            if halting then () else dbWriterLoop db
+
 
         let openDB (path:string) (maxSizeMB:int) : Database =
             let db = new Database(path,maxSizeMB)
@@ -534,7 +564,7 @@ module LMDB =
         // close will perform one final write loop then halt.
         // for graceful shutdown.
         let closeDB (db:Database) : unit =
-            let tcs = new TaskCompletionSource<unit>()
+            let tcs = new TCS()
             lock db (fun () ->
                 db.halt <- true
                 db.sync <- (tcs :: db.sync)
@@ -586,20 +616,14 @@ module LMDB =
             I.setStowageThreshold (this.db) bytes
 
         /// Force GC pass of the storage layer.
-        member this.GC() : unit = this.Flush()
-        
-        /// Force Flush to Disk.
-        member this.Flush() : unit =
-            let sync = (this :> DB.Storage).WriteBatch (BTree.empty)
-            sync.Force()
+        /// 
+        /// This is not a full GC, it only waits for one write step which
+        /// may free up a couple thousand items. To determine progress, you
+        /// may need to use Stats().
+        member this.GC() : unit = 
+            DB.flushStorage (this :> DB.Storage)
 
-        // TODO: Statistics. E.g. items in stowage, number of ephemeral
-        // refs, number of keys. Perhaps also some browsing features
-        // to view keys. This should be based on LMDB-layer lookups.
-
-    /// Open an LMDB storage as a Stowage Database.
-    /// Composes `new LMDB.Storage` and `DB.fromStorage`
-    let inline openDB (path:string) (maxSizeMB:int) : DB =
-        let s = new Storage(path,maxSizeMB) 
-        DB.fromStorage (s :> DB.Storage)
+        /// Basic Database Size Statistics.
+        member this.Stats() : Stats = 
+            I.readStats (this.db)
 

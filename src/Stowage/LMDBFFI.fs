@@ -26,6 +26,15 @@ module internal LMDB_FFI =
         val data : nativeint
         new(s,d) = { size = s; data = d }
 
+    [< Struct; StructLayoutAttribute(LayoutKind.Sequential) >]
+    type MDB_stat =
+        val psize : uint32
+        val depth : uint32
+        val branch_pages : nativeint
+        val leaf_pages : nativeint
+        val overflow_pages : nativeint
+        val entries : nativeint
+
     let defaultMode : mdb_mode_t = 0o660
 
     // Environment Flags
@@ -95,6 +104,9 @@ module internal LMDB_FFI =
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
         extern int mdb_del(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, nativeint nullData);
             // note: not using DUPSORT in Stowage; data argument should be 0n
+
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_stat(MDB_txn txn, MDB_dbi dbi, [<Out>] MDB_stat& stat);
 
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
         extern int mdb_cursor_open(MDB_txn txn, MDB_dbi dbi, MDB_cursor& cursor);
@@ -228,6 +240,11 @@ module internal LMDB_FFI =
             let e = Native.mdb_del(txn,db,&mdbKey,IntPtr.Zero)
             if(MDB_NOTFOUND = e) then false else check(e); true)
 
+    // obtain statistics for a specified database
+    let mdb_stat (txn : MDB_txn) (db : MDB_dbi) : MDB_stat =
+        let mutable stat = Unchecked.defaultof<MDB_stat>
+        check(Native.mdb_stat(txn,db,&stat))
+        stat
 
     // I find LMDB cursors to be rather awkward. They don't translate
     // cleanly to F# sequences. 
