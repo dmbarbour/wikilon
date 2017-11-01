@@ -43,17 +43,19 @@ This set of combinators is Turing complete, able to represent all deterministica
          [C][B][A]s == [[C]B][C]A   (S combinator)   s = [[c] a b w] a i
             [B][A]k == A            (K combinator)   k = a d
 
-A simple translation from lambda calculus is also provided in discussion of *Named Local Variables* (in context of *Editable Views*). Compared to lambda calculus or SKI combinators, Awelon's semantics are simpler: 
+A simple translation from lambda calculus is described in *Named Local Variables* in context of *Editable Views*. It's feasible to use lambda calculus as a syntactic sugar for Awelon code. Compared to lambda calculus or SKI combinators, Awelon's semantics are simpler: 
 
-1. Combinator rewriting is much simpler than variable substitution. There is no need for environment management, variable capture or lexical scope. There is no risk of representing free variables. 
-1. The stack-like environment enables uniform abstraction for multiple arguments or results without explicit tupling, and provides a foundation for *Static Typing* based on arity without need for atomic value types.
-1. The explicit copy and drop operations simplify substructural type analysis, reference counting GC, and potential acceleration using in-place update for uniquely referenced, indexed data structures.
+1. Combinator rewriting is simpler than variable substitution. There is no need for environment models, lexical scopes, or variable closures. There is no risk of representing free variables.
+1. The stack-like environment enables uniform abstraction for multiple arguments or results, and offers a foundation for *Static Typing* based on arities instead of atomic value types.
+1. The explicit copy and drop operations simplify substructural type analysis, reference counting GC, and dynamic tracking of uniqueness to accelerate in-place updates for indexed data structures.
 
 ## Encoding
 
 Awelon is encoded using a subset of ASCII, bytes 32..126. 
 
-Newlines and tabs are among the rejected characters. However, humans will frequently manipulate Awelon code through *Editable Views* that may present a more sophisticated surface syntax, potentially including tables or graphical representations. Large texts or binaries cannot be efficiently embedded in Awelon, but may be referenced via *Secure Hash Resources* and constructed via *Stowage*. 
+Newlines are among the rejected characters. However, line breaks may be transparently replaced by spaces where appropriate upon input of a program. Humans will usually manipulate Awelon code through *Editable Views* that may present a more sophisticated surface syntax, potentially including tables or graphical representations or *Named Local Variables* and infix notations. 
+
+Arbitrary texts and binaries cannot be directly embedded into Awelon, but may be referenced indirectly as *Secure Hash Resources*, or even constructed at runtime by leveraging *Stowage*.
 
 ## Words
 
@@ -294,31 +296,9 @@ There are many semantically valid rewrites that Awelon's naive evaluator does no
 
 A runtime has discretion to perform optimizations that are invisible in the evaluated result, e.g. for *Static Linking*. Visible optimizations are permitted only when guided by annotation. 
 
-Pattern-matching rewrite optimizations tend in general to be fragile, affected by abstraction and order of evaluation. However, there are many robust optimization techniques with good results. For example, partial evaluation can be modeled by propagating variables through an evaluation then extracting the variables:
+Simple pattern-matching optimizations tend to be fragile, affected heavily by abstraction and associativity. Fortunately, there are many robust optimization techniques with good results. For example, we can propagate 'variables' through an evaluation then extract said variables using an algorithm like the one described at *Named Local Variables* - doing so would normalize data plumbing, penetrate arity barriers, and enable partial evaluations wherever data is partially known.
 
-* variables `A B C` as undefined subprograms
-* evaluate `[C][B][A]function` to completion
-* rewrite to extract `A B C` free variables
-
-A simple extraction algorithm:
-
-        T(X,E) - extract X from E such that:
-            T(X,E) does not contain X
-            [X] T(X,E) == E
-
-        T(X, E) | E does not contain X      => d E
-        T(X, X)                             => i
-        T(X, [X])                           => 
-        T(X, [E])                           => [T(X,E)] b
-        T(X, F G)
-            | only F contains X             => T(X,F) G
-            | only G contains X             => [F] a T(X,G)
-            | otherwise                     => c [T(X,F)] a T(X,G)
-
-
-This would, for example, tear through arity annotations and deeply eliminate unnecessary data plumbing, carrying partial data along for the ride. Of course, there might also be some advantage to rearranging data on the stack to minimize later data plumbing.
-
-Another useful technique is, for known conditional types, we can partially evaluate results under both conditions, weighing exponential expansion of code versus potential benefits of specialized code. Anyhow, there are a lot of possible optimizations that can be represented by simple rewriting of Awelon code.
+Development of useful optimizations will be a major area for Awelon's development, even before we compile which may expose new optimizations within the intermediate language.
 
 ## Compilation
 
@@ -484,24 +464,39 @@ Although initial emphasis is textual views, it is feasible to model richly inter
 
 ### Named Local Variables
 
-An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with fixpoints or algebraic math expressions. It also supports a more conventional programming style where desired. Consider a let or lambda syntax of form:
+An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with fixpoints or algebraic math expressions. It also supports a more conventional programming style where desired. 
 
-        \ X Y Z -> CODE ==  "\X Y Z"(a2)d CODE'
+Consider a syntactic sugar for let or lambda assignment of form:
 
-This plucks three items off the stack, giving them local names within `CODE`. On the right hand side, the special comment - `"\X Y Z"(a2)d` - enables the view to later recover the variable names for future edits. We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` using a simple algorithm:
+        -> X Y Z; EXPR
 
-        T(X, E) | E does not contain X      => d E
-        T(X, X)                             => 
-        T(X, [onF][onT] if)                 => [T(X, onF)][T(X, onT)] if
-        T(X, [E])                           => [T(X,E)] b
-        T(X, F G)
+This should pluck three values off the stack, giving local names `X`, `Y`, and `Z` within `EXPR`, and produce equivalent code without the variables. I'll preserve stack order, such that `Z` would be the top item on the stack. Hence, the following is true: 
+
+        -> X Y Z; == -> Z; -> Y; -> X;
+
+Translation may then occur one variable at a time.
+
+        EXPR == X T(X,EXPR)     for any value X
+
+        T(X,E) | E does not contain X       => d E
+        T(X,X)                              =>
+        T(X,[E])                            => [T(X,E)] b
+        T(X,F G)                            
             | only F contains X             => T(X,F) G
             | only G contains X             => [F] a T(X,G)
-            | otherwise                     => c [T(X,F)] a T(X,G)
+            | F and G contain X             => c [T(X,F)] a T(X,G)
 
-This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference from the optimization is that we know our variables are value words and we may desire special handling for conditional behaviors like `if` to avoid copying data into each branch. 
+That much is sufficient, avoids unnecessary copies, and conveniently uses only Awelon primitive words. But assuming certain words, we could further optimize conditional behaviors to eliminate unnecessary copying and composition of variables into conditional paths:
 
-Lambdas can be leveraged into let expressions (like `let var = expr in CODE` or `CODE where var = expr`) or the Haskell `do` notation. Local recursion is possible if a view automatically introduces a fixpoint. Further, with variables we can feasibly introduce infix expressions like `((X + Y) * X)`, though our view may need to embed assumptions about arity and preferred associativity of the chosen operators.
+        T(X, [onT][onF]if)                  => [T(X,onT)][T(X,onF)]if
+
+Similarly, it is feasible to optimize splitting of tuples. Anyhow, this gives us a convenient translation from a lambda calculus and simplifies data plumbing and working with closures. 
+
+Local variable names are not semantically meaningful, but are often human meaningful. Essentially, they're comments. An editable view might recognize comments of form `"lambda X"(a2)d` and rewrite to `-> X;` and inject variables into the following code appropriately, reversing `T(X,E)`.
+
+        -> X; EXPR == "lambda X"(a2)d T(X,EXPR)
+
+Assuming local variables, it's also feasible to develop infix notations, e.g. `((X + Y) * X)`. Thus we can achieve conveniences of conventional languages where doing so is useful, but keep it at the editable view without complicating the semantics.
 
 ### Qualified Namespaces
 
@@ -539,21 +534,39 @@ We can represent a list as an array (guided by `(array)` annotations). We can ac
 
 Awelon reserves the `@` character to support hierarchical structure. 
 
-Words of form `foo@dict` refers to the definition of `foo` in context of `@dict`. Similarly, `42@d` is `[41 succ]@d` is `[41@d succ@d]`, and `"hello"@d` is `[104 "ello" cons]@d`, and `$secureHash@d` will interpret the secure hash definition in context of `d`. Even some annotations may be usefully qualified, e.g. `(eq_z)@d` would reference the definition of `z@d`. These namespace qualifiers are second-class. No space is permitted between a word or block and the `@dict` qualifier. Logically, `foo@d` can be understood as just another word.
+Words of form `foo@dict` refers to the definition of `foo` in context of `dict`. Similarly, `42@d` is `[41 succ]@d` is `[41@d succ@d]`, and `"hello"@d` is `[104 "ello" cons]@d`, and `$secureHash@d` will interpret the secure hash  resource in context of `d`. Even some annotations may be usefully qualified, e.g. `(eq_z)@d` would reference the definition of `z@d`. These namespace qualifiers are second-class. No space is permitted between a word or block and the `@dict` qualifier. Logically, `foo@d` can be understood as just another word.
 
-The dictionary name must also be a valid word, syntactically. How dictionary `@d` is defined is left to the dictionary representation, which Awelon language doesn't specify, but ideally should support lightweight dictionary structure sharing and efficient update.
+The dictionary component must be a valid word syntactically. How dictionary `d` is defined is left to the dictionary representation and programming environment, which Awelon language doesn't specify. But I suggest dictionaries should be first class values with lightweight structure sharing and efficient update.
 
-Importantly, hierarchical dictionaries only permit the parent to reference child. There is no means for child to reference parent, no `..` path. Consequently, hierarchical dictionaries can be validated and evaluated and shared without context. This structural constraint is valuable for many [application model](ApplicationModel.md) patterns that involve messaging or publish-subscribe of full dictionaries, or use of dictionaries as documents or databases or other objects.
+Importantly, hierarchical dictionaries only permit the parent to reference child. There is no means for child to reference parent, no `..` path. There should be no cyclic dependencies. Consequently, hierarchical dictionaries can always be validated and evaluated and shared without context. This structural constraint is valuable for many [application model](ApplicationModel.md) patterns that involve messaging or publish-subscribe of full dictionaries, or use of dictionaries as documents or databases or other objects.
 
-By Law of Demeter, programmers should avoid multi-level qualifiers like `foo@xy@zzy`, and it would be sensible to raise a warning when observed. However, such constructs may appear in the course of evaluation, and are read right to left, i.e. we look for meaning of `foo@xy` within dictionary `@zzy`.
+By Law of Demeter, programmers should avoid direct use of multi-level qualifiers like `foo@xy@zzy`, and it would be sensible to raise a warning when observed. However, such constructs may appear in the course of evaluation, and are read right to left, i.e. we would look for meaning of `foo@xy` within dictionary `zzy`.
 
 ### Localization
 
-As a special optimization for hierarchical dictionaries, we may eliminate qualifiers that don't contribute to the program's behavior. For example, if natural numbers mean the same thing to the parent as they do to the child (based on underlying definitions of `zero` and `succ`), then `42@child` may be rewritten to just `42`.
+As a special optimization for hierarchical dictionaries, we may eliminate qualifiers that don't contribute to the program's behavior. For example, if natural numbers mean the same thing to the parent as they do to the child `d` (based on underlying definitions of `zero` and `succ`), then `42@d` may be rewritten to just `42`.
 
-## Staged and Generic Programming
+## Staged Programming
 
-Staged programming is a form of constant propagation. Awelon does not support this explicitly, but can model it. However, for staging to work in practice usually requires some syntactic support to clearly distinguish which computations are in which stage, and ensure uniform propagation of the staged constants. I am interested in use of editable views to extend Awelon with staging.
+Staged programming is disciplined partial evaluation. In practice, partial evaluation is difficult to control. It's easy to accidentally delay computations, or for optimizations to change behavior in unexpected ways. Staged programming makes clear what must be evaluated when. This could be achieved with support in the syntax or type systems. 
 
-I'm especially interested in staging for generic programming - e.g. working with functions overloaded on data types or traits. In this case, our earlier stage would propagate information about the future program context, the types that will be on the stack. Multiple stage passes may be required, depending on how sophisticated the static type inference algorithms. A suitable *Editable View* can act as an extension to Awelon to make this feasible, and dictionaries can be developed that almost uniformly use generic programming.
+For Awelon, I propose use of annotations to make useful assertions about internal structure of otherwise opaque functions. Consider:
+
+        [A](now) == [A]     construction of [A] completed
+        [F](stage) == [F]   iff F does not contain (now)
+        [F](later)          hides F from (stage)
+
+This is conceptually based on a discrete temporal logic. Here `(stage)` allows us to insist that all `(now)` computations are completed, while `(later)` tags a value and supports multi-staged programming. Evaluation of word definitions should be implicitly staged, such that `(now)` raises an error if not statically eliminated and `(stage)` never needs to examine definitions. This could also be extended to multiple independent clocks by introducing annotations of form `(now_foo)`, `(stage_foo)`, and `(later_foo)` with arbitrary symbol `foo`.
+
+Syntactic support is feasible via editable views, and valuable for distinguishing static and dynamic arguments. These annotations could be checked dynamically or even statically without too much difficulty. Conveniently, staged programming is separated from the `(dyn)` annotation for local dynamic types.
+
+## Generic Programming
+
+Awelon is generic for universally quantified types, which is useful but incomplete. Ideally, we should be able to support Haskell-style typeclasses, such that we can vary an `add` function based on the type of inputs. Staged programming is a prerequisite for generic programming to be efficient, i.e. such that we can propagate typeful metadata and compute an optimized program before we propagate the arguments.
+
+I don't have a good story for generic programming yet. But it seems feasible.
+
+
+
+
 
