@@ -18,10 +18,8 @@ module EncCVRef =
     // encoding is `local or {hash}.
 
     // overlapping the first byte with the RscHash container.
-    let cLocal =
-        let c = byte '`'
-        assert(c <> EncRscHash.cPrefix)
-        c
+    let cLocal = byte '`'
+    do assert(cLocal <> EncRscHash.cPrefix)
 
     let write (cV:Codec<'V>) (ref:CVRef<'V>) (dst:ByteDst) : unit =
         match ref with

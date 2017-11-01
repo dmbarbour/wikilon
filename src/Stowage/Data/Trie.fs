@@ -3,38 +3,39 @@ open Data.ByteString
 
 /// Trie with bytestring keys, above Stowage. 
 ///
-/// This is an implementation of a radix tree with ability to push 
-/// subtrees into a Stowage database. This enables first class key
-/// value databases to be modeled. These trees can be larger than
-/// memory, durable, potentially even distributed (depending on the
-/// Stowage implementation).
+/// This is an implementation of a prefix-sharing radix tree with 
+/// ability to move large subtrees into a Stowage database via a
+/// compaction operation. Essentially, this allows representation
+/// of large key-value databases as first-class values in limited
+/// memory.
 ///
-/// For write-heavy workloads, consider the LSMTrie instead.
+/// Compaction is explicit, enabling multiple updates on the tree
+/// to be batched without constructing intermediate stowage nodes.
+/// Decision to compact is made at bit level in a key, via IntMap.
+/// Without compaction, this is essentially an in-memory trie. 
 ///
-/// The implementation here pushes the complex logic to the IntMap
-/// used to represent a sparse array of children. This use of IntMap
-/// enables very fine-grained fanout when pushing data into stowage
-/// while using a simple byte-level trie. (Otherwise, a fanout of
-/// up to 256 would make for problematic compaction decisions.)
+/// Prefix sharing for keys is useful for efficient serialization,
+/// but does imply overheads for reconstructing keys on iteration.
+///
+/// For write-heavy workloads, try LSMTrie.
 module Trie =
 
-    /// Keys in our Trie should be short, simple bytestrings.
-    /// Even with prefix sharing, try to keep keys under a few
-    /// kilobytes.
+    /// Keys in our Trie should be short, simple bytestrings. Even
+    /// with prefix sharing, try to keep keys under a few kilobytes.
     type Key = ByteString
 
-    /// Our tree structure has a prefix, a value right at that
-    /// prefix, and a sparse array of up to 256 child trees. Only
-    /// the root tree should be empty since an empty child shall 
-    /// be represented by absence of an entry in the child table.
+    /// The Tree has a prefix key fragment, a possible value at that
+    /// key, and a sparse array of children indexed 0..255. Large 
+    /// values will be represented 
     ///
-    /// The Tree's implementation should be treated as internal 
-    /// for most use cases, since clients can break invariants.
-    /// But it's exposed if you need it.
+    /// This isn't a precise representation. Only the root tree
+    /// may be empty, and the child array should not contain any
+    /// keys outside the range 0..255. Take care to not break 
+    /// tree invariants if you must use this type directly.
     type Tree<'V> = 
         { prefix    : ByteString 
           size      : uint64
-          value     : 'V option
+          value     : CVRef<'V> option
           children  : IntMap<Tree<'V>>
         }  
  
@@ -49,7 +50,7 @@ module Trie =
 
     let isEmpty (t:Tree<_>) : bool = (0UL = size t)
 
-    let singleton (k:Key) (v:'V) = 
+    let singleton (k:Key) (v:'V) : Tree<'V> = 
         { prefix = k
           size = 1UL
           value = Some v
@@ -77,24 +78,41 @@ module Trie =
         | Some v -> v
         | None -> raise (System.Collections.Generic.KeyNotFoundException())
 
-(*
-    let private diffByte (a:Key) (b:Key) : int option = 
-        let ixMax = min (a.Length) (b.Length)
-        let rec loop ix =
+    /// Rewrite tree to ensure a specific key and its value is in 
+    /// memory. This undoes compaction for a minimal subset of the
+    /// tree. 
+    ///
+    /// Normally, touch isn't required because LVRef already will
+    /// cache nodes upon lookups.
+    let rec touch (k:Key) (t:Tree<'V>) : Tree<'V> =
+        if not (matchPrefix (t.prefix) k) then t else
+        let k' = BS.drop (t.prefix.Length) k
+        if (BS.isEmpty k') then t else
+        let ixChild = uint64 (BS.unsafeHead k')
+        match IntMap.tryFind ixChild (t.children) with
+        | None -> t
+        | Some tC ->
+            let tC' = touch (BS.unsafeTail k') tC
+            let children' = IntMap.add ixChild tC' (t.children)
+            { t with children = children' }
 
-    //let rec add (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
-*)      
+    /// Move entire tree from Stowage into memory.
+    let rec expand (t:Tree<'V>) : Tree<'V> =
+        if 
+    
+
+    /// Remove a key from the tree.
+    /// 
+    /// Note: This will touch  tree
+    let remove (k:Key) (t:Tree<'V>) : Tree<'V> =
+
+
+    /// 
+
+    let rec add (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
 
 
 
-    // function to combine two keys plus the intermediate byte
-    let private joinKeys (prefix:ByteString) (b:byte) (suffix:ByteString) =
-        let szTotal = prefix.Length + 1 + suffix.Length
-        let mem = Array.zeroCreate szTotal
-        Array.blit (prefix.UnsafeArray) (prefix.Offset) mem 0 prefix.Length
-        mem.[prefix.Length] <- b
-        Array.blit (suffix.UnsafeArray) (suffix.Offset) mem (1 + prefix.Length) suffix.Length
-        BS.unsafeCreateA mem
 
 type Trie<'V> = Trie.Tree<'V>
 

@@ -153,7 +153,8 @@ module LVRef =
             result
 
         // If we have 12 frames and scrub 60% per frame, then we'll
-        // erase about 5% of total cache per frame after warmup.
+        // erase about 5% of total cache per frame (after warmup),
+        // plus however much was GC'd normally.
         let frameCount = 12
         let percentScrub = 60
 
