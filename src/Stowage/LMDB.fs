@@ -609,9 +609,14 @@ module LMDB =
         
         /// Configure Stowage Buffer (in bytes).
         ///
-        /// New stowage resources are buffered in memory, but will flush
-        /// automatically upon reaching a sufficient threshold. Default
-        /// is a couple megabytes.
+        /// New stowage resources are buffered and flushed in batches of
+        /// a size based on this buffer, defaulting to a couple megabytes.
+        /// This helps amortize synchronization overheads, and allows small
+        /// key-value writes to share the same batch as their resources.
+        /// 
+        /// In general, it is wiser to increase the LVRef cache rather than
+        /// the buffer size for stowage. With LVRef cache, it's feasible to
+        /// entirely avoid serialization if a value is garbage collected.
         member this.SetStowageBuffer (bytes:int) : unit =
             I.setStowageThreshold (this.db) bytes
 
