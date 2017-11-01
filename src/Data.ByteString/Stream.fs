@@ -152,7 +152,8 @@ module ByteStream =
         result
 
     /// Ignore several bytes.
-    let skip (len:int) (src:Src) : unit = ignore (readBytes len src)
+    let skip (len:int) (src:Src) : unit = 
+        readBytes len src |> ignore<ByteString>
 
     /// Attempt to read a byte-stream, but backtrack on ReadError
     let tryRead (reader:Src -> 'X) (src:Src) : 'X option =
