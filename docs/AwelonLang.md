@@ -129,16 +129,6 @@ Secure hash resources are generally subject to [garbage collection (GC)](https:/
 
 *Security Note:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat a secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should resist timing attacks that might leak secure hashes.
 
-## Dictionary
-
-Awelon words are defined in a dictionary. Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon doesn't specify a dictionary representation. I hope for de-facto standards to arise around the import, export, sharing, and backup of dictionaries, and potentially dictionaries as first-class values.
-
-Definitions for words must form a directed acyclic graph. Cyclic behavior must use anonymous recursion via fixpoint combinators, cf. *Fixpoints and Loops* below. Assigning a trivial cycle such as `foo = foo` may be treated as equivalent to deleting word `foo` from the dictionary.
-
-Dictionaries are usually manipulated through services, such as a web application or a [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) filesystem adapter. The use of such layers is also necessary to provide useful *Editable Views*.
-
-See also *Hierarchical Dictionaries*. Dictionaries may contain dictionaries.
-
 ## Acceleration
 
 Acceleration is a performance assumption for Awelon. 
@@ -164,7 +154,7 @@ Annotations help developers control, optimize, view, and debug computations. Unl
 * `(t1)..(t9)` - tuple assertions for output scope control
 * `(unit)` - assert empty block
 * `(nc) (nd)` - support substructural type safety
-* `(seal_foo) (open_foo)` - lightweight type tag and assertions
+* `(s_foo) (u_foo)` - lightweight type tag and assertions
 * `(par)` - request parallel evaluation of computation
 * `(eval)` - request immediate evaluation of computation
 * `(nat)` - assert argument should be a natural number
@@ -178,8 +168,18 @@ Annotations help developers control, optimize, view, and debug computations. Unl
 * `(accel)` - assert block of code should have runtime acceleration
 * `(eq)` - assert structural equality of two values
 * `(eq_foo)` - assert equal to def, reduce code to known name (quines)
+* `(now)`, `(later)`, `(stage)` - support for staged evaluation
 
-Annotations must have no observable effect within a computation. However, annotations should have externally observable consequences, e.g. optimize might perform rewrites we can see when viewing the evaluation, trace generates a debug log, jit and par make programs evaluate faster. Stowage and memoization can interact with disk or networks. Further, annotations may cause computations to halt early, as with arity annotations, failed assertions, applied error values, and sealers. 
+Annotations must have no observable effect within a computation. However, annotations should have externally observable consequences, e.g. optimize might perform rewrites we can see when viewing the evaluation, trace generates a debug log, jit and par make programs evaluate faster, stowage and memoization interact with disk or networks. Further, annotations may cause computations to halt early, as with arity annotations, failed assertions, applied error values, and sealers.
+
+A subset of annotations "tag" values and are carried through bindings:
+
+        [B](tag)[A]b == [[B](tag)A]
+
+Examples of tags include `(error)`, `(nc)`, `(nd)`, `(later)`, and `(par)` albeit only until evaluation completes. We might treat `(jit)` as a tag in some contexts. 
+
+
+ e.g. `(par)`, `(error)`, `(later)`, `(nd)`, `(nc)`, and `(jit)` would generally tag values such that they're carried along 
 
 Annotations are defined by the runtime. In case of porting code, runtimes that do not recognize an annotation may ignore it. In the long run, we should have de-facto standard annotations that are widely supported, while experimental or runtime-specific annotations should be indicated with appropriate prefix.
 
@@ -194,6 +194,14 @@ Stowage is a simple idea, summarized by rewrite rules:
 Stowage allows secure hash resources to be constructed at runtime and removed from working memory until later required. Essentially, this gives us a functional, persistent virtual memory model. Further, these hashes can be used efficiently together with memoization as a basis for incremental computing for very large systems.
 
 What "large value" means is heuristic, but should be reproducible. If configured, it should be configurable from the dictionary, perhaps by defining `stow_threshold`. It might also be useful to support a few different size thresholds, enabling use of `(stow_small)` vs. `(stow_large)`.
+
+## Dictionary
+
+Awelon words are defined in a dictionary. Evaluation of Awelon code occurs in context of an immutable dictionary. Definitions for words must form a directed acyclic graph. Cyclic behavior must use anonymous recursion via fixpoint combinators, cf. *Fixpoints and Loops* below. Assigning a trivial cycle such as `foo = foo` may be treated as equivalent to deleting word `foo` from the dictionary.
+
+Awelon doesn't specify a dictionary representation. I hope for de-facto standards to arise around the import, export, sharing, and backup of dictionaries, and potentially dictionaries as first-class values. Dictionaries are usually manipulated through services, such as a web application or a [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) filesystem adapter. The use of such layers is also necessary to provide useful *Editable Views*.
+
+See also *Hierarchical Dictionaries*.
 
 ## Evaluation
 
@@ -322,26 +330,48 @@ Accelerators aren't trivial, but a couple accelerators could cover the vast majo
 
 *Aside:* KPNs are also an interesting alternative to monadic effects for modeling purely functional applications.
 
-## Structural Scope
+## Scope
 
-Blocks naturally delimit the input scope for a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially leverage this with the bind operation `b`. But Awelon also supports multiple outputs, and so scoping output is a relevant concern. To address this, one feasible option is to introduce *tuple assertions* to annotate output arity.
+Scopes support control and comprehension of computation. A few forms:
 
-        [](t0) == []
+### Spatial Scope
+
+Blocks provide a simple foundation for modeling regions and spatial scopes within a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially control scopes using bind operation `b`. But by itself this is incomplete; we also need to control outputs, and understand the impact of observing a function upon our environment or 'stack'. 
+
+To control output, we can generally use annotations to make assertions about common data types. Such annotations can be validated statically in many cases, and dynamically in many more. Annotations asserting tuple structure are simple and convenient:
+
         [[A]](t1) == [[A]]
         [[B][A]](t2) == [[B][A]]
         ...
 
-Tuple assertions could be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection could be used. Similar to arity annotations, tuples larger than `(t5)` should be rare in practice.
+Between blocks and tuple annotations, we scope both inputs and outputs to a computation.
 
-In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(seal_key)` and paired structure assertion `(open_key)` with the following rewrite semantics:
+### Temporal Scope
 
-        (seal_foo) (open_foo) ==
+For performance reasons, it isn't unusual that we want to control *when* a computation occurs. The simplest distinction is between static (when evaluating definitions) versus dynamic. More generically, multi-stage programming involves specializing functions based on a curried subset of stable inputs.
 
-Otherwise, they won't rewrite at all, and prevent further computation. This could be combined with a simple codebase analysis constraint, that these annotations only be used directly from words with a matching prefix `foo`, to provide a simple basis for modular abstract data types.
+I suggest a simple basis for temporal scope inspired from temporal logic:
 
-## Substructural Scope
+        [A](now) == [A]     if A doesn't contain (now)
+        [F](later)          hides F from (now)
 
-[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about whether a value is used, or limit how many times a value is used. This can be convenient for modeling finite resources, intermediate states in a protocol, or ensuring certain steps are performed by a client computation. Awelon lacks primitive support for substructural types, but annotations can be leveraged:
+That is, we use `(now)` to indicate a subset of computations that should complete before we proceed, and `(later)` marks blocks as awaiting future input. For a valid program, after evaluation, `(now)` must appear only within blocks tagged `(later)`. For definitions, `(now)` essentially marks computations that must complete statically. Otherwise we must report appropriate errors to our programmers.
+
+### Symbolic Scope
+
+Control of coupling within a codebase is convenient for human factor reasons - isolation of errors, simplification of maintenance, separation of concerns and expertise. Awelon's dictionary concept doesn't restrict coupling beyond the requiring acyclic definitions. But a few simple annotations can cover many use cases. Consider pairs of annotations that cancel when adjacent:
+
+        (seal_foo)(open_foo) ==
+        (seal_bar)(open_bar) ==
+        ...
+
+These annotations prevent flow of information across them until canceled, so we can use them to hide parts of our environment and resist accidents. Further, a simple convention can lift these annotations into a codebase restriction: `(seal_foo)` and `(open_foo)` may only be directly used in definitions for words prefixed with `foo_`. This would allow programmers to control and reason about coupling within a dictionary based on shared prefixes.
+
+Seals operate on the whole stack, but we can seal specific values by use of `[(seal_foo)]b` and `i(open_foo)`. Ultimately, this provides a simple foundation for [abstract data types](https://en.wikipedia.org/wiki/Abstract_data_type) whose representation and implementation details are restricted to a prefix in the codebase.
+
+### Substructural Scope
+
+[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about protocols and life cycles, whether a value is used and how many times. Especially in combination with abstract data types or effects models. As usual, we can introduce a few annotations to help out:
 
 * `(nc)` - mark a value non-copyable, aka 'affine'
 * `(nd)` - mark a value non-droppable, aka 'relevant'
@@ -349,9 +379,9 @@ Otherwise, they won't rewrite at all, and prevent further computation. This coul
 
         [A](nc) [B] b == [[A](nc) B](nc)
 
-Substructural attributes do not prevent application of a value with `a`. Copy and drop are explicit in Awelon, so dynamically enforcing these attributes is feasible, a lot easier than it would be in a variable substitution based language. But ideally, they would be enforced statically. 
+An affine value models a limited resource while a relevant value models a responsibility. If we're responsible for explicitly disposing of a resource, then it should be both affine and relevant, which corresponds to the 'linear' type.
 
-*Note:* Whether Awelon systems implement substructural types is entirely optional. And it might be more efficiently represented at the type description layer, in which case these annotations would be more to support type inference.
+Because copy and drop are explicit in Awelon, it isn't difficult to check substructural properties dynamically. However, it's still undesirable overhead. Ideally we should validate substructural types statically.
 
 ## Error Annotations
 
@@ -396,31 +426,48 @@ We might represent our primitive types as:
 
 The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In context of Awelon, we know that value types `C B A` must be first class functions, which potentially encode data.
 
-Value sealers like `(seal_foo)` would require special non-block types.
+Annotations can augment static analysis and type systems in flexible ways - symbolic sealing, temporal staging, substructural types, and so on. Ideally, everything would be verified statically rather than dynamically, but it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
 
-        (seal_foo) : S -> S <foo>
-        (open_foo) : S <foo> -> S
+Conditional behavior requires some special attention. Inferring that two conditional 'paths' should have the same output type and similar input types is infeasible without a more context. Annotations can inject some context. 
 
-Annotations can augment static type analysis in many ways, providing extra structure and assertions against which we can validate inference. Structural and substructural annotations would ideally be validated statically and have no dynamic behavior. A remaining concern is static typing of conditional behavior. We might represent various conditional data types:
+        (bool)      ∀S. S [S → S'] [S → S'] → S'
+        (option)    ∀S. S [S → S'] [S [A] → S'] → S'
+        (sum)       ∀S. S [S [A] → S'] [S [B] → S'] → S'
+        (nat)       μNat.∀S. S [S → S'] [S Nat → S'] → S'
 
-        (bool)      S [S     → S'] [S     → S'] → S'
-        (opt)       S [S     → S'] [S [A] → S'] → S'
-        (sum)       S [S [B] → S'] [S [A] → S'] → S'
-        (cond)      S [A     → S'] [B     → S'] → S'
-
-Knowing these types, we can also check for consistency between conditional branches. Unfortunately, inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many common types - naturals, texts, binaries, lists, labels, records, and so on. Anything we accelerate or use frequently enough for a runtime to recognize.
+A lot of languages manage to get by with just 'bool' or a little pattern matching equivalent to 'sum'. If we cover a small set of common conditional types from which most others are built, this should be sufficient for static typing in normal use cases. 
 
 ### Deferred Typing
 
 Simple static types are oft inexpressive, constraining more than helping.
 
-We can introduce an explicit escape. Consider a `(dyn)` annotation used as `[F] b b (dyn)` with formal behavior `[A](dyn) => [A]`. The presence of `(dyn)` does not suppress obvious static type errors, but may suppress warnings or errors that result from being *unable* to infer static types for a given subprogram, types too sophisticated for our simple type checker. Dependent types are an example where types are likely too sophisticated for a simple checker. Conveniently, the ability to eliminate `(dyn)` via partial evaluations at compile time would enable us to leverage dynamically typed macro-like behaviors while still supporting a statically typed system. 
+When static types get in the way of our programs, an escape can be convenient. I propose `(dyn)` for this purpose, indicating a partially dynamic type. The annotation is trivially erased when any value is at its left:
+
+        [F](dyn) == [F]
+
+However, presence of `(dyn)` can suppress static type errors that are a consequence of incomplete inference or insufficient information. For example, we can indicate we need two more arguments before we can compute the type for `[F]` via `[F] b b (dyn)`. Use of `(dyn)` will not suppress errors that are due to recognized inconsistencies, but can allow programs to pass when their consistency is ambiguous. 
+
+Combine `(dyn)` with `(now)` and `(later)` for flexible staged programming.
 
 ### Sophisticated Types
 
-I propose a convention of defining `foo_type` to declare a type metadata for `foo`. This enables flexible abstraction and composition of type descriptions, expression of sophisticated types (contracts, Hoare logic, etc.), and provision of auxiliary hints or proofs. If we want to properly support dependent, existential, higher order, GADT, etc. types, we'll probably need to do so at this layer. By also providing the type check algorithms via the same dictionary, we might also simplify portable consistency checks.
+We can establish conventions such as use of `foo_type` to declare typeful metadata for `foo`, and could support a more sophisticated analysis - contracts, Hoare logic, termination checking, algorithmic complexity, auxiliary hints and proof strategies, etc.. To support dependent, existential, higher order, GADTs, and other types, we'll probably need to do so. Ideally, analysis algorithms would be supplied via the same dictionary.
 
-Related to static typing, non-terminating evaluation in Awelon is always an error. There is no utility in unbounded divergence for a pure computation, though we might use arity annotations to defer computations and represent coinductive structure. In any case, static type analysis should attempt a limited termination analysis. While solving the halting problem isn't possible in general, obvious errors can always be reported.
+## Hierarchical Dictionaries
+
+Awelon reserves character `@` for symbolic context, primarily for hierarchical dictionaries. The intention is to support [application models](ApplicationModel.md) that share dictionaries through messaging or publish-subscribe systems, dictionaries as documents or spreadsheets or databases, explicitly versioned dictionaries, and other coarse grained applications. Hierarchical dictionaries are unsuitable for use as namespaces or modules.
+
+Words of form `foo@dict` refer to definition of `foo` in context of `dict`. Blocks also may be qualified with context: `[foo bar]@d` is equivalent to `[foo@d bar@d]`. Similarly, `42@d` is `[41 succ]@d` is `[41@d succ@d]`, and `"hello"@d` is `[104 "ello" cons]@d`, and `$secureHash@d` must interpret the secure hash resource in context of `d`. Even annotations may be usefully qualified, and we'll move the `@` character to the word within the parentheses. For example, `[X](eq_z@d)` is an assertion that `[X]` is equivalent to `[z@d]`.
+
+Symbolic context is monotonic and second-class. Hierarchical dictionaries permit the parent to reference the child, the child dictionary cannot reference the parent. There is no stepping back, no `..` path, and every dictionary must be fully self-contained. The context for any fragment of Awelon code can be determined locally. No space is permitted to separate a word or block from its `@dict` qualifier. The symbol `dict` must also be a valid word.
+
+Deep hierarchical contexts are possible and are left-associative, e.g. `foo@xy@zzy` is `foo@xy` in context of `zzy`. However, by Law of Demeter, this should rarely appear in source code. A development environment should raise a warning unless it is suppressed for a dictionary.
+
+*Note:* Although Awelon doesn't specify representation for dictionaries, I strongly recommend that hierarchical dictionaries leverage persistent data structures and secure hash resources. This enables a great deal of structure sharing, which is valuable because child dictionaries will have many definitions in common with each other and the parent.
+
+### Localization
+
+As a special optimization, an evaluator can erase insignificant hierarchical qualifiers. For example, if `42@d` means the same thing as `42` due to equivalent definitions for `zero` and `succ`, then we may freely rewrite `42@d` to `42`. This helps mitigate the inability for child dictionaries to reference the parent.
 
 ## Editable Views
 
@@ -518,55 +565,14 @@ Acceleration of records would logically construct a trie and extract an updated 
 
 Assuming aesthetic, accelerated, labeled data, Awelon can support parameter objects, extensible event types, labeled case expressions, and a more conventional programming style with events and routing on human labels. 
  
-## Unique References and In-Place Updates
+## Arrays and In-place Updates
 
-Persistent structures are great and should be used frequently. But in-place update has some performance advantages that are reasonably difficult to give up. 
+In-place updates are efficient - they can avoid overheads of persistent data structures related to indirection, allocation, and garbage collection, and they benefit from stronger cache locality. Although usually associated with imperative languages, purely functional languages can safely support in-place updates if they track sharing. For example, we can update an array in-place if that array is not shared; nobody will observe the mutation. Even if the array is shared, we can simply produce an unshared copy then update that - and this will be efficient if updates are batched or a lot more frequent than copies. 
 
-Fortunately, purely functional languages can support in-place update whenever we have a unique reference. We can model copy-on-write shared arrays, where subsequent writes are applied to the unique array without further copying. Lambda calculus makes this feature difficult to achieve (because the lexical environment is implicitly 'shared'). But Awelon makes copying explicit with operator `c`, so it's very easy to dynamically track uniqueness of a reference.
-
-Arrays and records are the most useful targets for this treatment.
-
-We can represent a list as an array (guided by `(array)` annotations). We can accelerate functions to access and update lists at indexed offsets. When the update function is applied to a unique array, it can update it in place. If applied to a shared array, it must copy the array first to get a unique array, but then all subsequent updates are in-place until the array is shared by logical copying via operator `c`. Records would receive similar treatment, albeit using a hashmap in place of the array.
-
-*Note:* The `(nc)` annotation restricts copying of the marked value. Use of this can help enforce preservation of uniqueness, or at least help fail-fast debug cases where we want to restrict copying.
-
-## Hierarchical Dictionaries and Namespaces
-
-Awelon reserves the `@` character to support hierarchical structure. 
-
-Words of form `foo@dict` refers to the definition of `foo` in context of `dict`. Similarly, `42@d` is `[41 succ]@d` is `[41@d succ@d]`, and `"hello"@d` is `[104 "ello" cons]@d`, and `$secureHash@d` will interpret the secure hash  resource in context of `d`. Even some annotations may be usefully qualified, e.g. `(eq_z)@d` would reference the definition of `z@d`. These namespace qualifiers are second-class. No space is permitted between a word or block and the `@dict` qualifier. Logically, `foo@d` can be understood as just another word.
-
-The dictionary component must be a valid word syntactically. How dictionary `d` is defined is left to the dictionary representation and programming environment, which Awelon language doesn't specify. But I suggest dictionaries should be first class values with lightweight structure sharing and efficient update.
-
-Importantly, hierarchical dictionaries only permit the parent to reference child. There is no means for child to reference parent, no `..` path. There should be no cyclic dependencies. Consequently, hierarchical dictionaries can always be validated and evaluated and shared without context. This structural constraint is valuable for many [application model](ApplicationModel.md) patterns that involve messaging or publish-subscribe of full dictionaries, or use of dictionaries as documents or databases or other objects.
-
-By Law of Demeter, programmers should avoid direct use of multi-level qualifiers like `foo@xy@zzy`, and it would be sensible to raise a warning when observed. However, such constructs may appear in the course of evaluation, and are read right to left, i.e. we would look for meaning of `foo@xy` within dictionary `zzy`.
-
-### Localization
-
-As a special optimization for hierarchical dictionaries, we may eliminate qualifiers that don't contribute to the program's behavior. For example, if natural numbers mean the same thing to the parent as they do to the child `d` (based on underlying definitions of `zero` and `succ`), then `42@d` may be rewritten to just `42`.
-
-## Staged Programming
-
-Staged programming is disciplined partial evaluation. In practice, partial evaluation is difficult to control. It's easy to accidentally delay computations, or for optimizations to change behavior in unexpected ways. Staged programming makes clear what must be evaluated when. This could be achieved with support in the syntax or type systems. 
-
-For Awelon, I propose use of annotations to make useful assertions about internal structure of otherwise opaque functions. Consider:
-
-        [A](now) == [A]     construction of [A] completed
-        [F](stage) == [F]   iff F does not contain (now)
-        [F](later)          hides F from (stage)
-
-This is conceptually based on a discrete temporal logic. Here `(stage)` allows us to insist that all `(now)` computations are completed, while `(later)` tags a value and supports multi-staged programming. Evaluation of word definitions should be implicitly staged, such that `(now)` raises an error if not statically eliminated and `(stage)` never needs to examine definitions. This could also be extended to multiple independent clocks by introducing annotations of form `(now_foo)`, `(stage_foo)`, and `(later_foo)` with arbitrary symbol `foo`.
-
-Syntactic support is feasible via editable views, and valuable for distinguishing static and dynamic arguments. These annotations could be checked dynamically or even statically without too much difficulty. Conveniently, staged programming is separated from the `(dyn)` annotation for local dynamic types.
+In Awelon, copying is explicit so it is not difficult to track sharing. And although we don't have arrays, a runtime can accelerate lists to use arrays under the hood. 
 
 ## Generic Programming
 
-Awelon is generic for universally quantified types, which is useful but incomplete. Ideally, we should be able to support Haskell-style typeclasses, such that we can vary an `add` function based on the type of inputs. Staged programming is a prerequisite for generic programming to be efficient, i.e. such that we can propagate typeful metadata and compute an optimized program before we propagate the arguments.
-
-I don't have a good story for generic programming yet. But it seems feasible.
-
-
-
+Awelon is generic for universally quantified types, which is useful but incomplete. Ideally, we want something closer to typeclasses or template metaprogramming. To make generic programming work well requires staged programming to propagate typeful metadata, and global memoization to avoid redundant generalization efforts. Awelon does have stories for these prerequisites (cf. *Temporal Scope* and *Memoization*). What's left is developing a model for typeful metadata and an editable view to make generic programming relatively convenient. So there is still a lot of work to be done on this topic.
 
 
