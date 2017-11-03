@@ -34,7 +34,7 @@ There are four primitive combinators:
 
 Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computations in Awelon. Awelon computations are semantically pure, and their entire formal behavior can be understood in terms of these few primitives.
 
-However, to achieve performance, we additionally leverage *Acceleration*. This is Awelon's alternative to built-in functions and data-types. or performance-motivated FFI. Acceleration is discussed below. We can also leverage *Annotations*, to improve performance and 
+However, to achieve performance, we additionally leverage *Acceleration*. This is Awelon's alternative to built-in functions and data-types. or performance-motivated FFI. Acceleration is discussed below. We can also leverage *Annotations*, to improve performance and support other non-functional requirements like debugging.
 
 This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, I'll define the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic).
 
@@ -45,7 +45,7 @@ This set of combinators is Turing complete, able to represent all deterministica
 
 A simple translation from lambda calculus is described in *Named Local Variables* in context of *Editable Views*. It's feasible to use lambda calculus as a syntactic sugar for Awelon code. Compared to lambda calculus or SKI combinators, Awelon's semantics are simpler: 
 
-1. Combinator rewriting is simpler than variable substitution. There is no need for environment models, lexical scopes, or variable closures. There is no risk of representing free variables.
+1. Combinator rewriting is simpler than variable substitution. There is no need for environment models, lexical scopes, or variable capture hygiene for multi-stage metaprogramming.
 1. The stack-like environment enables uniform abstraction for multiple arguments or results, and offers a foundation for *Static Typing* based on arities instead of atomic value types.
 1. The explicit copy and drop operations simplify substructural type analysis, reference counting GC, and dynamic tracking of uniqueness to accelerate in-place updates for indexed data structures.
 
@@ -133,7 +133,7 @@ Secure hash resources are generally subject to [garbage collection (GC)](https:/
 
 Acceleration is a performance assumption for Awelon. 
 
-A runtime will recognize and accelerate common functions. The accelerated implementation may be hand optimized and built into the runtime to achieve performance similar to a primitive. For example, runtimes might accelerate the following functions:
+A runtime will recognize and accelerate common functions. The accelerated implementation may be hand optimized and built into the runtime to achieve performance similar to a primitive. As trivial examples, runtimes might accelerate the following functions:
 
            [A]i == A            (inline)         i = [] w a d
         [B][A]w == [A][B]       (swap)           w = [] b a
@@ -330,9 +330,38 @@ Accelerators aren't trivial, but a couple accelerators could cover the vast majo
 
 *Aside:* KPNs are also an interesting alternative to monadic effects for modeling purely functional applications.
 
+## Error Annotations
+
+An `(error)` annotation marks a value erroneous and non-applicable. We cannot observe an error value with operator `a`. Attempting to observe the error value would prevent further rewrites.
+
+        [B][E](error)a == [][E](error)a d [B]
+
+An erroneous value can still be bound, copied, dropped like normal. It only causes problems when we try to observe it. 
+
+## Garbage Data
+
+In some cases, it might be convenient to erase data that we know we shouldn't use in the future to recover memory resources, yet leave a placeholder and preserve other annotations (such as `(nd)` for relevant data). We could represent this pattern by use of a `(trash)` annotation:
+
+        [A](trash)      => [](error)
+        [A](nd)(trash)  => [](nd)(error)
+
+We drop data but preserve substructure. Because the data has been lost, the resulting value is marked erroneous. Memory required for `A` may then be recycled. This is essentially a form of manual memory management.
+
+## Active Debugging
+
+Awelon's program rewrite semantics make it relatively easy to observe a computation in progress. Data is visible in the program representation, rather than hidden behind variables that must be queried via debugger. And of course, more conventional debugging applies. Some things we can easily do:
+
+* set breakpoints for linking of specific words
+* animate evaluation via frame capture on breakpoints
+* evaluate in small steps more generally
+* `(trace)` annotation for console/log style debugging
+* log inputs to specific words (specified arity)
+
+Debugging should be configurable through the runtime's interpeter or compiler.
+
 ## Scope
 
-Scopes support control and comprehension of computation. A few forms:
+Scopes are all about control and comprehension of computation. A few forms:
 
 ### Spatial Scope
 
@@ -383,35 +412,6 @@ An affine value models a limited resource while a relevant value models a respon
 
 Because copy and drop are explicit in Awelon, it isn't difficult to check substructural properties dynamically. However, it's still undesirable overhead. Ideally we should validate substructural types statically.
 
-## Error Annotations
-
-An `(error)` annotation marks a value erroneous and non-applicable. We cannot observe an error value with operator `a`. Attempting to observe the error value would prevent further rewrites.
-
-        [B][E](error)a == [][E](error)a d [B]
-
-An erroneous value can still be bound, copied, dropped like normal. It only causes problems when we try to observe it. 
-
-## Garbage Data
-
-In some cases, it might be convenient to erase data that we know we shouldn't use in the future to recover memory resources, yet leave a placeholder and preserve other annotations (such as `(nd)` for relevant data). We could represent this pattern by use of a `(trash)` annotation:
-
-        [A](trash)      => [](error)
-        [A](nd)(trash)  => [](nd)(error)
-
-We drop data but preserve substructure. Because the data has been lost, the resulting value is marked erroneous. Memory required for `A` may then be recycled. This is essentially a form of manual memory management.
-
-## Active Debugging
-
-Awelon's program rewrite semantics make it relatively easy to observe a computation in progress. Data is visible in the program representation, rather than hidden behind variables that must be queried via debugger. And of course, more conventional debugging applies. Some things we can easily do:
-
-* set breakpoints for linking of specific words
-* animate evaluation via frame capture on breakpoints
-* evaluate in small steps more generally
-* `(trace)` annotation for console/log style debugging
-* log inputs to specific words (specified arity)
-
-Debugging should be configurable through the runtime's interpeter or compiler.
-
 ## Static Typing
 
 Awelon can be evaluated without static typing. There is no type driven dispatch or overloading. But if we can detect errors early by static analysis, that is a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static type analysis makes a *very* nice default.
@@ -452,6 +452,14 @@ Combine `(dyn)` with `(now)` and `(later)` for flexible staged programming.
 ### Sophisticated Types
 
 We can establish conventions such as use of `foo_type` to declare typeful metadata for `foo`, and could support a more sophisticated analysis - contracts, Hoare logic, termination checking, algorithmic complexity, auxiliary hints and proof strategies, etc.. To support dependent, existential, higher order, GADTs, and other types, we'll probably need to do so. Ideally, analysis algorithms would be supplied via the same dictionary.
+
+## Structural Equivalence
+
+A structural equivalence assertion has a surprising amount of utility.
+
+        [A][B](eq) == [A][B]     iff A,B, structurally equivalent
+
+Using this, we can assert that two key-value structures share the same key comparison or hash functions. We can perform lightweight unit testing. And we can effectively assert shared origins for values if taken together with symbolically scoped value sealers. Although Awelon lacks nominative types, asserting shared origins can serve a similar role.
 
 ## Hierarchical Dictionaries
 
@@ -573,6 +581,11 @@ In Awelon, copying is explicit so it is not difficult to track sharing. And alth
 
 ## Generic Programming
 
-Awelon is generic for universally quantified types, which is useful but incomplete. Ideally, we want something closer to typeclasses or template metaprogramming. To make generic programming work well requires staged programming to propagate typeful metadata, and global memoization to avoid redundant generalization efforts. Awelon does have stories for these prerequisites (cf. *Temporal Scope* and *Memoization*). What's left is developing a model for typeful metadata and an editable view to make generic programming relatively convenient. So there is still a lot of work to be done on this topic.
+A common example of generic programming is that an `add` function should have appropriate meaning based on the arguments given to it - e.g. natural numbers, rational numbers, or vectors. This requires some model for overloading. My preferences lean towards solutions like Haskell type classes. Consider:
 
+        add :: (Num a) => a -> a -> a
+
+Informally, we can interpret this from a perspective of multi-stage programming. The first argument is a value of type `Num a` (a typeclass instance), and the arrow `=>` suggests we receive this argument in an earlier stage. Haskell makes *implicit* this propagation of typeful metadata, treating the set of typeclasses as a global database. But it's entirely feasible to manage a type context explicitly.
+
+Anyhow, Awelon has a story for multi-stage programming via `(now)` and `(later)` (see *Temporal Scope*). But to complete the generic programming story we also need a model for typeful metadata and a convenient model to manage and propagate this context in advance of our normal arguments. Such developments are beyond the scope of this document, but should be an interesting subject for the future.
 
