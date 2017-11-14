@@ -7,7 +7,7 @@ Awelon is a purely functional language based on concatenative combinators.
 
 Modern programming languages can produce useful artifacts - applications, games, and so on. But they do not support flexible composition and decomposition of these artifacts. There are a lot of complicating factors: hidden runtime structure, entanglement of effects and environment, separation of programmer and user interfaces, even how software is packaged and shared in a community.
 
-Awelon language aims to be simple and scalable, addressing these complications. It explores a new way of developing and sharing code and computational artifacts. Some design points:
+Awelon language aims to be simple and scalable, addressing many complications. It explores a new way of developing and sharing code and computational artifacts. Some design points:
 
 * Awelon evaluates by local confluent rewriting, much like expression `(6 * 7)` evaluates to `42` in arithmetic. Every evaluation step has representation within Awelon language and may thus be serialized or rendered - i.e. it's easy to "show the work". Rewrite based evaluation simplifies debugging, distribution, integration of the program with HCI, and further use of program results.
 
@@ -25,29 +25,29 @@ Integration of Awelon systems with external systems will initially rely on web s
 
 ## Primitives
 
-There are four primitive combinators:
+There are four primitive computing combinators:
 
             [B][A]a == A[B]         (apply)
             [B][A]b == [[B]A]       (bind)
                [A]c == [A][A]       (copy)
                [A]d ==              (drop)
 
-Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computations in Awelon. Awelon computations are semantically pure, and their entire formal behavior can be understood in terms of these few primitives.
+Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their entire formal behavior can be understood in terms of these few primitives.
 
-However, to achieve performance, we additionally leverage *Acceleration*. This is Awelon's alternative to built-in functions and data-types. or performance-motivated FFI. Acceleration is discussed below. We can also leverage *Annotations*, to improve performance and support other non-functional requirements like debugging.
-
-This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, I'll define the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic).
+This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, see a translation from lambda calculus at *Named Local Variables* or see this simple definition of the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic):
 
             [B][A]w == [A][B]       (swap)           w = [] b a
                [A]i == A            (inline)         i = [] w a d
          [C][B][A]s == [[C]B][C]A   (S combinator)   s = [[c] a b w] a i
             [B][A]k == A            (K combinator)   k = a d
 
-A simple translation from lambda calculus is described in *Named Local Variables* in context of *Editable Views*. It's feasible to use lambda calculus as a syntactic sugar for Awelon code. Compared to lambda calculus or SKI combinators, Awelon's semantics are simpler: 
+Awelon systems should ideally perform static analysis for termination and type safety. Compared to lambda calculus or SKI combinators, Awelon's semantics are simpler: 
 
-1. Combinator rewriting is simpler than variable substitution. There is no need for environment models, lexical scopes, or variable capture hygiene for multi-stage metaprogramming.
-1. The stack-like environment enables uniform abstraction for multiple arguments or results, and offers a foundation for *Static Typing* based on arities instead of atomic value types.
-1. The explicit copy and drop operations simplify substructural type analysis, reference counting GC, and dynamic tracking of uniqueness to accelerate in-place updates for indexed data structures.
+1. Local combinator rewriting is simpler than variable substitution. There is no need for environment models, lexical scopes, or variable capture hygiene for multi-stage metaprogramming.
+1. A stack-like environment enables uniform abstraction for multiple arguments or results, and supports *Static Typing* based on consistent arities instead of atomic value types.
+1. Explicit copy and drop operations simplify substructural type analysis, reference counting GC, and dynamic tracking of uniqueness to accelerate in-place updates for indexed data structures.
+
+To achieve performance, we additionally leverage *Acceleration*. This is Awelon's alternative to intrinsic functions, built-in data-types, and performance-motivated FFI. Acceleration is discussed below. We can also leverage *Annotations*, to improve performance and support other non-functional requirements like debugging.
 
 ## Encoding
 
@@ -59,11 +59,11 @@ Arbitrary texts and binaries cannot be directly embedded into Awelon, but may be
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is also a size limit: words must not surpass 63 characters in length.
+Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is no specific size limit, but words should usually be small in practice.
 
 Words are evaluated in context of a *Dictionary*. Each word is defined by an Awelon program, using other words. Valid definitions must form a directed acyclic graph and be block balanced (i.e. no unmatched `[` or `]` block characters). The formal semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
-Although structure within a word has no semantic properties, it may have connotations and conventions. For example, we might associate `foo_type` or `foo_doc` with `foo` in context of a linter or development environment. Lightweight namespaces are also feasible.
+Although structure within a word has no semantic properties, it may have connotations and conventions. For example, we might associate `foo_type` or `foo_doc` with `foo` in context of linking a development environment. Lightweight namespaces are also feasible.
 
 The four primitive words `a`, `b`, `c`, and `d` cannot be redefined. The four words `zero`, `succ`, `null`, and `cons` should be defined to support natural numbers, embedded texts, and binary resources.
 
@@ -81,7 +81,7 @@ Awelon has native support for natural numbers. Syntactically, numbers are repres
         42 = [41 succ]
         (et cetera)
 
-Definitions for `zero` and `succ` are left to the dictionary. Wrapping everything in blocks provides a simple structural guarantee that numbers may be treated as values regardless of definition. In practice, natural numbers must be defined based on *Acceleration*. With accelerated arithmetic, for example, we could add two numbers in log-time rather than linear time. Awelon does not support any other number types natively, but *Editable Views* can be leveraged to support numerical towers at the syntactic layer.
+Definitions for `zero` and `succ` are left to the dictionary. A typical encoding might copy and apply a function N times to represent number N. Wrapping everything in blocks provides a simple structural guarantee that numbers may be treated as values regardless of definition. In practice, natural numbers must be defined based on *Acceleration*. With accelerated arithmetic, for example, we could add two numbers in log-time rather than linear time. Awelon does not support any other number types natively, but *Editable Views* can be leveraged to support numerical towers at the syntactic layer.
 
 ## Embedded Texts
 
@@ -90,7 +90,7 @@ Awelon has native support for embedding texts inline between double quotes such 
         ""      = [null]
         "hello" = [104 "ello" cons]
 
-Definitions for `null` and `cons` are left to the dictionary. Like natural numbers, we have a structural guarantee of value type, and definitions are likely to be determined by available runtime acceleration. In this case, acceleration could support lists via arrays.
+Definitions for `null` and `cons` are left to the dictionary. A typical encoding might fold over every element in the list. Like natural numbers, we have a structural guarantee of value type, and definitions are likely to be determined by available runtime acceleration. In this case, acceleration could support lists via arrays.
 
 Embedded texts are suitable only for simple things like labels, test data, comments, and micro-DSLs such as regular expressions. They are not very suitable for general use. To work around these limitations, the primary options are:
 
@@ -129,6 +129,35 @@ Secure hash resources are generally subject to [garbage collection (GC)](https:/
 
 *Security Note:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat a secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should resist timing attacks that might leak secure hashes.
 
+## Annotations
+
+Annotations help developers control, optimize, view, and debug computations. Unlike words, which are mostly user-defined, annotations are given meaning by the runtime or compiler. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Potential useful annotations:
+
+* `(a2)..(a9)` - arity annotations to defer computations
+* `(t1)..(t9)` - tuple assertions for output scope control
+* `(unit)` - assert empty block
+* `(nc) (nd)` - support substructural type safety
+* `(seal_foo) (open_foo)` - lightweight symbolic types
+* `(par)` - request parallel evaluation of computation
+* `(eval)` - request immediate evaluation of computation
+* `(lazy)` - delayed, shared evaluation across copies
+* `(nat)` - assert argument should be a natural number
+* `(optimize)` - rewrite a function for efficient evaluation
+* `(jit)` - compile a function for efficient evaluation
+* `(stow)` - move large values to disk, load on demand
+* `(memo)` - memoize a computation for incremental computing
+* `(trace)` - record value to a debug output log
+* `(trash)` - erase data you won't observe, leave placeholder
+* `(error)` - prevent further progress within computation
+* `(assert)` - describe an environment at a given point
+* `(accel)` - assert software acceleration of a function
+* `(eq)`, `(eq_foo)` - assertions of structural equality
+* `(now)`, `(later)` - declarations for multi-stage programming
+
+Annotations have identity semantics: they have no observable effect within a computation. However, annotations do have observable effects outside the scope of the computation - generally impacting performance, active debugging, or static analysis. 
+
+Annotations are defined by the Awelon runtime system. But over enough time we should develop de-facto standard annotations that are widely supported. And experimental or runtime-specific annotations should generally be indicated with appropriate prefix.
+
 ## Acceleration
 
 Acceleration is a performance assumption for Awelon. 
@@ -140,48 +169,11 @@ A runtime will recognize and accelerate common functions. The accelerated implem
 
 The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Whenever `i` appears at the end of a subprogram, we might leverage the tail-call optimization.
 
-In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names could break accelerators. This is ultimately up to the runtime. Due to this fragility, a runtime should carefully document recognized accelerators, and provide some means to warn developers in case of bad assumptions. A useful convention is to support an `(accel)` annotation that asserts a block of code should be specially recognized and accelerated.
+In general, recognition of accelerators is fragile under refactoring and abstraction. For example, it may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names might break accelerators. Due to this fragility, developers need some means to gain confidence in accelerators. Performance mustn't silently rot due to developments of the runtime. A simple convention is to support an `[code fragment](accel)` annotation that asserts a given fragment of code must be accelerated.
 
-Critically, acceleration of functions extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 succ]`. But under the hood they could (and should!) be compactly represented by machine words, with arithmetic on natural numbers reduced to a machine operation. We can accelerate lists to use array representations and in-place indexed updates for unique references. We can feasibly accelerate linear algebra to leverage a GPGPU, or accelerate Kahn process networks to leverage distributed CPUs and memory.
+Acceleration naturally extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 succ]`. But with runtime acceleration, natural numbers may be compactly represented by machine words and arithmetic on math might be accelerated to add and multiply these words directly. Similarly, lists could be accelerated to use arrays. And evaluation of Kahn Process Networks could be accelerated to leverage distributed CPUs and memory.
 
-Accelerators are not trivial. Every accelerator represents a significant investment of time, and a complication for the runtime implementations. Hence, it's best if we seek small subset of accelerators that is both simple and good for a wide variety of use cases.
-
-## Annotations
-
-Annotations help developers control, optimize, view, and debug computations. Unlike words, which are mostly user-defined, annotations are given meaning by the runtime or compiler. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Potential useful annotations:
-
-* `(a2)..(a9)` - arity annotations to defer computations
-* `(t1)..(t9)` - tuple assertions for output scope control
-* `(unit)` - assert empty block
-* `(nc) (nd)` - support substructural type safety
-* `(s_foo) (u_foo)` - lightweight type tag and assertions
-* `(par)` - request parallel evaluation of computation
-* `(eval)` - request immediate evaluation of computation
-* `(nat)` - assert argument should be a natural number
-* `(optimize)` - rewrite a function for efficient evaluation
-* `(jit)` - compile a function for efficient evaluation
-* `(stow)` - move large values to disk, load on demand
-* `(memo)` - memoize a computation for incremental computing
-* `(trace)` - record value to a debug output log
-* `(trash)` - erase data you won't observe, leave placeholder
-* `(error)` - mark a value as an error object
-* `(accel)` - assert block of code should have runtime acceleration
-* `(eq)` - assert structural equality of two values
-* `(eq_foo)` - assert equal to def, reduce code to known name (quines)
-* `(now)`, `(later)`, `(stage)` - support for staged evaluation
-
-Annotations must have no observable effect within a computation. However, annotations should have externally observable consequences, e.g. optimize might perform rewrites we can see when viewing the evaluation, trace generates a debug log, jit and par make programs evaluate faster, stowage and memoization interact with disk or networks. Further, annotations may cause computations to halt early, as with arity annotations, failed assertions, applied error values, and sealers.
-
-A subset of annotations "tag" values and are carried through bindings:
-
-        [B](tag)[A]b == [[B](tag)A]
-
-Examples of tags include `(error)`, `(nc)`, `(nd)`, `(later)`, and `(par)` albeit only until evaluation completes. We might treat `(jit)` as a tag in some contexts. 
-
-
- e.g. `(par)`, `(error)`, `(later)`, `(nd)`, `(nc)`, and `(jit)` would generally tag values such that they're carried along 
-
-Annotations are defined by the runtime. In case of porting code, runtimes that do not recognize an annotation may ignore it. In the long run, we should have de-facto standard annotations that are widely supported, while experimental or runtime-specific annotations should be indicated with appropriate prefix.
+Accelerators are not trivial. An accelerator represents a significant investment, and dependency on accelerators will impact portability of code to other runtimes. It is best to develop a small set of accelerators that is useful for a wide variety of use cases. This development will be a long performance path for Awelon systems.
 
 ## Stowage
 
@@ -197,9 +189,15 @@ What "large value" means is heuristic, but should be reproducible. If configured
 
 ## Dictionary
 
-Awelon words are defined in a dictionary. Evaluation of Awelon code occurs in context of an immutable dictionary. Definitions for words must form a directed acyclic graph. Cyclic behavior must use anonymous recursion via fixpoint combinators, cf. *Fixpoints and Loops* below. Assigning a trivial cycle such as `foo = foo` may be treated as equivalent to deleting word `foo` from the dictionary.
+Awelon words are defined in a dictionary. Evaluation of Awelon code occurs in context of an immutable dictionary. Definitions for words must form a directed acyclic graph. Assigning a trivial cycle such as `foo = foo` may be treated as equivalent to deleting word `foo` from the dictionary.
 
 Awelon doesn't specify a dictionary representation. I hope for de-facto standards to arise around the import, export, sharing, and backup of dictionaries, and potentially dictionaries as first-class values. Dictionaries are usually manipulated through services, such as a web application or a [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) filesystem adapter. The use of such layers is also necessary to provide useful *Editable Views*.
+
+As an interesting point, it is feasible to leverage `(eq_foo)` to implicitly define a dictionary from within an Awelon program. 
+
+        [definition of foo](eq_foo) => [foo]
+
+This could be understood as an implied single-assignment of `foo = definition of foo`. Hence, it is feasible to represent dictionaries directly as Awelon programs, albeit in a rather second-class manner.
 
 See also *Hierarchical Dictionaries*.
 
@@ -222,7 +220,7 @@ Awelon's basic evaluation strategy is simple:
 
 Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-This is really just a recommended default strategy. A runtime may adjust this at its own discretion, so long as it preserves semantics. Annotations will also affect evaluation strategy, for example `[A](eval)` could force evaluation of `A` before passing the value onwards. With annotations we could precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large but infrequently referenced data to disk, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
+Annotations can greatly affect evaluation strategy. As two examples, `[A](eval)` could enforce evaluation of the value `[A]` before erasing `(eval)`, while `[A](lazy)` could replace "evaluate before copy" with a call-by-need strategy for a specific value.
 
 ## Value Words
 
@@ -235,7 +233,7 @@ Value words are convenient for preserving human-meaningful structure and support
 
 *Aside:* Value words might be considered the 'nouns' of Awelon language, whereas most words are verbs. However, an analogy to natural language quickly breaks down. Awelon lacks an equivalent to adjectives, adverbs, or anaphora, at least without a lot of development work involving staged programming and *Editable Views*.
 
-## Deferred Computations, Link Control, and Coinductive Data
+## Arity
 
 The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
 
@@ -245,28 +243,25 @@ The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
 
 To clarify, it is the *annotation* that has the given arity. Arity annotations specify nothing of their context.
 
-Arity annotations serve a valuable role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents evaluation of `F` from immediately observing `[A]`. Arity annotations can be used to guard against useless partial evaluations and control linking. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. An evaluator must wait for two arguments to `w` before linking.
+Arity annotations serve a valuable role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents `F` from observing `[A]` until more data is available. Arity annotations can be used to guard against wasteful partial evaluations and premature linking. It can also represent a [call-by-name](https://en.wikipedia.org/wiki/Evaluation_strategy#Call_by_name) evaluation strategy.
 
-Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
+## Loops
 
-## Fixpoints and Loops
+Modulo termination analysis, we can use a general fixpoint combinator:
 
-Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I favor the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
-
-        [X][F]z == [X][[F]z]F 
+        [X][F]z == [X][[F]z]F
         z = [[(a3) c i] b (eq_z) [c] a b w i](a3) c i
 
-        Using Definitions:
-               [A]i == A            (inline)         i = [] w a d
-            [B][A]w == [A][B]       (swap)           w = (a2) [] b a
+A fixpoint combinator is very expressive and can be used to construct any other loop. Unfortunately, this expressiveness hinders termination analysis. To simplify termination analysis, we'll want to favor alternative loop models.
 
-        Assuming Annotation:
-            [(def of foo)](eq_foo) => [foo]
-            and arity annotations
+One viable approach is data-driven loops, such as the Church-encoded natural number that copies and applies a function many times, effectively folding over every element. Short circuiting is also possible, if explicitly included in the type, for example:
 
-The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(eq_z)` annotation supports aesthetic presentation and preserves accelerated performance across serialization. Readers unfamiliar or uncomfortable with fixpoint may benefit from evaluating `[X][F]z` by hand a few times to grasp its behavior.
+        Nat     :  s * (s → s) → s
+        Nat'    :  (s * a) * ((s * a) → (s * (a + r))) → (s * (a + r))
 
-*Note:* Fixpoint is notoriously difficult for humans to grok and awkward to use by hand. Use of *Editable Views* and especially *named locals* can help, potentially hiding the fixpoint. Even better is to hide most loops behind various collections or stream processing abstractions.
+The latter encoding for supports early 'return' with type `r`. Further variants could include remainder data together with the return value. 
+
+
 
 ## Memoization
 
@@ -332,11 +327,15 @@ Accelerators aren't trivial, but a couple accelerators could cover the vast majo
 
 ## Error Annotations
 
-An `(error)` annotation marks a value erroneous and non-applicable. We cannot observe an error value with operator `a`. Attempting to observe the error value would prevent further rewrites.
+We can represent errors by simply introducing an `(error)` annotation that cannot be directly removed by any rewrite rule. Hence, once `(error)` appears within a computation, that computation is obviously stuck. Error values can be represented, such as `[(error)]`.  can be dropped or copied but not applied. This can be coupled with a comment like `["divide by zero"(error)]`. Errors in evaluation or static linking for a word should be raised to the attention of developers.
 
-        [B][E](error)a == [][E](error)a d [B]
+## Assertions
 
-An erroneous value can still be bound, copied, dropped like normal. It only causes problems when we try to observe it. 
+Assertions are a simple, convenient, and conventional debugging feature. For many languages, the big difference between a 'debug' and 'release' build is whether assertions are checked. Assertions can also be leveraged by static analysis tools, hinting at types or representing contracts. In Awelon, we can use annotations to express annotations:
+
+        [code we could inline](assert)d
+
+An `(assert)` passes if the given function would evaluate inline without error. But we don't actually inline this code, instead we drop it with the following `d` operation. Based on code within the assertion, we can infer a description of the stack for static analysis, or we can perform dynamic sampling of assertions by copying the stack.
 
 ## Garbage Data
 
@@ -353,11 +352,12 @@ Awelon's program rewrite semantics make it relatively easy to observe a computat
 
 * set breakpoints for linking of specific words
 * animate evaluation via frame capture on breakpoints
-* evaluate in small steps more generally
+* evaluate in small steps, animate evaluation generally
 * `(trace)` annotation for console/log style debugging
 * log inputs to specific words (specified arity)
+* dynamic checking of assertions 
 
-Debugging should be configurable through the runtime's interpeter or compiler.
+Active debugging should be configurable through the runtime's interpeter or compiler. To achieve reasonable performance when debugging, we might consider sampling policies - i.e. instead of breaking on a word every time, or logging inputs to a word every time, we could sample every hundredth or thousandth time, perhaps with pseudo-random variation.
 
 ## Scope
 
@@ -384,19 +384,23 @@ I suggest a simple basis for temporal scope inspired from temporal logic:
         [A](now) == [A]     if A doesn't contain (now)
         [F](later)          hides F from (now)
 
-That is, we use `(now)` to indicate a subset of computations that should complete before we proceed, and `(later)` marks blocks as awaiting future input. For a valid program, after evaluation, `(now)` must appear only within blocks tagged `(later)`. For definitions, `(now)` essentially marks computations that must complete statically. Otherwise we must report appropriate errors to our programmers.
+We may need to partially evaluate `A` to eliminate exposed `(now)` annotations before we proceed. For a valid program, after partial evaluation, `(now)` may appear only within blocks tagged `(later)`. For definitions, `(now)` essentially marks computations that must complete statically. Otherwise we must report appropriate errors to our programmers.
 
 ### Symbolic Scope
 
-Control of coupling within a codebase is convenient for human factor reasons - isolation of errors, simplification of maintenance, separation of concerns and expertise. Awelon's dictionary concept doesn't restrict coupling beyond the requiring acyclic definitions. But a few simple annotations can cover many use cases. Consider pairs of annotations that cancel when adjacent:
+Use of [abstract data types (ADTs)](https://en.wikipedia.org/wiki/Abstract_data_type) and similar methods can help isolate errors, control coupling, and simplify maintenance of a codebase. It's a form of scoping, albeit at the higher layer of software development. Awelon doesn't use the conventional software packaging models, but we can leverage annotations to simulate ADTs.
+
+Consider pairs of annotations that cancel when adjacent:
 
         (seal_foo)(open_foo) ==
         (seal_bar)(open_bar) ==
         ...
 
-These annotations prevent flow of information across them until canceled, so we can use them to hide parts of our environment and resist accidents. Further, a simple convention can lift these annotations into a codebase restriction: `(seal_foo)` and `(open_foo)` may only be directly used in definitions for words prefixed with `foo_`. This would allow programmers to control and reason about coupling within a dictionary based on shared prefixes.
+These annotations prevent flow of information across them until canceled. We can use them to seal away parts of an environment, to resist accidental access to data. Use of `[(seal_foo)]b` with `i(open_foo)` gives us a basis for value sealing. 
 
-Seals operate on the whole stack, but we can seal specific values by use of `[(seal_foo)]b` and `i(open_foo)`. Ultimately, this provides a simple foundation for [abstract data types](https://en.wikipedia.org/wiki/Abstract_data_type) whose representation and implementation details are restricted to a prefix in the codebase.
+However, by itself this is only useful for accidents. Any function in the codebase is free to inject `(open_foo)` and observe the hidden implementation details. So we must add an additional restriction: `(seal_foo)` and `(open_foo)` may only be directly used in definitions of words that start with `foo_`. This property can be trivially checked by a linter. 
+
+With this restriction, we can model ADTs where direct access to representations is limited to words with a shared prefix. Effectively, we can treat a shared prefix as a lightweight module that can hide some details from other modules. It's feasible to leverage this for patching dictionaries, too.
 
 ### Substructural Scope
 
@@ -416,7 +420,15 @@ Because copy and drop are explicit in Awelon, it isn't difficult to check substr
 
 Awelon can be evaluated without static typing. There is no type driven dispatch or overloading. But if we can detect errors early by static analysis, that is a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static type analysis makes a *very* nice default.
 
-We might represent our primitive types as:
+We can represent our primitive types using a tuple for the stack:
+
+        a   : ((s * b) * (s → s')) → (s' * b)
+        b   : ((s * b) * ((e * b) → e')) → (s * (e → e'))
+        c   : (s * a) → ((s * a) * a)
+        d   : (s * a) → s
+        [F] : s → (s * type(F))
+
+Here `s` is a universally typed argument for the input stack. Because our types are always structured this way in Awelon, we can simplify syntax and match type descriptions to program structure:
 
         a   : S [B] [S → S'] → S' [B]
         b   : S [B] [E B → E'] → S [E → E']
@@ -424,9 +436,9 @@ We might represent our primitive types as:
         d   : S [A] → S
         [F] : S → S [type(F)]
 
-The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In context of Awelon, we know that value types `C B A` must be first class functions, which potentially encode data.
+The type `S[C][B][A]` then clearly aligns with a program of the same shape.
 
-Annotations can augment static analysis and type systems in flexible ways - symbolic sealing, temporal staging, substructural types, and so on. Ideally, everything would be verified statically rather than dynamically, but it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
+Annotations will augment static type analysis with value sealers, substructural types, multi-stage programming, and so on. Ideally, everything would be verified statically rather than dynamically, but it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
 
 Conditional behavior requires some special attention. Inferring that two conditional 'paths' should have the same output type and similar input types is infeasible without a more context. Annotations can inject some context. 
 
@@ -437,29 +449,44 @@ Conditional behavior requires some special attention. Inferring that two conditi
 
 A lot of languages manage to get by with just 'bool' or a little pattern matching equivalent to 'sum'. If we cover a small set of common conditional types from which most others are built, this should be sufficient for static typing in normal use cases. 
 
-### Deferred Typing
+### Staged and Deferred Typing
 
-Simple static types are oft inexpressive, constraining more than helping.
+Consider the `pick` function from Forth, which copies an element from the stack at a depth based on a given natural number. Although `pick` isn't very interesting, it can be taken as an example of metaprogramming.
 
-When static types get in the way of our programs, an escape can be convenient. I propose `(dyn)` for this purpose, indicating a partially dynamic type. The annotation is trivially erased when any value is at its left:
+        [Vk]..[V1][V0] k pick == [Vk]..[V1][V0][Vk]
 
-        [F](dyn) == [F]
+A static type for `pick` would require a sophisticated, dependent type system. However, for `3 pick` it is feasible to compute a simple static type. Trivially, we could define `pick` such that `3 pick` statically expands into a program `[] b b b w c [w a] a`, where the number of sequential `b` operations is based on the specific value `3`. We need only to defer type inference until after this expansion.
 
-However, presence of `(dyn)` can suppress static type errors that are a consequence of incomplete inference or insufficient information. For example, we can indicate we need two more arguments before we can compute the type for `[F]` via `[F] b b (dyn)`. Use of `(dyn)` will not suppress errors that are due to recognized inconsistencies, but can allow programs to pass when their consistency is ambiguous. 
+Delay of type analysis until after performing some useful evaluations should not be unfamiliar to users of preprocessors, macro systems, or template metaprogramming in conventional languages. It's simple, powerful, and convenient. For Awelon, we don't need a separate layer or feature for partial evaluations. But having some means to inform our type analysis system of our intentions is quite useful. I propose two annotations:
 
-Combine `(dyn)` with `(now)` and `(later)` for flexible staged programming.
+        [F](dyn) == [F]     
+        [F](stat) == [F]    iff F does not contain (dyn)
 
-### Sophisticated Types
+A definition of `pick` could have the form `[pick body here]b(dyn)i`. The `(dyn)` annotation simply tells our static type analysis tools to suppress complaints due to incomplete type inference. Recognized type errors should still be reported. Meanwhile, `(stat)` would enable us to scope use of dynamic structure and enforce clean boundaries or staging between macros and normal functions.
 
-We can establish conventions such as use of `foo_type` to declare typeful metadata for `foo`, and could support a more sophisticated analysis - contracts, Hoare logic, termination checking, algorithmic complexity, auxiliary hints and proof strategies, etc.. To support dependent, existential, higher order, GADTs, and other types, we'll probably need to do so. Ideally, analysis algorithms would be supplied via the same dictionary.
+### Termination Analysis
 
-## Structural Equivalence
+Valid programs in Awelon should always terminate. Of course, even with guarantee of termination it's trivial to express computations that would not terminate before the heat death of the universe. Quotas remain necessary in practice. But a guarantee of termination does make it a lot easier to reason about correctness of program behavior and composition.
+
+I haven't yet thoroughly explored options for static termination analysis. But I do recommend termination analysis be performed by default, with explicit annotations to assume termination as needed.
+
+### Structural Equivalence
 
 A structural equivalence assertion has a surprising amount of utility.
 
         [A][B](eq) == [A][B]     iff A,B, structurally equivalent
 
 Using this, we can assert that two key-value structures share the same key comparison or hash functions. We can perform lightweight unit testing. And we can effectively assert shared origins for values if taken together with symbolically scoped value sealers. Although Awelon lacks nominative types, asserting shared origins can serve a similar role.
+
+### Sophisticated Types
+
+For the most sophisticated types, such as GADTs, existential types, dependent types, or types annotated with proof tactics, we will need a type description language together with a simple annotation to 'comment' on the type. We could annotate stack types inline similar to assertions:
+
+        [type description of stack](type)d
+
+Awelon doesn't specify a type description language. We're free to use strings or data structures. Static analysis tools should recognize de-facto standards by ad-hoc means, such as a version comment within the type description.
+
+*Aside:* Type descriptions related to words can generally be moved outside of mainline code, into auxiliary definitions. But it's better to use annotations even within these auxiliary definitions, to avoid relying on naming conventions. E.g. `foo_type = [[foo][type description](type)]`. 
 
 ## Hierarchical Dictionaries
 
@@ -519,7 +546,7 @@ Although initial emphasis is textual views, it is feasible to model richly inter
 
 ### Named Local Variables
 
-An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with fixpoints or algebraic math expressions. It also supports a more conventional programming style where desired. 
+An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with algebraic math expressions. It also supports a more conventional programming style where desired. 
 
 Consider a syntactic sugar for let or lambda assignment of form:
 
@@ -581,7 +608,7 @@ In Awelon, copying is explicit so it is not difficult to track sharing. And alth
 
 ## Generic Programming
 
-A common example of generic programming is that an `add` function should have appropriate meaning based on the arguments given to it - e.g. natural numbers, rational numbers, or vectors. This requires some model for overloading. My preferences lean towards solutions like Haskell type classes. Consider:
+A common example of generic programming is that an `add` function should have appropriate meaning based on the arguments given to it - e.g. natural numbers, rational numbers, or vectors. This requires some model for overloading. My preferences lean towards solutions like Haskell type classes. Consider the Haskell `add`:
 
         add :: (Num a) => a -> a -> a
 
