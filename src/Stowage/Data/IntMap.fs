@@ -19,7 +19,6 @@ module IntMap =
 
     type Key = uint64   
     type Critbit = byte
-    type Size = uint64
 
     module Critbit =
 
@@ -41,7 +40,7 @@ module IntMap =
     /// for the leaf, a right-shifted slice for inner nodes.
     type Node<'V> =
         | Leaf of Key * 'V
-        | Inner of Size * Key * Critbit * CVRef<struct(Node<'V> * Node<'V>)>
+        | Inner of Key * Critbit * CVRef<struct(Node<'V> * Node<'V>)>
 
 
     module Node =
@@ -50,41 +49,16 @@ module IntMap =
         let inline load np = CVRef.load np
         let inline load' np = CVRef.load' np
 
-        let inline size node = 
-            match node with
-            | Leaf _ -> 1UL
-            | Inner (ct,_,_,_) -> ct
-
         // merge a key-prefix with key in node (via bitwise OR) 
         let mergeKP kp node =
             match node with
             | Leaf (k,v) -> Leaf ((kp ||| k), v)
-            | Inner (ct,p,b,np) -> Inner (ct,(kp ||| p),b,np)
-
+            | Inner (p,b,np) -> Inner ((kp ||| p),b,np)
 
         let inline keyPrefixL p b = ((p <<< 1) <<< int b)  
         let inline keyPrefixR p b = (keyPrefixL p b) ||| (1UL <<< int b)
         let inline mergeL p b l = mergeKP (keyPrefixL p b) l
         let inline mergeR p b r = mergeKP (keyPrefixR p b) r 
-
-        // split a node, assuming amt is both greater than one
-        // and less than the node's size. This divides the node
-        // into two non-empty nodes.
-        let rec splitSize amt node =
-            match node with
-            | Inner (ct, p, b, np) when (ct > amt) ->
-                let struct(l,r) = load' np
-                let ctL = size l
-                if (amt > ctL) then
-                    let struct(rl,rr) = splitSize (amt - ctL) r
-                    struct(Inner(ct,p,b,local l rl), mergeR p b rr)
-                else if(amt = ctL) then // exact split
-                    struct(mergeL p b l, mergeR p b r)
-                else
-                    let struct(ll,lr) = splitSize amt l
-                    struct(mergeL p b ll, Inner(ct,p,b,local lr r))
-            | _ -> failwith "invalid split!"
-
 
         // prefix and suffix exclude the critbit
         let inline prefix (k:Key) (b:Critbit) : Key = ((k >>> int b) >>> 1)
@@ -95,7 +69,7 @@ module IntMap =
 
         let rec tryFind kf node =
             match node with
-            | Inner (_, p, b, np) ->
+            | Inner (p, b, np) ->
                 if (p <> prefix kf b) then None else
                 let inR = testCritbit kf b
                 let kf' = suffix kf b
@@ -109,7 +83,7 @@ module IntMap =
         // test whether a key is remote
         let rec isKeyRemote kf node =
             match node with
-            | Inner (_, p, b, np) ->
+            | Inner (p, b, np) ->
                 if (p <> prefix kf b) then false else
                 match np with
                 | Local (struct(l,r),_) ->
@@ -123,44 +97,43 @@ module IntMap =
         // pull key into local memory
         let rec touch kf node =
             match node with
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 if (p <> prefix kf b) then node else
                 let inR = testCritbit kf b
                 let kf' = suffix kf b
                 let struct(l,r) = load' np
                 if inR 
-                    then Inner (ct, p, b, local l (touch kf' r))
-                    else Inner (ct, p, b, local (touch kf' l) r)
+                    then Inner (p, b, local l (touch kf' r))
+                    else Inner (p, b, local (touch kf' l) r)
             | Leaf _ -> node
 
         // localize all nodes
         let rec expand node =
             match node with
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(l,r) = load' np
-                Inner(ct, p, b, local (expand l) (expand r))
+                Inner(p, b, local (expand l) (expand r))
             | Leaf _ -> node
 
         // add or update a key-value pair
         let rec add k v node =
             match node with
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 let kp = prefix k b
                 if (p = kp) then // add with shared prefix
                     let inR = testCritbit k b
                     let k' = suffix k b
                     let struct(l,r) = load' np
                     let (l',r') = if inR then (l, add k' v r) else (add k' v l, r)
-                    let ct' = size l' + size r'
-                    Inner (ct', p, b, local l' r')
+                    Inner (p, b, local l' r')
                 else // insert just above current node
                     let b' = 1uy + b + Critbit.highBitIndex (p ^^^ kp)
                     assert(63uy >= b')
                     let inR = testCritbit k b'
-                    let node' = Inner(ct, suffix p b', b, np)
+                    let node' = Inner(suffix p b', b, np)
                     let leaf = Leaf(suffix k b', v)
                     let np' = if inR then local node' leaf else local leaf node'
-                    Inner (1UL + ct, prefix k b', b', np')
+                    Inner (prefix k b', b', np')
             | Leaf (kl,vl) ->
                 if (kl = k) then Leaf(k,v) else
                 let b' = Critbit.highBitIndex (kl ^^^ k)
@@ -168,29 +141,29 @@ module IntMap =
                 let leaf  = Leaf (suffix k b', v)
                 let inR = testCritbit k b'
                 let np' = if inR then local node' leaf else local leaf node'
-                Inner(2UL, prefix k b', b', np')
+                Inner(prefix k b', b', np')
 
         let rec remove (k:Key) (node:Node<'V>) : Node<'V> option =
             match node with
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 if (p <> prefix k b) then Some node else
                 let inR = testCritbit k b
                 let k' = suffix k b
                 let struct(l,r) = load np
                 if inR then 
                     match remove k' r with
-                    | Some r' -> Some (Inner (ct, p, b, local l r'))
+                    | Some r' -> Some (Inner (p, b, local l r'))
                     | None -> Some (mergeL p b l)
                 else
                     match remove k' l with
-                    | Some l' -> Some (Inner (ct, p, b, local l' r))
+                    | Some l' -> Some (Inner (p, b, local l' r))
                     | None -> Some (mergeR p b r)
             | Leaf (kl,_) -> if (kl = k) then None else Some node
 
 
         let rec splitAtKey k node =
             match node with
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 let kp = prefix k b
                 if (kp < p) then (Some node, None) else
                 if (kp > p) then (None, Some node) else
@@ -201,14 +174,14 @@ module IntMap =
                     let (rl,rr) = splitAtKey k' r
                     let l' = 
                         match rl with
-                        | Some n -> Inner(ct,p,b,local l n)
+                        | Some n -> Inner(p,b,local l n)
                         | None -> mergeL p b l
                     (Some l', rr)
                 else
                     let (ll,lr) = splitAtKey k' l
                     let r' = 
                         match lr with
-                        | Some n -> Inner(ct,p,b,local n r)
+                        | Some n -> Inner(p,b,local n r)
                         | None -> mergeR p b r
                     (ll, Some r')
             | Leaf (kl,_) ->
@@ -229,12 +202,12 @@ module IntMap =
             | Leaf (k,v) -> 
                 let v' = fn (kp ||| k) v
                 c (Leaf (k,v'))
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
                 let struct(l,r) = load' np
                 let l' = map c fn kl l
                 let r' = map c fn kr r
-                c (Inner (ct, p, b, local l' r'))
+                c (Inner (p, b, local l' r'))
 
         // filter and map with potential compaction.
         let rec filterMap c fn kp node =
@@ -243,15 +216,14 @@ module IntMap =
                 match fn (kp ||| k) v with
                 | Some v' -> Some (c (Leaf (k, v')))
                 | None -> None
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
                 let struct(l,r) = load' np
                 let lFM = filterMap c fn kl l
                 let rFM = filterMap c fn kr r
                 match (lFM,rFM) with
                 | (Some l', Some r') ->
-                    let ct' = size l' + size r'
-                    let node' = c (Inner (ct', p, b, local l' r'))
+                    let node' = c (Inner (p, b, local l' r'))
                     Some node'
                 | (Some l', None) -> Some (mergeL p b l')
                 | (None, Some r') -> Some (mergeR p b r')
@@ -263,7 +235,7 @@ module IntMap =
         let rec iter fn kp node =
             match node with
             | Leaf (k,v) -> fn (kp ||| k) v
-            | Inner (_, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
                 let struct(l,r) = load' np
                 iter fn kl l
@@ -272,7 +244,7 @@ module IntMap =
         let rec fold fn s kp node =
             match node with
             | Leaf (k,v) -> fn s (kp ||| k) v
-            | Inner (_, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
                 let struct(l,r) = load' np
                 fold fn (fold fn s kl l) kr r
@@ -280,7 +252,7 @@ module IntMap =
         let rec foldBack fn kp node s =
             match node with
             | Leaf (k,v) -> fn (kp ||| k) v s
-            | Inner (_, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
                 let struct(l,r) = load' np
                 foldBack fn kl l (foldBack fn kr r s)
@@ -288,7 +260,7 @@ module IntMap =
         let rec tryPick fn kp node =
             match node with
             | Leaf (k,v) -> fn (kp ||| k) v
-            | Inner (_, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
                 let struct(l,r) = load' np
                 let pickL = tryPick fn kl l
@@ -299,7 +271,7 @@ module IntMap =
             seq {
                 match node with
                 | Leaf (k,v) -> yield ((kp ||| k), v)
-                | Inner (_, p, b, np) ->
+                | Inner (p, b, np) ->
                     let struct(kl,kr) = keyPrefixes kp p b
                     let struct(l,r) = load' np
                     yield! toSeq kl l
@@ -310,7 +282,7 @@ module IntMap =
             seq {
                 match node with
                 | Leaf (k,v) -> yield ((kp ||| k), v)
-                | Inner (_, p, b, np) ->
+                | Inner (p, b, np) ->
                     let struct(kl,kr) = keyPrefixes kp p b
                     let struct(l,r) = load' np
                     yield! toSeqR kr r
@@ -322,15 +294,14 @@ module IntMap =
             let limit = (1UL <<< int b) 
             match node with
             | Leaf (k,_) -> (limit > k)
-            | Inner (_,pn,bn,_) -> ((prefix limit bn) > pn)
+            | Inner (pn,bn,_) -> ((prefix limit bn) > pn)
 
         let rec validate node =
             match node with
             | Leaf _ -> true
-            | Inner (ct, p, b, np) ->
+            | Inner (p, b, np) ->
                 let struct(l,r) = load' np
                 (63uy >= (1uy + b + Critbit.highBitIndex p))
-                    && (ct = (size l + size r))
                     && (validKeySuffix b l) && (validate l)
                     && (validKeySuffix b r) && (validate r)
 
@@ -346,12 +317,6 @@ module IntMap =
     let empty : Tree<_> = None
     let isEmpty (t:Tree<_>) = Option.isNone t
     let singleton (k:Key) (v:'V) : Tree<'V> = Some(Leaf(k,v))
-
-    /// Return size of tree (number of elements). O(1).
-    let size (t:Tree<_>) : Size =
-        match t with
-        | Some n -> Node.size n
-        | None -> 0UL
 
     /// Basic lookup on tree.
     let tryFind (k:Key) (t:Tree<'V>) : 'V option =
@@ -408,19 +373,6 @@ module IntMap =
     /// compaction efforts. 
     let inline checkedRemove k t = 
         if containsKey k t then remove k t else t
-        
-    /// Partition a tree based on element count. This will take the
-    /// requested count of keys (from least key to the Nth least key)
-    /// into the first tree, then all remaining keys into the second. 
-    /// If the tree is smaller than the request, everything will be
-    /// in the first tree.
-    let splitSize (amt:Size) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
-        if (0UL = amt) then (None,t) else
-        match t with
-        | Some n when (amt < Node.size n) -> 
-            let struct(l,r) = Node.splitSize amt n
-            (Some l, Some r)
-        | _ -> (t,None)
 
     /// Partition a tree at a specified key. Keys strictly less than
     /// the specified key will be in the left tree, while keys greater
@@ -531,7 +483,7 @@ module IntMap =
         let rec stepV n s =
             match n with
             | Leaf (k,v) -> struct(k,v,s)
-            | Inner (_,p,b,np) ->
+            | Inner (p,b,np) ->
                 let struct(l,r) = split p b np
                 stepV l (r::s)
 
@@ -555,11 +507,10 @@ module IntMap =
                     let struct(kb,vb,sb') = stepV nb moreb
                     stepDiffK ka va sa' kb vb sb'
                 | [] -> (Some(ka, InL va), (sa', []))
-            | (Inner(cta,pa,ba,npa)::sa') ->
+            | (Inner(pa,ba,npa)::sa') ->
                 match sb with
-                | (Inner(ctb,pb,bb,npb)::sb') when (bb >= ba) ->
-                    let obviousEq = (ba = bb) && (pa = pb)
-                                 && (cta = ctb) && (refEQ npa npb)
+                | (Inner(pb,bb,npb)::sb') when (bb >= ba) ->
+                    let obviousEq = (ba = bb) && (pa = pb) && (refEQ npa npb)
                     if obviousEq then stepDiff sa' sb' else
                     let struct(lb,rb) = split pb bb npb
                     stepDiff sa (lb::rb::sb')
@@ -628,13 +579,11 @@ module IntMap =
                 EncByte.write cLeaf dst
                 EncVarNat.write k dst
                 Codec.write cV v dst
-            | Inner (ct,p,b,np) ->
+            | Inner (p,b,np) ->
                 EncByte.write cInner dst
                 EncVarNat.write p dst
                 EncByte.write b dst
                 EncCVRef.write cNP np dst
-                if (CVRef.isRemote np) 
-                    then EncVarNat.write ct dst
 
         let read cV cNP db src =
             let b0 = EncByte.read src
@@ -648,23 +597,18 @@ module IntMap =
                 let p = EncVarNat.read src
                 let b = EncByte.read src
                 let np = EncCVRef.read cNP db src
-                let ct = // compute if local, read otherwise
-                    match np with
-                    | Local (struct(l,r),_) ->
-                        Node.size l + Node.size r
-                    | Remote _ ->
-                        EncVarNat.read src
-                Inner (ct,p,b,np)
+                Inner (p,b,np)
 
         let compact thresh cV cNP db node =
             match node with
             | Leaf (k,v) ->
                 let struct(v',szV) = Codec.compactSz cV db v
                 struct(Leaf(k,v'), 1 + EncVarNat.size k + szV)
-            | Inner (ct,p,b,np) ->
-                let struct(np',szNP) = EncCVRef.compact thresh cNP db np
-                let szCPB = EncVarNat.size ct + EncVarNat.size p + 1
-                struct(Inner(ct,p,b,np'), 1 + szCPB + szNP)
+            | Inner (p,b,np) ->
+                let szPrefix = 2 + EncVarNat.size p // cInner, b, p
+                let threshNP = thresh - szPrefix
+                let struct(np',szNP) = EncCVRef.compact threshNP cNP db np
+                struct(Inner(p,b,np'), szPrefix + szNP)
 
         // codec for pair of nodes is primary recursion point,
         // given we only compact at split points (pair of nodes).
@@ -692,7 +636,7 @@ module IntMap =
             }
 
         // Using a large threshold for compaction of nodes.
-        let defaultThreshold = 14000
+        let defaultThreshold = 30000
 
     /// Codec for node with default threshold.
     let nodeCodec cV = EncNode.codec (EncNode.defaultThreshold) cV

@@ -237,67 +237,38 @@ module EncQuad =
         let set ((a,b,c,d)) = struct(a,b,c,d)
         Codec.view (codec' cA cB cC cD) get set
 
-
+// Option encoding: same as an array of zero or one items.
 module EncOpt =
-    /// Codec combinator for an Option type with choice of prefix.
-    let codecP (bNone:byte) (bSome:byte) (cV:Codec<'V>) =
-        assert(bSome <> bNone)
-        { new Codec<'V option> with
-            member __.Write vOpt dst =
-                match vOpt with
-                | Some v ->
-                    ByteStream.writeByte bSome dst
-                    cV.Write v dst
-                | None -> ByteStream.writeByte bNone dst
-            member __.Read db src =
-                let b0 = ByteStream.readByte src
-                if(b0 = bNone) then None else
-                if(b0 <> bSome) then raise ByteStream.ReadError else
-                Some (cV.Read db src)
-            member __.Compact db vOpt =
-                match vOpt with
-                | Some v ->
-                    let struct(v',szV) = cV.Compact db v
-                    struct(Some v', 1+szV)
-                | None -> struct(None,1)
-        }
+    let bNone = 0uy
+    let bSome = 1uy
+    do assert(bNone <> bSome)
 
-    /// Codec combinator for option type. This one is designed so
-    /// we can transparently upgrade from option to list or array:
-    /// the prefix is simply the size (0 or 1) encoded as VarNat.
-    let inline codec cV = codecP 0uy 1uy cV
+    let write cV vOpt dst =
+        match vOpt with
+        | Some v ->
+            ByteStream.writeByte bSome dst
+            Codec.write cV v dst
+        | None -> ByteStream.writeByte bNone dst
 
-module EncOptZeroOverhead =
-    /// A "Zero Overhead" encoding for the Option type. 
-    ///
-    /// This requires special knowledge of the value encoding, such
-    /// that we may supply a character to represent `None` that is
-    /// not a valid prefix in the value's representation. Additionally,
-    /// our value must have an encoding of at least one byte.
-    ///
-    /// The benefits are negligible in most cases, but it does allow
-    /// us to upgrade some types to optional, and may save space if 
-    /// we have large collections of small optional values.
-    let codec (bNone:byte) (cV:Codec<'V>) =
+    let read cV db src =
+        let b0 = ByteStream.readByte src
+        if (b0 = bNone) then None else
+        if (b0 <> bSome) then raise ByteStream.ReadError else
+        Some (Codec.read cV db src)
+
+    let compact cV db vOpt =
+        match vOpt with
+        | Some v ->
+            let struct(v',szV) = Codec.compactSz cV db v
+            struct(Some v', 1+szV)
+        | None -> struct(None,1)
+
+    /// Codec combinator for a simple option type.
+    let codec (cV:Codec<'V>) =
         { new Codec<'V option> with
-            member __.Write vOpt dst =
-                match vOpt with
-                | Some v ->
-                    let s = ByteStream.capture dst (cV.Write v)
-                    let invalid = (BS.isEmpty s) || (bNone = (BS.unsafeHead s))
-                    if invalid then failwith "invalid value encoder"
-                | None -> ByteStream.writeByte bNone dst
-            member __.Read db src =
-                let b0 = ByteStream.peekByte src
-                if (bNone <> b0) then Some (cV.Read db src) else
-                ByteStream.readByte src |> ignore<byte>
-                None
-            member __.Compact db vOpt =
-                match vOpt with
-                | Some v ->
-                    let struct(v',szV) = cV.Compact db v
-                    struct(Some v', szV)
-                | None -> struct(None, 1)
+            member __.Write vOpt dst = write cV vOpt dst
+            member __.Read db src = read cV db src
+            member __.Compact db vOpt = compact cV db vOpt
         }
 
 /// Arrays are encoded with size (as varnat) followed by every element
