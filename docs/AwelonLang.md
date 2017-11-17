@@ -32,7 +32,7 @@ There are four primitive computing combinators:
                [A]c == [A][A]       (copy)
                [A]d ==              (drop)
 
-Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their entire formal behavior can be understood in terms of these few primitives.
+Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their formal behavior can be understood in terms of these few primitives. However, Awelon also provides a few lightweight features for numbers, texts, words, and labeled data.
 
 This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, see a translation from lambda calculus at *Named Local Variables* or see this simple definition of the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic):
 
@@ -92,13 +92,43 @@ Awelon has native support for embedding texts inline between double quotes such 
 
 Definitions for `null` and `cons` are left to the dictionary. A typical encoding might fold over every element in the list. Like natural numbers, we have a structural guarantee of value type, and definitions are likely to be determined by available runtime acceleration. In this case, acceleration could support lists via arrays.
 
-Embedded texts are suitable only for simple things like labels, test data, comments, and micro-DSLs such as regular expressions. They are not very suitable for general use. To work around these limitations, the primary options are:
+Embedded texts are suitable only for simple things like test data, comments, and micro-DSLs such as regular expressions. They are not very suitable for general use. To work around these limitations, the primary options are:
 
 * interpret, e.g. `"multiple\nlines" lit` to rewrite escapes
 * structure, e.g. `["multiple" ["lines" [null] cons] cons] unlines`
 * use *Secure Hash Resources* to reference external binary
 
 Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, and evolve to support mixed data, but needs *Editable Views* to provide a usable syntax. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
+
+## Labeled Data (provisional)
+
+Labeled data is convenient for at least three reasons: human meaningful documentation, lightweight extensibility of data types, and a more commutative structure. Most modern programming languages have built-in support for labeled products and sums. Labeled products are often called records or structs while labeled sums are called variants or tagged unions. Awelon will support simplistic support for labeled data by introducing pairs of abstract functions of form `:label` and `.label`. Essentially, it works like this:
+
+        [[A] :a [B] :b [C] :c ...] .a  ==  [A] [[B] :b [C] :c ...]
+        [A] :a [B] :b == [B] :b [A] :a      (distinct labels commute)
+
+A record is effectively any function having a specific format, a sequence of `[[Value] :label ...]` pairs. We can abstract, construct, and compose records like any other function or value, with the commutativity of labels offering some convenient freedom for refactoring. To observe a 'variant' type generally involves matching the label with a record of type `{label1:type1→r, label2:type2→r, ...}` then applying the returned function to the given value. Hence, a variant value might generally have the form `[.label [Value] case]`. 
+
+We can conveniently identify a few error conditions:
+
+        [B] [A] :a          -- error: unlabeled data [B]
+        [A1] :a [A2] :a     -- error: `:a` assigned twice
+        :a :b               -- error: missing input for `:b`
+
+We can conveniently represent quick distribution of data:
+
+        [[A]:a [B]:b [C]:c] [.c .b .a] b == [[C][B][A][]]
+
+And record constructor from a tuple is feasible:
+
+        [C][B][A][] [:a] ins [:b] ins [:c] ins
+
+        [A][R][:a] ins == [[A]:a R]
+        ins = [a i]b b b
+
+This labeled data model is based on various thought experiments. Originally, my intention for Awelon was to leverage accelerators, embedded texts, and *Editable Views* to model labeled data explicitly. Church encoding of labeled data is not difficult: labels encode paths into a trie-like structure for access or update. Unfortunately, an explicit encoding seems to defeat or hinder many  useful features of labeled data. For example, it is difficult to preserve human meaningful labels when reporting static type errors, or to syntactically refactor when we don't know locally which observations might be made on our encodings. 
+
+This feature is *probably* final, pending discovery of issues in practice.
 
 ## Secure Hash Resources
 
@@ -252,16 +282,12 @@ Modulo termination analysis, we can use a general fixpoint combinator:
         [X][F]z == [X][[F]z]F
         z = [[(a3) c i] b (eq_z) [c] a b w i](a3) c i
 
-A fixpoint combinator is very expressive and can be used to construct any other loop. Unfortunately, this expressiveness hinders termination analysis. To simplify termination analysis, we'll want to favor alternative loop models.
-
-One viable approach is data-driven loops, such as the Church-encoded natural number that copies and applies a function many times, effectively folding over every element. Short circuiting is also possible, if explicitly included in the type, for example:
+A fixpoint combinator is very expressive and can be used to construct any other loop. Unfortunately, this expressiveness hinders termination analysis. To simplify termination analysis, we might favor data-driven loop models. For example, the Church-encoded natural number copies and applies a function many times, effectively folding over every element. Short circuiting is also possible, if explicitly included in the type, for example:
 
         Nat     :  s * (s → s) → s
         Nat'    :  (s * a) * ((s * a) → (s * (a + r))) → (s * (a + r))
 
 The latter encoding for supports early 'return' with type `r`. Further variants could include remainder data together with the return value. 
-
-
 
 ## Memoization
 
@@ -388,7 +414,7 @@ We may need to partially evaluate `A` to eliminate exposed `(now)` annotations b
 
 ### Symbolic Scope
 
-Use of [abstract data types (ADTs)](https://en.wikipedia.org/wiki/Abstract_data_type) and similar methods can help isolate errors, control coupling, and simplify maintenance of a codebase. It's a form of scoping, albeit at the higher layer of software development. Awelon doesn't use the conventional software packaging models, but we can leverage annotations to simulate ADTs.
+We can leverage labeled data to resist accidental use of data in the wrong context, e.g. `[%binaryRef :jpeg]` or `[.jpeg %binaryRef case]` might indicate JPEG formatted image data. This covers a lot of use cases. But it also has some runtime overhead, and it doesn't guard against unwise intentional access. In general, we might want [abstract data types (ADTs)](https://en.wikipedia.org/wiki/Abstract_data_type) to control coupling and simplify maintenance issues within a large codebase. For ADTs, we'll need specialized annotations.
 
 Consider pairs of annotations that cancel when adjacent:
 
@@ -396,11 +422,7 @@ Consider pairs of annotations that cancel when adjacent:
         (seal_bar)(open_bar) ==
         ...
 
-These annotations prevent flow of information across them until canceled. We can use them to seal away parts of an environment, to resist accidental access to data. Use of `[(seal_foo)]b` with `i(open_foo)` gives us a basis for value sealing. 
-
-However, by itself this is only useful for accidents. Any function in the codebase is free to inject `(open_foo)` and observe the hidden implementation details. So we must add an additional restriction: `(seal_foo)` and `(open_foo)` may only be directly used in definitions of words that start with `foo_`. This property can be trivially checked by a linter. 
-
-With this restriction, we can model ADTs where direct access to representations is limited to words with a shared prefix. Effectively, we can treat a shared prefix as a lightweight module that can hide some details from other modules. It's feasible to leverage this for patching dictionaries, too.
+Taken alone, this isn't much more useful than labeled data. A sealed value could have form `[[value](seal_foo)]` and an accessor might use `i(open_foo)`. One minor benefit is we can erase annotations for a release-build. But if we add one small constraint, this becomes a lot more useful: `(seal_foo)` and `(open_foo)` may only be directly used in definitions of words that start with `foo_`. This property can be validated by a linter, and would essentially allow us to treat prefixes like `foo_` as module namespaces with private implementation types. Developers may thus "scope" their errors and reasoning symbolically, based on word prefixes. This doesn't seem too different from conventional ADTs, where a module or library hides implementation of some data types.
 
 ### Substructural Scope
 
@@ -438,7 +460,14 @@ Here `s` is a universally typed argument for the input stack. Because our types 
 
 The type `S[C][B][A]` then clearly aligns with a program of the same shape.
 
-Annotations will augment static type analysis with value sealers, substructural types, multi-stage programming, and so on. Ideally, everything would be verified statically rather than dynamically, but it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
+Types for records and labeled data shouldn't be too difficult, but do require some special analysis to prevent multiple-assignment of labels and support commutativity. There is extensive related research regarding row-polymorphic records and variants.
+
+        :a  : S [A] → S {a:typeOf(A)}
+        .a  : S [{R a:T}] → S [T] [{R}]
+        {R1} {R2} : {R1 R2} if no shared labels
+        {R1 R2} == {R2 R1}
+
+Annotations can further augment static type analysis with value sealers, substructural types, multi-stage programming, and so on. Ideally, everything would be verified statically rather than dynamically, but it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
 
 Conditional behavior requires some special attention. Inferring that two conditional 'paths' should have the same output type and similar input types is infeasible without a more context. Annotations can inject some context. 
 
@@ -447,7 +476,7 @@ Conditional behavior requires some special attention. Inferring that two conditi
         (sum)       ∀S. S [S [A] → S'] [S [B] → S'] → S'
         (nat)       μNat.∀S. S [S → S'] [S Nat → S'] → S'
 
-A lot of languages manage to get by with just 'bool' or a little pattern matching equivalent to 'sum'. If we cover a small set of common conditional types from which most others are built, this should be sufficient for static typing in normal use cases. 
+Labeled data can also support label-matching case conditions on variants. Anyhow, we shouldn't need much. 
 
 ### Staged and Deferred Typing
 
@@ -466,9 +495,9 @@ A definition of `pick` could have the form `[pick body here]b(dyn)i`. The `(dyn)
 
 ### Termination Analysis
 
-Valid programs in Awelon should always terminate. Of course, even with guarantee of termination it's trivial to express computations that would not terminate before the heat death of the universe. Quotas remain necessary in practice. But a guarantee of termination does make it a lot easier to reason about correctness of program behavior and composition.
+Valid programs in Awelon should always terminate. Of course, even with guarantee of termination it's trivial to express computations with large inputs and high algorithmic complexity that would not terminate before the heat death of the universe. Quotas remain necessary in practice. But a guarantee of totality does make it a lot easier to reason about correctness of program behavior and composition.
 
-I haven't yet thoroughly explored options for static termination analysis. But I do recommend termination analysis be performed by default, with explicit annotations to assume termination as needed.
+I haven't yet thoroughly explored options for static termination analysis. But I do recommend termination analysis be performed by default, with explicit annotations to assume termination as needed. At the very least, we should track which functions are obviously 'total', and use totality as a constraint on input types or values.
 
 ### Structural Equivalence
 
@@ -583,22 +612,6 @@ Assuming local variables, it's also feasible to develop infix notations, e.g. `(
 ### Qualified Namespaces
 
 Awelon's hierarchical dictionaries support a simple form of namespacing. But it falls to editable views to support local shorthand, e.g. some form of `using large_prefix as x` or `using package_of_nicknames`. If we assume editable views are maintained within the dictionary, it is feasible to use comments to help control the view, tweaking the language as needed. An intriguing possibility is to integrate a database of nicknames for secure hash resources into the view, where said database is represented within the dictionary.
-
-### Labeled Data - Records and Variants 
-
-Labeled sum types (variants) allow conditional discrimination on a label. Labeled product types (records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
-
-A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] l] r] l]` structure where the left-right-left path is extended to multiple bytes encoding a human-meaningful label. Unlike label-value pairs, deep sums do not require dependent types. 
-
-A labeled product can similarly be modeled as a bit-trie, modeled using pairs such that in `[[A] [B]]` the left-path is `[A]` and the right-path is `[B]`. We simply need to arrange our trie along the same left-right-left paths as our labels. Again, no dependent types are required. Empty paths could be filled with a unit value. A reflective variant could be based on use of sum types rather than pairs.
-
-A useful label encoding is `(RL|RR)*LL`, where `RL` corresponds to constructor `[l] b [r] b`. The `(RL|RR)*` structure then represents a finite `(0|1)*` bitfield, within which we encode texts or numbers. The final `LL` terminates the label. This encoding has the nice properties of being a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
-
-Unfortunately, the trie is awkward and inefficient to work with directly. A better alternative is instead to work with a trie *constructor* - a function that, given an initial record object, loads it with data. In Awelon text, this might look something like `[[A] "foo" tc [B] "bar" tc ...]`. Relevantly, the ordering of labels in this representation is not relevant, composition of record functions would essentially represent update of a record, and the encoding is not sparse. I'm assuming the type of trie-cons `tc` is dependent on the text argument. OTOH, we could use an expanded label structure if necessary. An editable view could feasibly reduce to a more aesthetic `[[A]:foo [B]:bar ...]` (ordered to taste). 
-
-Acceleration of records would logically construct a trie and extract an updated new record function with every operation but really just using an optimized representation like a hashmap under the hood. Acceleration of functions related to labeled variants could serve a similar role of improving performance and aesthetics.
-
-Assuming aesthetic, accelerated, labeled data, Awelon can support parameter objects, extensible event types, labeled case expressions, and a more conventional programming style with events and routing on human labels. 
  
 ## Arrays and In-place Updates
 
