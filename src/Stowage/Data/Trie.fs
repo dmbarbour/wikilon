@@ -1,7 +1,7 @@
 namespace Stowage
 open Data.ByteString
 
-/// Trie with bytestring keys, above Stowage. 
+/// Trie (Radix tree) with bytestring keys, above Stowage. 
 ///
 /// This is an implementation of a prefix-sharing radix tree with 
 /// ability to shift large subtrees into a Stowage database via a
@@ -58,17 +58,22 @@ module Trie =
     let validate (t:Tree<_>) : bool =
         (empty = t) || (validChild 0UL t)
 
-    let inline private matchPrefix prefix k = 
-        (prefix = (BS.take (prefix.Length) k))
+
+    // compute size of shared prefix for two strings.
+    let private bytesShared (a:ByteString) (b:ByteString) : int =
+        let limit = min (a.Length) (b.Length)
+        let rec loop ix =
+            if ((ix = limit) || (a.[ix] <> b.[ix])) then ix else
+            loop (ix + 1)
+        loop 0
 
     let rec tryFind (k:Key) (t:Tree<'V>) : 'V option =
-        if not (matchPrefix (t.prefix) k) then None else
-        let exactMatch = (k.Length = t.prefix.Length)
-        if exactMatch then (t.value) else
-        let k' = BS.drop (t.prefix.Length + 1) k
-        let ix = uint64 (k.[t.prefix.Length])
+        let n = bytesShared k (t.prefix)
+        if (n <> t.prefix.Length) then None else
+        if (n = k.Length) then (t.value) else
+        let ix = uint64 (k.[n])
         match IntMap.tryFind ix (t.children) with
-        | Some t' -> tryFind (BS.unsafeTail k') t'
+        | Some t' -> tryFind (BS.drop (n+1) k) t'
         | None -> None 
 
     /// Check for whether a tree contains a specific key.
@@ -89,50 +94,42 @@ module Trie =
             ByteStream.writeByte b dst
             ByteStream.writeBytes c dst)
 
-    // make a pure branching node (no value).
-    // Recognizes simplification cases if we don't branch.
-    let private mkBrNode p cs =
-        match cs with
-        | None -> empty
-        | Some (IntMap.Leaf(b,c)) ->
-            { c with prefix = joinBytes p (byte b) (c.prefix) }
-        | _ -> { prefix = p; value = None; children = cs }
+    // make a node after partial filtering of value or children.
+    // Will recombine unnecessary nodes. Assumes valid children.
+    let private mkNode p v cs =
+        if Option.isSome v then 
+            { prefix = p; value = v; children = cs }
+        else 
+            match cs with
+            | None -> empty
+            | Some (IntMap.Leaf(b,c)) ->
+                { c with prefix = joinBytes p (byte b) (c.prefix) }
+            | _ -> { prefix = p; value = None; children = cs }
 
     /// Return copy of tree minus a specified key. 
     let rec remove (k:Key) (t:Tree<'V>) : Tree<'V> =
-        if not (matchPrefix (t.prefix) k) then t else
-        let exactMatch = (k.Length = t.prefix.Length)
-        if exactMatch then
-            // matched the key, but we might still branch.
-            mkBrNode (t.prefix) (t.children)
-        else 
-            let ix = uint64 (k.[t.prefix.Length])
+        let n = bytesShared k (t.prefix)
+        if (n <> t.prefix.Length) then t 
+        else if (n = k.Length) then 
+            mkNode (t.prefix) None (t.children) 
+        else
+            let ix = uint64 (k.[n])
             let cs = t.children
             match IntMap.tryFind ix cs with
             | None -> t
             | Some c ->
-                let k' = BS.drop (t.prefix.Length + 1) k
-                let c' = remove k' c
+                let c' = remove (BS.drop (n+1) k) c
                 let cs' = 
                     if isEmpty c' 
                        then IntMap.remove ix cs
                        else IntMap.add ix c' cs
-                if Option.isNone (t.value)
-                    then mkBrNode (t.prefix) cs'
-                    else { t with children = cs' }
+                mkNode (t.prefix) (t.value) cs'
 
     /// Remove key from tree only if it exists. This avoids rewriting
     /// the tree in the cases where the key is unlikely to be present.            
     let inline checkedRemove (k:Key) (t:Tree<'V>) : Tree<'V> =
         if containsKey k t then remove k t else t
 
-    // compute size of shared prefix for two strings.
-    let private bytesShared (a:ByteString) (b:ByteString) : int =
-        let limit = min (a.Length) (b.Length)
-        let rec loop ix =
-            if ((ix = limit) || (a.[ix] <> b.[ix])) then ix else
-            loop (ix + 1)
-        loop 0
 
     // add to a non-empty tree
     let rec private add' (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
@@ -161,14 +158,14 @@ module Trie =
             { t with children = cs' }
         else
             // byte mismatch; new split of trie nodes.
-            let bK = uint64 k.[n]
+            let ixK = uint64 k.[n]
             let cK = singleton (BS.drop (n+1) k) v
-            let bP = uint64 (t.prefix.[n])
+            let ixP = uint64 (t.prefix.[n])
             let cP = { t with prefix = BS.drop (n+1) (t.prefix) }
-            assert (bK <> bP)
+            assert (ixK <> ixP)
             let cs' = IntMap.empty
-                    |> IntMap.add (uint64 bK) cK
-                    |> IntMap.add (uint64 bP) cP
+                    |> IntMap.add ixK cK
+                    |> IntMap.add ixP cP
             { prefix = BS.take n (t.prefix)
               value = None
               children = cs' 
@@ -214,20 +211,124 @@ module Trie =
     let ofArray (a: (Key * 'V) array) : Tree<'V> =
         Array.fold (fun t (k,v) -> add k v t) empty a
 
-    // TODO: efficient structural diff
-    //  I might need to peek into IntMap structure
 
-    module internal E =
-        // encoding is `key value children`, trivially.
+    // common iterations
+    //  currently using toSeq. I could try to optimize a little, later.
+    let inline fold (fn : 'S -> Key -> 'V -> 'S) (s0 : 'S) (t : Tree<'V>) : 'S =
+        Seq.fold (fun s (k,v) -> fn s k v) s0 (toSeq t)
+    let inline foldBack (fn : Key -> 'V -> 'S -> 'S) (t : Tree<'V>) (s0 : 'S) : 'S =
+        Seq.fold (fun s (k,v) -> fn k v s) s0 (toSeqR t)
+    let inline iter (fn : Key -> 'V -> unit) (t : Tree<'V>) : unit =
+        Seq.iter (fun (k,v) -> fn k v) (toSeq t)
+    let inline tryPick (fn : Key -> 'V -> 'U option) (t : Tree<'V>) : 'U option =
+        Seq.tryPick (fun (k,v) -> fn k v) (toSeq t)
+    let inline tryFindKey fn t = tryPick (fun k v -> if fn k v then Some k else None) t
+    let inline exists fn t = tryFindKey fn t |> Option.isSome
+    let inline forall fn t = not (exists (fun k v -> not (fn k v)) t)
+
+    // filter-map with compacting operation.
+    let rec private filterMapCC (cc : Tree<'B> -> Tree<'B>) (fn : Key -> 'A -> 'B option) (k : Key) (a : Tree<'A>) : Tree<'B> =
+        let bv =
+            match a.value with
+            | Some v -> fn k v
+            | None -> None
+        let fmc (ix:uint64) (c:Tree<'A>) : Tree<'B> option =
+            let k' = joinBytes k (byte ix) (c.prefix)
+            let c' = filterMapCC cc fn k' c
+            if isEmpty c' then None else Some c'
+        let bcs = IntMap.filterMap fmc (a.children)
+        mkNode (a.prefix) (bv) (bcs)
+
+    /// Apply a filtering map to every key-value pair.
+    /// Unsuitable for huge trees. Consider compactingFilterMap. 
+    let filterMap (fn:Key -> 'A -> 'B option) (t:Tree<'A>) : Tree<'B> =
+        filterMapCC id fn (t.prefix) t
+
+    /// Apply a function to every key-value pair. 
+    /// Unsuitable for huge trees. Consider compactingMap. 
+    let inline map (fn:Key -> 'A -> 'B) (t:Tree<'A>) : Tree<'B> =
+        filterMap (fun k v -> Some (fn k v)) t
+
+    /// Filter a tree given a predicate. 
+    /// Unsuitable for huge trees. Consider compactingFilter. 
+    let inline filter (pred:Key -> 'V -> bool) (t:Tree<'V>) : Tree<'V> =
+        filterMap (fun k v -> if pred k v then Some v else None) t
+
+    /// Add a prefix to all keys in a tree.
+    let addPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
+        if isEmpty t then empty else
+        {t with prefix = (BS.append p (t.prefix)) }
+
+    /// Drop key prefix and all keys that don't match.
+    let rec remPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
+        let n = bytesShared p (t.prefix)
+        if (n = p.Length) then
+            // filter prefix matched
+            { t with prefix = (BS.drop n (t.prefix)) }
+        else if(n = (t.prefix.Length)) then
+            // node prefix matched
+            let ix = uint64 (p.[n])
+            match IntMap.tryFind ix (t.children) with
+            | Some c -> remPrefix (BS.drop (n+1) p) c
+            | None -> empty
+        else empty // incomplete match
+
+    /// Filter a tree to just keys matching given prefix.
+    let inline filterPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
+        t |> remPrefix p |> addPrefix p
+
+    /// Partition a tree at a specified key. Keys strictly less than
+    /// the specified key will be in the left tree, while keys greater
+    /// or equal will be placed in the right tree. 
+    let rec splitAtKey (k:Key) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
+        let n = bytesShared k (t.prefix)
+        if (n = k.Length) then (empty,t)
+        else if (n = t.prefix.Length) then 
+            let ix = uint64 (k.[n])
+            let struct(csl,csr) = 
+                let (csl0,csr0) = IntMap.splitAtKey ix (t.children)
+                match IntMap.tryFind ix csr0 with
+                | Some c ->
+                    let (tl,tr) = splitAtKey (BS.drop (n+1) k) c
+                    struct(IntMap.add ix tl csl0, IntMap.add ix tr csr0)
+                | None -> struct(csl0,csr0)
+            (mkNode (t.prefix) (t.value) csl, mkNode (t.prefix) None csr)
+        else if(k.[n] < t.prefix.[n]) then (empty,t)
+        else (t,empty)
+
+    /// Test whether a key access requires dereferencing stowage.
+    let rec isKeyRemote (k:Key) (t:Tree<'V>) : bool =
+        let n = bytesShared k (t.prefix)
+        if ((n = k.Length) || (n <> t.prefix.Length)) then false else
+        let ix = uint64 (k.[n])
+        if IntMap.isKeyRemote ix (t.children) then true else
+        match IntMap.tryFind ix (t.children) with
+        | Some c -> isKeyRemote (BS.drop (n+1) k) c
+        | None -> false
+
+    /// Minimally rewrite a tree such that isKeyRemote returns false.
+    let rec touch (k:Key) (t:Tree<'V>) : Tree<'V> =
+        let n = bytesShared k (t.prefix)
+        if ((n = k.Length) || (n <> t.prefix.Length)) then t else
+        let ix = uint64 (k.[n])
+        match IntMap.tryFind ix (t.children) with
+        | Some c ->
+            let c' = touch (BS.drop (n+1) k) c
+            let cs' = IntMap.add ix c' (t.children)
+            { t with children = cs' }
+        | None -> t
+        
+    // TODO:
+    // - efficient structural diffs (low priority)
+
+    module Enc =
+        // encoding is trivial concatenation of key, value, and children.
 
         // to avoid dynamic construction of the IntMap codec I'm using
         // a recursive object constructor. Awkward, but safe in this case.
         type TreeCodec<'V> =
             val value    : Codec<'V>                  // value encoder
-            val children : Codec<IntMap<Tree<'V>>>   // for recusion
-            new(cv) as tc =
-                let cc = IntMap.treeCodec (tc :> Codec<Tree<'V>>)
-                { value = cv; children = cc }
+            val children : Codec<IntMap<Tree<'V>>>    // for recursion
             interface Codec<Tree<'V>> with
                 member c.Write t dst =
                     EncBytes.write (t.prefix) dst
@@ -244,15 +345,34 @@ module Trie =
                     let struct(cs',szCS) = Codec.compactSz (c.children) db (t.children)
                     let t' = { prefix = (t.prefix); value = v'; children = cs' }
                     struct(t', szP + szV + szCS)
+            new(cv,thresh) as tc =
+                let cc = IntMap.codec' thresh (tc :> Codec<Tree<'V>>)
+                { value = cv; children = cc }
 
-           
-    let codec (cV:Codec<'V>) =
-        E.TreeCodec<'V>(cV) :> Codec<Tree<'V>>
+    /// Codec with specified heuristic compaction threshold.
+    let inline codec' (thresh:SizeEst) (cV:Codec<'V>) =
+        Enc.TreeCodec<'V>(cV,thresh) :> Codec<Tree<'V>>
 
+    /// Codec with default compaction threshold.
+    let inline codec cV = codec' (IntMap.EncNode.defaultThreshold) cV 
 
-    // utilities todo:
-    //  filter tree by prefix, remove/add prefix
-    //  split tree at key
+    /// Map and filter while compacting each trie node. 
+    ///
+    /// This is useful for huge trees, where we shouldn't keep the entire
+    /// tree in memory. While mapping, this will keep a node and all of
+    /// its immediate children in memory, but will compact each node as it
+    /// forms, moving oversized data from memory into Stowage. 
+    let compactingFilterMap (cTree:Codec<Tree<'B>>) (db:Stowage) (fn:Key -> 'A -> 'B option) (t:Tree<'A>) : Tree<'B> =
+        filterMapCC (Codec.compact cTree db) fn (t.prefix) t
+
+    /// Map while compacting for large trees. See compactingFilterMap.
+    let inline compactingMap (cTree:Codec<Tree<'B>>) (db:Stowage) (fn:Key -> 'A -> 'B) (t:Tree<'A>) : Tree<'B> =
+        compactingFilterMap cTree db (fun k v -> Some (fn k v)) t
+
+    /// Filter while compacting for large trees. See compactingFilterMap.
+    let inline compactingFilter (cTree:Codec<Tree<'V>>) (db:Stowage) (pred:Key -> 'V -> bool) (t:Tree<'V>) : Tree<'V> =
+        let fn k v = if pred k v then Some v else None
+        compactingFilterMap cTree db fn t
 
 
 type Trie<'V> = Trie.Tree<'V>

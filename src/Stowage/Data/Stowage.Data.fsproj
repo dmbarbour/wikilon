@@ -15,11 +15,12 @@
     <Compile Include="CommonEncoders.fs" />
     <Compile Include="VDiff.fs" />
 
-    <Compile Include="Measured.fs" />
-    <Compile Include="Monoid.fs" />
     <Compile Include="IntMap.fs" />
     <Compile Include="Trie.fs" />
+    <Compile Include="LSMTrie.fs" />
 
+    <Compile Include="Measured.fs" />
+    <Compile Include="Monoid.fs" />
     <Compile Include="FingerTree.fs" />
     <Compile Include="Seq.fs" />
 

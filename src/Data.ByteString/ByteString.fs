@@ -155,7 +155,7 @@ module BS =
 
     /// concatenate into one large bytestring
     let concat (xs : seq<ByteString>) : ByteString =
-        let mem = new System.IO.MemoryStream(4000)
+        let mem = new System.IO.MemoryStream()
         for x in xs do
             mem.Write(x.UnsafeArray, x.Offset, x.Length)
         unsafeCreateA (mem.ToArray())

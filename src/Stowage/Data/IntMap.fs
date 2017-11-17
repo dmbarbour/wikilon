@@ -107,14 +107,6 @@ module IntMap =
                     else Inner (p, b, local (touch kf' l) r)
             | Leaf _ -> node
 
-        // localize all nodes
-        let rec expand node =
-            match node with
-            | Inner (p, b, np) ->
-                let struct(l,r) = load' np
-                Inner(p, b, local (expand l) (expand r))
-            | Leaf _ -> node
-
         // add or update a key-value pair
         let rec add k v node =
             match node with
@@ -338,12 +330,6 @@ module IntMap =
     let touch (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Some n -> Some (Node.touch k n)
-        | None -> None
-
-    /// Return tree with all keys in memory. Touch everything.
-    let expand (t:Tree<'V>) : Tree<'V> =
-        match t with
-        | Some n -> Some (Node.expand n)
         | None -> None
 
     /// Add or update a key-value pair. Returns a new tree with the
@@ -627,7 +613,7 @@ module IntMap =
                     struct(struct(l',r'), szL + szR)
             }
 
-        let codec (thresh:int) (cV:Codec<'V>) = 
+        let codec' (thresh:SizeEst) (cV:Codec<'V>) = 
             let cNP = codecNP thresh cV
             { new Codec<Node<'V>> with
                 member __.Write node dst = write cV cNP node dst
@@ -636,56 +622,38 @@ module IntMap =
             }
 
         // Using a large threshold for compaction of nodes.
-        let defaultThreshold = 30000
+        let defaultThreshold : SizeEst = 30000
 
-    /// Codec for node with default threshold.
-    let nodeCodec cV = EncNode.codec (EncNode.defaultThreshold) cV
+        let inline codec (cV:Codec<'V>) = codec' defaultThreshold cV
 
-    /// Codec for the full IntMap tree, given a value codec.
-    ///
-    /// Note: Trees are large, having high compaction thresholds. So if
-    /// a tree is to be a value in a larger collection, consider wrapping
-    /// the tree in a CVRef with a smaller threshold (like 400-800 bytes).
-    let treeCodec (cV:Codec<'V>) : Codec<Tree<'V>> =
-        EncOpt.codec (nodeCodec cV)
+    /// Codec for IntMap tree with specified compaction threshold.
+    let inline codec' (thresh:SizeEst) (cV:Codec<'V>) = 
+        EncOpt.codec (EncNode.codec' thresh cV)
 
-    /// Compact a tree in memory.
-    ///
-    /// This serializes large subtrees into the Stowage database, thus
-    /// removing them from runtime memory. Compaction is eager in this
-    /// case - we immediately serialize. But we still support cached 
-    /// loads when it's time to read parts of the tree, and the client
-    /// can buffer multiple tree updates between compactions.
-    ///
-    /// Note: If you plan to compact frequently, you should ensure your
-    /// value type is either cheap to compact or caches compactions. An
-    /// easy way to ensure this is to wrap CVRef around the value type.
-    let compact (cV:Codec<'V>) (db:Stowage) (t:Tree<'V>) : Tree<'V> =
-        match t with
-        | Some n -> Some (Codec.compact (nodeCodec cV) db n)
-        | None -> None
-
-    let inline private compactor (cV:Codec<'V>) (db:Stowage) : Node<'V> -> Node<'V> =
-        Codec.compact (nodeCodec cV) db
-
-    /// Map a function, simultaneously compacting.
-    ///
-    /// This is intended for use with larger-than-memory maps, and 
-    /// will systematically compact inner nodes as they are constructed.
-    let compactingMap (cU:Codec<'U>) (db:Stowage) (fn :Key -> 'V -> 'U) (t:Tree<'V>) : Tree<'U> =
-        match t with
-        | Some node -> Some (Node.map (compactor cU db) fn 0UL node)
-        | None -> None
+    /// Codec for IntMap tree with default compaction threshold.
+    let inline codec (cV:Codec<'V>) : Codec<Tree<'V>> =
+        codec' (EncNode.defaultThreshold) cV 
 
     /// Map and filter while simultaneously compacting. Useful for large trees.
-    let compactingFilterMap cU db fn t =
+    let compactingFilterMap (cTree:Codec<Tree<'U>>) (db:Stowage) (fn:Key -> 'V -> 'U option) (t:Tree<'V>) : Tree<'U> =
         match t with
-        | Some node -> Node.filterMap (compactor cU db) fn 0UL node
         | None -> None
+        | Some node -> 
+            let cc n = Option.get (Codec.compact cTree db (Some n))
+            Node.filterMap cc fn 0UL node
+
+    /// Map a function, simultaneously compacting. Useful for large trees.
+    let compactingMap (cTree:Codec<Tree<'U>>) (db:Stowage) (fn:Key -> 'V -> 'U) (t:Tree<'V>) : Tree<'U> =
+        match t with
+        | None -> None
+        | Some node -> 
+            let cc n = Option.get (Codec.compact cTree db (Some n))
+            Some (Node.map cc fn 0UL node)
 
     /// Filter while compacting. Useful for large trees.
-    let inline compactingFilter cU db pred t =
-        compactingFilterMap cU db (fun k v -> if pred k v then Some v else None) t
+    let inline compactingFilter cTree db pred t =
+        let fn k v = if pred k v then Some v else None
+        compactingFilterMap cTree db fn t
 
     /// Test whether a key's location is "remote" in the sense that
     /// operations like add, remove, tryFind, or containsKey would
