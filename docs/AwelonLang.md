@@ -102,18 +102,14 @@ Interpeted text is a convenient hack but doesn't scale, compose, or abstract nic
 
 ## Labeled Data (provisional)
 
-Labeled data is convenient for at least three reasons: human meaningful documentation, lightweight extensibility of data types, and a more commutative structure. Most modern programming languages have built-in support for labeled products and sums. Labeled products are often called records or structs while labeled sums are called variants or tagged unions. Awelon will support simplistic support for labeled data by introducing pairs of abstract functions of form `:label` and `.label`. Essentially, it works like this:
+Labeled data is convenient for at least three reasons: human meaningful documentation, lightweight extensibility of data types, and a more commutative structure. Most modern programming languages have built-in support for labeled products and sums. Labeled products are often called records or structs while labeled sums are called variants or tagged unions. Awelon will support simplistic support for labeled data by introducing pairs of abstract functions of form `:label` and `.label`. Basically, it works like this:
 
         [[A] :a [B] :b [C] :c ...] .a  ==  [A] [[B] :b [C] :c ...]
         [A] :a [B] :b == [B] :b [A] :a      (distinct labels commute)
 
-A record is effectively any function having a specific format, a sequence of `[[Value] :label ...]` pairs. We can abstract, construct, and compose records like any other function or value, with the commutativity of labels offering some convenient freedom for refactoring. To observe a 'variant' type generally involves matching the label with a record of type `{label1:type1→r, label2:type2→r, ...}` then applying the returned function to the given value. Hence, a variant value might generally have the form `[.label [Value] case]`. 
+A function of the form `[[Value] :label ...]` is a *record constructor*. Conceptually, this function receives an abstract record and inserts each label-value pair, failing if any label is assigned twice. The `.label` accessor will apply this function to an initially empty record, linearly extract the value at the specified label, then rebuild a record constructor with the remaining data. Thus, the record value is never represented, but we can also consider our record constructor as equivalent to a record value. The only difference is that it's also a function, subject to abstraction and composition like any other function.
 
-We can conveniently identify a few error conditions:
-
-        [B] [A] :a          -- error: unlabeled data [B]
-        [A1] :a [A2] :a     -- error: `:a` assigned twice
-        :a :b               -- error: missing input for `:b`
+Variants can then be modeled as `[.label [Value] case]`. We will observe our variant by applying it to a record of handlers with a common result type like `{label1:type1→r, label2:type2→r, ...}`. This corresponds roughly to pattern matching or method calls in other languages. We can infer a lot about the type for our variant from the site of observation. 
 
 We can conveniently represent quick distribution of data:
 
@@ -126,9 +122,15 @@ And record constructor from a tuple is feasible:
         [A][R][:a] ins == [[A]:a R]
         ins = [a i]b b b
 
-This labeled data model is based on various thought experiments. Originally, my intention for Awelon was to leverage accelerators, embedded texts, and *Editable Views* to model labeled data explicitly. Church encoding of labeled data is not difficult: labels encode paths into a trie-like structure for access or update. Unfortunately, an explicit encoding seems to defeat or hinder many  useful features of labeled data. For example, it is difficult to preserve human meaningful labels when reporting static type errors, or to syntactically refactor when we don't know locally which observations might be made on our encodings. 
+Several error conditions are locally obvious:
 
-This feature is *probably* final, pending discovery of issues in practice.
+        [B] [A] :a          -- error: unlabeled data [B]
+        [A1] :a [A2] :a     -- error: `:a` assigned twice
+        :a :b               -- error: missing input for `:b`
+
+Originally, my intention for Awelon was to leverage accelerators, embedded texts, and *Editable Views* to model labeled data explicitly. Church encoding of labeled data is not difficult: labels encode paths into a trie-based structure for access or update. Unfortunately, based on my experiments, explicit encoding seems to defeat or hinder the most useful features of labeled data. For example, it is difficult to preserve human meaningful labels when reporting static type errors, or to syntactically refactor when we don't know locally which observations might be made on our encodings. 
+
+This feature is *probably* final, pending issues discovered in practice.
 
 ## Secure Hash Resources
 
