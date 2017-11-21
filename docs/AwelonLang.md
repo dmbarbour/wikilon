@@ -102,35 +102,24 @@ Interpeted text is a convenient hack but doesn't scale, compose, or abstract nic
 
 ## Labeled Data (provisional)
 
-Labeled data is convenient for at least three reasons: human meaningful documentation, lightweight extensibility of data types, and a more commutative structure. Most modern programming languages have built-in support for labeled products and sums. Labeled products are often called records or structs while labeled sums are called variants or tagged unions. Awelon will support simplistic support for labeled data by introducing pairs of abstract functions of form `:label` and `.label`. Basically, it works like this:
+Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon supports labeled data by introducing pairs of symbolic functions `:label` and `.label` where labels are also valid words. Effectively, a record works like this:
 
-        [[A] :a [B] :b [C] :c ...] .a  ==  [A] [[B] :b [C] :c ...]
-        [A] :a [B] :b == [B] :b [A] :a      (distinct labels commute)
+        [[A] :a [B] :b [C] :c] .b == [B] [[A] :a [C] :c]
+        [A] :a [B] :b == [B] :b [A] :a      (labels commute)
 
-A function of the form `[[Value] :label ...]` is a *record constructor*. Conceptually, this function receives an abstract record and inserts each label-value pair, failing if any label is assigned twice. The `.label` accessor will apply this function to an initially empty record, linearly extract the value at the specified label, then rebuild a record constructor with the remaining data. Thus, the record value is never represented, but we can also consider our record constructor as equivalent to a record value. The only difference is that it's also a function, subject to abstraction and composition like any other function.
+Logically, we operate linearly on row-polymorphic record constructors:
 
-Variants can then be modeled as `[.label [Value] case]`. We will observe our variant by applying it to a record of handlers with a common result type like `{label1:type1→r, label2:type2→r, ...}`. This corresponds roughly to pattern matching or method calls in other languages. We can infer a lot about the type for our variant from the site of observation. 
+        {R without a} [A] :a == {R, a=[A]}
+        [{} → {R, a=[A]}] .a == [A] [{} → {R}]
 
-We can conveniently represent quick distribution of data:
+But the curly braces are a lie. Awelon has no concrete syntax for records. We can treat record constructor functions of form `[[A]:a [B]:b [C]:c]` as record values. However, it's still a function, subject to ad-hoc composition, abstraction, and factoring.
 
-        [[A]:a [B]:b [C]:c] [.c .b .a] b == [[C][B][A][]]
+For variants, first consider the basic sum type `(A+B)`. The Church encoding for this is `∀r.(A→r)→(B→r)→r`. That is, an observer must supply a "handler" for each case, and the value itself selects and applies one handler. For basic sums, the order of input for handlers corresponds to order within the type. For labeled sums, we simply need to select from a labeled product of handlers - `[[OnA]:a [OnB]:b [OnC]:c ...]`. Selecting a handler is less expressive than pattern matching (for example, we cannot represent guards or wildcards), but still convenient. A variant value could have concrete representation `[.label [Value] case]`.
 
-And record constructor from a tuple is feasible:
+        [[OnA]:a [OnB]:b [OnC]:c] .a [ValA] case == [ValA] OnA
+        case = [] b b a a d
 
-        [C][B][A][] [:a] ins [:b] ins [:c] ins
-
-        [A][R][:a] ins == [[A]:a R]
-        ins = [a i]b b b
-
-Several error conditions are locally obvious:
-
-        [B] [A] :a          -- error: unlabeled data [B]
-        [A1] :a [A2] :a     -- error: `:a` assigned twice
-        :a :b               -- error: missing input for `:b`
-
-Originally, my intention for Awelon was to leverage accelerators, embedded texts, and *Editable Views* to model labeled data explicitly. Church encoding of labeled data is not difficult: labels encode paths into a trie-based structure for access or update. Unfortunately, based on my experiments, explicit encoding seems to defeat or hinder the most useful features of labeled data. For example, it is difficult to preserve human meaningful labels when reporting static type errors, or to syntactically refactor when we don't know locally which observations might be made on our encodings. 
-
-This feature is *probably* final, pending issues discovered in practice.
+*Background:* Originally, my intention for Awelon was to leverage accelerators and editable views to model labeled data explicitly. Church encoding of labeled data is not difficult: a record as a trie, a label as a path. However, making labels first class makes it a lot easier to preserve human meaningful structure in context of static types or errors, and simplifies reasoning about what observations can be made, which refactorings are safe, which errors can be detected early.
 
 ## Secure Hash Resources
 
@@ -203,9 +192,9 @@ The runtime will look at the given definitions. Upon recognizing `[] b a`, the r
 
 In general, recognition of accelerators is fragile under refactoring and abstraction. For example, it may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names might break accelerators. Due to this fragility, developers need some means to gain confidence in accelerators. Performance mustn't silently rot due to developments of the runtime. A simple convention is to support an `[code fragment](accel)` annotation that asserts a given fragment of code must be accelerated.
 
-Acceleration naturally extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 succ]`. But with runtime acceleration, natural numbers may be compactly represented by machine words and arithmetic on math might be accelerated to add and multiply these words directly. Similarly, lists could be accelerated to use arrays. And evaluation of Kahn Process Networks could be accelerated to leverage distributed CPUs and memory.
+Acceleration naturally extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 succ]`. But with runtime acceleration, natural numbers may be compactly represented by machine words and arithmetic on math might be accelerated to add and multiply these words directly. Similarly, accelerated records could use hashtables or be compiled to structs. And lists could be accelerated to use arrays. And evaluation of Kahn Process Network descriptions could be accelerated to leverage distributed CPUs and memory.
 
-Accelerators are not trivial. An accelerator represents a significant investment, and dependency on accelerators will impact portability of code to other runtimes. It is best to develop a small set of accelerators that is useful for a wide variety of use cases. This development will be a long performance path for Awelon systems.
+Accelerators are not trivial. An accelerator represents a significant compatibility investment, and dependency on accelerators will impact portability of code to other runtimes. It is best to develop a small set of accelerators that is useful for a wide variety of use cases. Development of carefully curated accelerators will be a long-term performance path for Awelon systems.
 
 ## Stowage
 
