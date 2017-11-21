@@ -114,12 +114,12 @@ Logically, we operate linearly on row-polymorphic record constructors:
 
 But the curly braces are a lie. Awelon has no concrete syntax for records. We can treat record constructor functions of form `[[A]:a [B]:b [C]:c]` as record values. However, it's still a function, subject to ad-hoc composition, abstraction, and factoring.
 
-For variants, first consider the basic sum type `(A+B)`. The Church encoding for this is `∀r.(A→r)→(B→r)→r`. That is, an observer must supply a "handler" for each case, and the value itself selects and applies one handler. For basic sums, the order of input for handlers corresponds to order within the type. For labeled sums, we simply need to select from a labeled product of handlers - `[[OnA]:a [OnB]:b [OnC]:c ...]`. Selecting a handler is less expressive than pattern matching (for example, we cannot represent guards or wildcards), but still convenient. A variant value could have concrete representation `[.label [Value] case]`.
+For variants, first consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer shall supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. The order of handlers corresponds directly to order within the data type. For labeled sums, we simply need a labeled product of handlers - `[[OnA]:a [OnB]:b [OnC]:c ...]`. A variant value could have concrete representation `[.label [Value] case]`.
 
         [[OnA]:a [OnB]:b [OnC]:c] .a [ValA] case == [ValA] OnA
         case = [] b b a a d
 
-*Background:* Originally, my intention for Awelon was to leverage accelerators and editable views to model labeled data explicitly. Church encoding of labeled data is not difficult: a record as a trie, a label as a path. However, making labels first class makes it a lot easier to preserve human meaningful structure in context of static types or errors, and simplifies reasoning about what observations can be made, which refactorings are safe, which errors can be detected early.
+*Background:* Originally, my intention for Awelon was to leverage accelerators and editable views to model labeled data explicitly. Church encoding of labeled data is not difficult: a record as a trie, a label as a path. I still feel reluctant about introducing this as a primitive Awelon extension. However, primitive labels make it easier to infer static types, preserve labels upon error, reason locally about which observations can be made, which refactorings are safe. Naive implementation should also be a lot more efficient. 
 
 ## Secure Hash Resources
 
@@ -451,23 +451,14 @@ Here `s` is a universally typed argument for the input stack. Because our types 
 
 The type `S[C][B][A]` then clearly aligns with a program of the same shape.
 
-Types for records and labeled data shouldn't be too difficult, but do require some special analysis to prevent multiple-assignment of labels and support commutativity. There is extensive related research regarding row-polymorphic records and variants.
+For labeled data, our types might include the abstract record type with row polymorphic constraints. There is extensive related research regarding row-polymorphic records and variants. Notice we cannot construct a record environment, only operate on one.
 
-        :a  : S [A] → S {a:typeOf(A)}
-        .a  : S [{R a:T}] → S [T] [{R}]
-        {R1} {R2} : {R1 R2} if no shared labels
-        {R1 R2} == {R2 R1}
+        :a  : {R without a} [A] → {R, a:typeOf(A)}
+        .a  : S [{} → {R, a:T}] → S [T] [{} → {R}]
 
-Annotations can further augment static type analysis with value sealers, substructural types, multi-stage programming, and so on. Ideally, everything would be verified statically rather than dynamically, but it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
+Annotations can augment static type analysis with hints, value sealers, substructural types, multi-stage programming, and so on. Ideally, everything should be verified statically rather than dynamically. But it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
 
-Conditional behavior requires some special attention. Inferring that two conditional 'paths' should have the same output type and similar input types is infeasible without a more context. Annotations can inject some context. 
-
-        (bool)      ∀S. S [S → S'] [S → S'] → S'
-        (option)    ∀S. S [S → S'] [S [A] → S'] → S'
-        (sum)       ∀S. S [S [A] → S'] [S [B] → S'] → S'
-        (nat)       μNat.∀S. S [S → S'] [S Nat → S'] → S'
-
-Labeled data can also support label-matching case conditions on variants. Anyhow, we shouldn't need much. 
+Inference of conditional types requires special attention. We must usually express when two conditional behaviors should have the same result type so we can partially unify our type analysis. Even better if we can also indicate similar input structure. This might be expressed as an annotation like `(bool)`, `(sum)`, or `(cond)` on the paths or conditional value. 
 
 ### Staged and Deferred Typing
 
