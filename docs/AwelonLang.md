@@ -102,7 +102,7 @@ Interpeted text is a convenient hack but doesn't scale, compose, or abstract nic
 
 ## Labeled Data (provisional)
 
-Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon supports labeled data by introducing pairs of symbolic functions `:label` and `.label` where labels are also valid words. Effectively, a record works like this:
+Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon supports labeled data by introducing pairs of symbolic functions of form `:label` and `.label` where labels would be valid words. Effectively, a record works like this:
 
         [[A] :a [B] :b [C] :c] .b == [B] [[A] :a [C] :c]
         [A] :a [B] :b == [B] :b [A] :a      (labels commute)
@@ -112,14 +112,14 @@ Logically, we operate linearly on row-polymorphic record constructors:
         {R without a} [A] :a == {R, a=[A]}
         [{} → {R, a=[A]}] .a == [A] [{} → {R}]
 
-But the curly braces are a lie. Awelon has no concrete syntax for records. We can treat record constructor functions of form `[[A]:a [B]:b [C]:c]` as record values. However, it's still a function, subject to ad-hoc composition, abstraction, and factoring.
+But those curly braces are a lie. The actual record value is abstract and ephemeral, lacking a concrete syntax. Instead, we treat the record constructor function `[[A]:a [B]:b [C]:c]` as the record value. Like other functions, a record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when factoring record constructors.
 
-For variants, first consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer shall supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. The order of handlers corresponds directly to order within the data type. For labeled sums, we simply need a labeled product of handlers - `[[OnA]:a [OnB]:b [OnC]:c ...]`. A variant value could have concrete representation `[.label [Value] case]`.
+For variants, first consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer will supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA]:a [OnB]:b [OnC]:c ...]`. Variant values could have concrete representation like `[.label [Value] case]`.
 
-        [[OnA]:a [OnB]:b [OnC]:c] .a [ValA] case == [ValA] OnA
+        [[OnA]:a [OnB]:b] .a [ValA] case == [ValA] OnA
         case = [] b b a a d
 
-*Background:* Originally, my intention for Awelon was to leverage accelerators and editable views to model labeled data explicitly. Church encoding of labeled data is not difficult: a record as a trie, a label as a path. I still feel reluctant about introducing this as a primitive Awelon extension. However, primitive labels make it easier to infer static types, preserve labels upon error, reason locally about which observations can be made, which refactorings are safe. Naive implementation should also be a lot more efficient. 
+*Background:* Originally, my intention for Awelon was to leverage accelerators and editable views to model labeled data explicitly. Church encoding of labeled data is not difficult: a record as a trie, a label as a path. I still feel reluctant about introducing labels as a primitive Awelon extension. However, primitive labels make it easier to infer static types, preserve labels in output or upon error, or reason locally about which observations can be made and which refactorings are safe. Further, it's easier to achieve acceptable performance without complicated accelerators.
 
 ## Secure Hash Resources
 
@@ -128,7 +128,7 @@ It is possible to identify binaries by their *secure hash*. Doing so has many ni
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
 
-Secure hash resources may appear anywhwere an Awelon word may appear, and are interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, and their semantics ultimately depend on the local definitions for `zero`, `succ`, `null`, and `cons`.
+Secure hash resources may appear anywhwere an Awelon word may appear, and are interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, albeit permitting the full range of bytes. Their semantics ultimately depend on the local definitions for `zero`, `succ`, `null`, and `cons`.
 
 Awelon uses the 320-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 64 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. 
 
@@ -456,9 +456,15 @@ For labeled data, our types might include the abstract record type with row poly
         :a  : {R without a} [A] → {R, a:typeOf(A)}
         .a  : S [{} → {R, a:T}] → S [T] [{} → {R}]
 
-Annotations can augment static type analysis with hints, value sealers, substructural types, multi-stage programming, and so on. Ideally, everything should be verified statically rather than dynamically. But it's feasible to use a mixed mode when debugging and simply eliminate safety annotations for a release build.
+Conditional behavior requires special attention. In Awelon, we use Church-encodings. For example, the basic sum type `(A+B)` is encoded as a function of type `∀r.(A→r)→(B→r)→r`. It is difficult to infer locally that our sum must be parametric in `r` and have similar input arities. We can leverage a few 'typed identity' annotations to address this.
 
-Inference of conditional types requires special attention. We must usually express when two conditional behaviors should have the same result type so we can partially unify our type analysis. Even better if we can also indicate similar input structure. This might be expressed as an annotation like `(bool)`, `(sum)`, or `(cond)` on the paths or conditional value. 
+        (choice) : S [S → S'] [S → S']
+        (option) : S [S → S'] [S V → S']
+        (either) : S [S A → S'] [S B → S']
+        (select) : S [{} → {Rec of label:[S T_label → S']}]
+                   Output Type = Input Type in each case.       
+
+Annotations can also augment static type analysis with hints, value sealers, substructural types, multi-stage programming, and so on. 
 
 ### Staged and Deferred Typing
 
@@ -491,11 +497,11 @@ Using this, we can assert that two key-value structures share the same key compa
 
 ### Sophisticated Types
 
-For the most sophisticated types, such as GADTs, existential types, dependent types, or types annotated with proof tactics, we will need a type description language together with a simple annotation to 'comment' on the type. We could annotate stack types inline similar to assertions:
+For the more sophisticated types - such as GADTs, signatures, existential types, dependent types - we cannot rely on inference or simple annotations. We need a type description language with flexible abstraction and factoring. A viable option:
 
         [type description of stack](type)d
 
-Awelon doesn't specify a type description language. We're free to use strings or data structures. Static analysis tools should recognize de-facto standards by ad-hoc means, such as a version comment within the type description.
+Awelon doesn't specify a type description language, but we're free to use strings or data structures. Static analysis tools should recognize de-facto standards by ad-hoc means, such as a version comment within the type description. 
 
 *Aside:* Type descriptions related to words can generally be moved outside of mainline code, into auxiliary definitions. But it's better to use annotations even within these auxiliary definitions, to avoid relying on naming conventions. E.g. `foo_type = [[foo][type description](type)]`. 
 
