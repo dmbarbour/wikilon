@@ -106,6 +106,12 @@ module Trie =
                 { c with prefix = joinBytes p (byte b) (c.prefix) }
             | _ -> { prefix = p; value = None; children = cs }
 
+
+    let inline private setChildAt ix c' cs =
+        if isEmpty c'
+            then IntMap.remove ix cs
+            else IntMap.add ix c' cs
+
     /// Return copy of tree minus a specified key. 
     let rec remove (k:Key) (t:Tree<'V>) : Tree<'V> =
         let n = bytesShared k (t.prefix)
@@ -114,15 +120,11 @@ module Trie =
             mkNode (t.prefix) None (t.children) 
         else
             let ix = uint64 (k.[n])
-            let cs = t.children
-            match IntMap.tryFind ix cs with
+            match IntMap.tryFind ix (t.children) with
             | None -> t
             | Some c ->
                 let c' = remove (BS.drop (n+1) k) c
-                let cs' = 
-                    if isEmpty c' 
-                       then IntMap.remove ix cs
-                       else IntMap.add ix c' cs
+                let cs' = setChildAt ix c' (t.children)
                 mkNode (t.prefix) (t.value) cs'
 
     /// Remove key from tree only if it exists. This avoids rewriting
@@ -290,7 +292,7 @@ module Trie =
                 match IntMap.tryFind ix csr0 with
                 | Some c ->
                     let (tl,tr) = splitAtKey (BS.drop (n+1) k) c
-                    struct(IntMap.add ix tl csl0, IntMap.add ix tr csr0)
+                    struct(setChildAt ix tl csl0, setChildAt ix tr csr0)
                 | None -> struct(csl0,csr0)
             (mkNode (t.prefix) (t.value) csl, mkNode (t.prefix) None csr)
         else if(k.[n] < t.prefix.[n]) then (empty,t)
