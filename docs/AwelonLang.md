@@ -32,7 +32,7 @@ There are four primitive computing combinators:
                [A]c == [A][A]       (copy)
                [A]d ==              (drop)
 
-Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their formal behavior can be understood in terms of these few primitives. However, Awelon also provides a few lightweight features for numbers, texts, words, and labeled data.
+Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their formal behavior can be understood in terms of these few primitives. However, Awelon also provides a few lightweight features for numbers, texts, words, big data, and labeled data.
 
 This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, see a translation from lambda calculus at *Named Local Variables* or see this simple definition of the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic):
 
@@ -123,7 +123,7 @@ For variants, first consider that basic sum type `(A+B)` has a Church encoding `
 
 ## Secure Hash Resources
 
-It is possible to identify binaries by their *secure hash*. Doing so has many nice properties: immutable and acyclic by construction, cacheable, securable, provider-independent, self-authenticating, implicitly shared, automatically named, uniformly sized, and smaller than many full URLs or file paths. Awelon systems leverage secure hashes to reference binaries and code outside the dictionary:
+It is possible to identify binaries by their *secure hash*. Doing so has many nice properties: immutable and acyclic by construction, cacheable, securable, provider-independent, self-authenticating, implicitly shared, automatically named, uniformly sized references, and smaller than many full URLs or file paths. Awelon systems leverage secure hashes to reference binaries and code outside the dictionary:
 
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
