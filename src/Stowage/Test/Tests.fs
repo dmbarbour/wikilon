@@ -27,6 +27,45 @@ let clearTestDir path =
     if Directory.Exists(path) 
         then Directory.Delete(path,true)
 
+[<Fact>]
+let ``intmap hbi`` () =
+    let inline hbi n = int (IntMap.Critbit.highBitIndex n)
+    Assert.Equal(0, hbi 0UL)
+    Assert.Equal(0, hbi 1UL)
+    Assert.Equal(1, hbi 2UL)
+    Assert.Equal(1, hbi 3UL)
+    Assert.Equal(2, hbi 4UL)
+    Assert.Equal(2, hbi 7UL)
+    Assert.Equal(3, hbi 8UL)
+    Assert.Equal(3, hbi 15UL)
+    Assert.Equal(4, hbi 16UL)
+    Assert.Equal(4, hbi 31UL)
+    Assert.Equal(5, hbi 32UL)
+    Assert.Equal(5, hbi 63UL)
+    Assert.Equal(7, hbi 128UL)
+    Assert.Equal(7, hbi 255UL)
+    Assert.Equal(10, hbi 1024UL)
+    Assert.Equal(11, hbi 4095UL)
+    Assert.Equal(27, hbi ((1UL <<< 28) - 1UL))
+    Assert.Equal(63, hbi (1UL <<< 63))
+    Assert.Equal(63, hbi System.UInt64.MaxValue)
+
+[<Fact>]
+let ``intmap basics`` () =
+    let mutable m = IntMap.empty
+    for i = 1 to 50 do
+        let k = uint64 (2 * i)
+        m <- IntMap.add k k m
+    for i = 1 to 50 do
+        let k = uint64 ((2 * i) - 1)
+        m <- IntMap.add k k m
+    let a = IntMap.toArray m
+    //printfn "%A" a
+    Assert.Equal(100, Array.length a)
+    Assert.True(Array.forall (fun ((k,v)) -> (k = v)) a)
+    Assert.Equal(1UL, fst a.[0])
+    Assert.Equal(100UL, fst a.[99])
+
 // a fixture is needed to load the database
 type TestDB =
     val s : LMDB.Storage
@@ -324,6 +363,42 @@ type DBTests =
         Assert.Equal<string option>(Some "a1", t.DB.Read a)
         Assert.Equal<string option>(None, t.DB.Read b)
 
+    [<Fact>]
+    member t.``vref basics`` () =
+        let cv = EncStringRaw.codec
+        let ss = ["hello"; "world"; "this"; "is"; "a"; "test"]
+        let vrefs = List.map (VRef.stow cv t.Stowage) ss
+        t.FullGC()
+        let ss' = List.map (VRef.load) vrefs
+        Assert.Equal<string list>(ss,ss')
+        //printfn "%A" vrefs
+
+    [<Fact>]
+    member t.``cvref basics`` () =
+        let stow s = CVRef.stow 10 (EncStringRaw.codec) (t.Stowage) s
+        let a = stow "hello"
+        let b = stow "hello, world!"
+        //printfn "a=%A; b=%A" a b
+        Assert.False(CVRef.isRemote a)
+        Assert.True(CVRef.isRemote b)
+
+
+    [<Fact>]
+    member t.``intmap serialization`` () =
+        let mutable m = IntMap.empty
+        for i = 1 to 50 do
+            let k = uint64 (2 * i)
+            m <- IntMap.add k k m
+        for i = 1 to 50 do
+            let k = uint64 ((2 * i) - 1)
+            m <- IntMap.add k k m
+        let cm = IntMap.codec' (System.Int32.MaxValue) (EncVarNat.codec) 
+        let struct(mCompact,szM) = Codec.compactSz cm (t.Stowage) m
+        let mbytes = Codec.writeBytes cm mCompact
+        Assert.Equal(BS.length mbytes, szM) // require exact size estimate
+        let m' = Codec.readBytes cm (t.Stowage) mbytes
+        Assert.Equal(100, Seq.length (IntMap.toSeq m))
+        Assert.Equal<(uint64 * uint64) seq>(IntMap.toSeq m, IntMap.toSeq m')
 
     // TODO: Test data structures.
 

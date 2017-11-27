@@ -361,7 +361,7 @@ module LSMTrie =
                     let (tl,tr) = splitAtKey (BS.drop (n+1) k) c
                     struct(setChildAt ix tl csl0, setChildAt ix tr csr0)
                 | None -> struct(csl0,csr0)
-            // reprocess all pending updates from the node
+            // redistribute pending updates
             let splitUpd kU vOpt (struct(tl,tr)) =
                 if (kU < k) then struct(addUpd kU vOpt tl, tr) 
                             else struct(tl, addUpd kU vOpt tr)
@@ -373,6 +373,80 @@ module LSMTrie =
             (tl,tr)
         else if(k.[n] < t.prefix.[n]) then (empty,t)
         else (t,empty)
+
+
+    module Enc =
+        // Encoding is concatenation of key, value, updates, and children.
+        // Compaction will flush updates based on the given `buffer` argument.
+        // And nodes are compacted based on `thresh`. In general, we'll want
+        // buffer to be somewhat smaller than threshold.
+        type TreeCodec<'V> =
+            val value    : Codec<'V>                  // value encoder
+            val children : Codec<IntMap<Tree<'V>>>    // for recursion
+            val updates  : Codec<IntMap<Trie<'V option>>>  // for updates
+            val buffer   : SizeEst                    // update buffer threshold
+            interface Codec<Tree<'V>> with
+                member c.Write t dst =
+                    EncBytes.write (t.prefix) dst
+                    EncOpt.write (c.value) (t.value) dst
+                    Codec.write (c.children) (t.children) dst
+                    Codec.write (c.updates) (t.updates) dst
+                member c.Read db src =
+                    let p = EncBytes.read src
+                    let v = EncOpt.read (c.value) db src
+                    let cs = Codec.read (c.children) db src
+                    let us = Codec.read (c.updates) db src
+                    { prefix = p; value = v; children = cs; updates = us }
+                member c.Compact db t =
+                    let szP = EncBytes.size (t.prefix)
+                    let struct(v',szV) = EncOpt.compact (c.value) db (t.value)
+                    let struct(us',szUpd) = Codec.compactSz (c.updates) db (t.updates)
+                    if (szUpd > c.buffer) then
+                        // flush the update buffer during compaction
+                        let struct(cs',szCS) = Codec.compactSz (c.children) db (flush us' (t.children))
+                        let t' = { prefix = t.prefix; value = v'; children = cs'; updates = IntMap.empty }
+                        struct(t',szP + szV + szCS + 1)
+                    else 
+                        // reuse children then write update buffer
+                        let struct(cs',szCS) = Codec.compactSz (c.children) db (t.children)
+                        let t' = { prefix = t.prefix; value = v'; children = cs'; updates = us' }
+                        struct(t',szP + szV + szCS + szUpd)
+            new(cv,thresh,buffer) as tc =
+                let cc = IntMap.codec' thresh (tc :> Codec<Tree<'V>>)
+                let cu = Trie.Enc.TreeCodec(EncOpt.codec cv, System.Int32.MaxValue).children
+                { value = cv; children = cc; updates = cu; buffer = buffer }
+
+    /// Codec with specified heuristic compaction thresholds.
+    /// 
+    /// We have two thresholds: a buffer size for flushing updates, and a
+    /// stowage threshold for remote storage.
+    let inline codec' (thresh:SizeEst) (buffer:SizeEst) (cV:Codec<'V>) =
+        Enc.TreeCodec<'V>(cV,thresh,buffer) :> Codec<Tree<'V>>
+
+    /// Codec with default compaction thresholds.
+    let inline codec cV = 
+        let thresh = IntMap.EncNode.defaultThreshold
+        codec' thresh thresh cV
+
+    /// Map and filter while compacting each trie node. 
+    ///
+    /// This is useful for huge trees, where we shouldn't keep the entire
+    /// tree in memory. While mapping, this will keep a node and all of
+    /// its immediate children in memory, but will compact each node as it
+    /// forms, moving oversized data from memory into Stowage. 
+    let compactingFilterMap (cTree:Codec<Tree<'B>>) (db:Stowage) (fn:Key -> 'A -> 'B option) (t:Tree<'A>) : Tree<'B> =
+        filterMapCC (Codec.compact cTree db) fn (t.prefix) t
+
+    /// Map while compacting for large trees. See compactingFilterMap.
+    let inline compactingMap (cTree:Codec<Tree<'B>>) (db:Stowage) (fn:Key -> 'A -> 'B) (t:Tree<'A>) : Tree<'B> =
+        compactingFilterMap cTree db (fun k v -> Some (fn k v)) t
+
+    /// Filter while compacting for large trees. See compactingFilterMap.
+    let inline compactingFilter (cTree:Codec<Tree<'V>>) (db:Stowage) (pred:Key -> 'V -> bool) (t:Tree<'V>) : Tree<'V> =
+        let fn k v = if pred k v then Some v else None
+        compactingFilterMap cTree db fn t
+
+
 
 
 type LSMTrie<'V> = LSMTrie.Tree<'V>

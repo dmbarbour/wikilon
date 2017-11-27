@@ -5,14 +5,17 @@ namespace Stowage
 /// The Finger Tree is the 'swiss army knife' of data structures. It 
 /// supports efficient O(1) operations at each edge. Monoidal summaries
 /// can support efficient random access, priority, etc.
+///
+/// This finger tree assumes relatively cheap computation for measures,
+/// and chooses to recompute rather than cache for local data.
 module FingerTree =
 
-    // Branches for the 2-3 tree structure.
+    /// Branches for the 2-3 tree structure.
     type B<'V> =
         | B2 of 'V * 'V
         | B3 of 'V * 'V * 'V
 
-    // A node is the main element we compact for Stowage.
+    /// A node is the main element we compact for Stowage.
     [<Struct>]
     type Node<'V, 'M> =
         val M : 'M
@@ -21,7 +24,7 @@ module FingerTree =
         interface IMeasured<'M> with
             member node.Measure = node.M
 
-    // Digits at edge of a finger tree.
+    /// Digits at each edge of a finger tree.
     type D<'V> =
         | D1 of 'V
         | D2 of 'V * 'V

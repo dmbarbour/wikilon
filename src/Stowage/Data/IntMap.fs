@@ -63,7 +63,7 @@ module IntMap =
         // prefix and suffix exclude the critbit
         let inline prefix (k:Key) (b:Critbit) : Key = ((k >>> int b) >>> 1)
         let inline testCritbit (k:Key) (b:Critbit) : bool =
-            (0UL <> (1UL &&& (k >>> int b)))
+            (0UL <> (k &&& (1UL <<< int b)))
         let inline suffixMask (b : Critbit) : Key = ((1UL <<< int b) - 1UL)
         let inline suffix (k:Key) (b:Critbit) : Key = (k &&& suffixMask b)
 
@@ -182,7 +182,7 @@ module IntMap =
                     else (Some node, None)
 
         let inline keyPrefixes kp p b =
-            let kl = keyPrefixL (kp ||| p) b
+            let kl = kp ||| (keyPrefixL p b)
             let kr = (kl ||| (1UL <<< int b))
             struct(kl,kr)
 

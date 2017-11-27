@@ -341,4 +341,6 @@ module EncBTree =
 module EncString =
     let codec = Codec.view (EncBytes.codec) (BS.toString) (BS.fromString)
 
+module EncStringRaw =
+    let codec = Codec.view (EncBytesRaw.codec) (BS.toString) (BS.fromString)
 

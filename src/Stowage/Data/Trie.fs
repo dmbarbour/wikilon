@@ -322,6 +322,7 @@ module Trie =
         
     // TODO:
     // - efficient structural diffs (low priority)
+    // - efficient tree merges 
 
     module Enc =
         // encoding is trivial concatenation of key, value, and children.
