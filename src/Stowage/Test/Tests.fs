@@ -82,7 +82,7 @@ let ``history independent intmap construction`` () =
     let fromI i = (uint64 i, i)
     let fromA a = IntMap.ofSeq (Seq.map fromI (Array.toSeq a))
     let rng = new System.Random(21)
-    let a = Array.init 12 id
+    let a = Array.init 32 id
     let asum = Array.fold (+) 0 a
     let m0 = fromA a
     let msum = IntMap.fold (fun s k v -> (s + v)) 0 m0
@@ -145,7 +145,7 @@ let ``intmap removal`` () =
     Assert.Equal(m4 |> rm 3 |> rm 2, m0 |> add 0 |> add 1)
 
     // random testing   
-    let a = Array.init 12 id
+    let a = Array.init 32 id
     let fromA a = Array.toSeq a |> Seq.map (fun i -> (uint64 i, i)) |> IntMap.ofSeq
     let valsA m = IntMap.toSeq m |> Seq.map snd |> Array.ofSeq
     let msum m = IntMap.fold (fun s k v -> (s + v)) 0 m
@@ -158,16 +158,49 @@ let ``intmap removal`` () =
         Assert.Equal(mr,mx)
 
 [<Fact>]
-let ``trie construction`` () =
-    let a = Array.init 36 id
+let ``history independent trie construction`` () =
+    let a = Array.init 1000 id
     let fromI i = (BS.fromString (string i), i)
     let fromA a = Array.toSeq a |> Seq.map fromI |> Trie.ofSeq
+    let sumV t = Trie.foldBack (fun k v s -> (s + v)) t 0
     let rng = new System.Random(1111)
     let t0 = fromA a
-    for i = 1 to 1000 do
+    let sum0 = sumV t0
+    Assert.Equal(sum0, Array.fold (+) 0 a)
+    for i = 1 to 100 do
         shuffle' rng a
         let t = fromA a
         Assert.Equal(t0,t)
+
+[<Fact>]
+let ``trie access and removal`` () =
+    let t = seq { for i = 1 to 2000 do yield i }
+                |> Seq.map (fun i -> (BS.fromString (string i), i))
+                |> Trie.ofSeq
+    let lu i t = Trie.tryFind (BS.fromString (string i)) t
+    let rm i t = Trie.remove (BS.fromString (string i)) t
+    Assert.Equal(None, lu 0 t)
+    Assert.Equal(Some 1, lu 1 t)
+    Assert.Equal(Some 2, lu 2 t)
+    Assert.Equal(Some 20, lu 20 t)
+    Assert.Equal(Some 100, lu 100 t)
+    Assert.Equal(Some 200, lu 200 t)
+    Assert.Equal(Some 1000, lu 1000 t)
+    Assert.Equal(Some 2000, lu 2000 t)
+    Assert.Equal(None, lu 3000 t)
+    Assert.Equal(None, lu 1 (rm 1 t))
+    Assert.Equal(Some 100, lu 100 (t |> rm 1 |> rm 10 |> rm 11))
+
+    let t2 = Trie.filterPrefix (BS.fromString "10") t
+    Assert.Equal(None, lu 1 t2)
+    Assert.Equal(None, lu 2 t2)
+    Assert.Equal(Some 10, lu 10 t2)
+    Assert.Equal(None, lu 20 t2)
+    Assert.Equal(Some 101, lu 101 t2)
+    Assert.Equal(None, lu 110 t2)
+    
+
+
 
 // a fixture is needed to load the database
 type TestDB =
