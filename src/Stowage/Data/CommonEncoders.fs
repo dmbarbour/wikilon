@@ -344,3 +344,10 @@ module EncString =
 module EncStringRaw =
     let codec = Codec.view (EncBytesRaw.codec) (BS.toString) (BS.fromString)
 
+module EncVarNat32 =
+    let codec = Codec.view (EncVarNat.codec) (uint32) (uint64)
+
+module EncVarInt32 =
+    let codec = Codec.view (EncVarInt.codec) (int) (int64)
+
+

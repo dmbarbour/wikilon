@@ -49,23 +49,26 @@ module IntMap =
         let inline load np = CVRef.load np
         let inline load' np = CVRef.load' np
 
-        // merge a key-prefix with key in node (via bitwise OR) 
-        let mergeKP kp node =
-            match node with
-            | Leaf (k,v) -> Leaf ((kp ||| k), v)
-            | Inner (p,b,np) -> Inner ((kp ||| p),b,np)
-
-        let inline keyPrefixL p b = ((p <<< 1) <<< int b)  
-        let inline keyPrefixR p b = (keyPrefixL p b) ||| (1UL <<< int b)
-        let inline mergeL p b l = mergeKP (keyPrefixL p b) l
-        let inline mergeR p b r = mergeKP (keyPrefixR p b) r 
-
         // prefix and suffix exclude the critbit
         let inline prefix (k:Key) (b:Critbit) : Key = ((k >>> int b) >>> 1)
         let inline testCritbit (k:Key) (b:Critbit) : bool =
             (0UL <> (k &&& (1UL <<< int b)))
         let inline suffixMask (b : Critbit) : Key = ((1UL <<< int b) - 1UL)
         let inline suffix (k:Key) (b:Critbit) : Key = (k &&& suffixMask b)
+
+        // merge a key-prefix with key in node (via bitwise OR) 
+        let mergeKP kp node =
+            match node with
+            | Leaf (k,v) -> Leaf ((kp ||| k), v)
+            | Inner (p,b,np) -> 
+                let p' = (prefix kp b) ||| p
+                Inner (p', b, np)
+
+        let inline keyPrefixL p b = ((p <<< 1) <<< int b)  
+        let inline keyPrefixR p b = (keyPrefixL p b) ||| (1UL <<< int b)
+        let inline mergeL p b l = mergeKP (keyPrefixL p b) l
+        let inline mergeR p b r = mergeKP (keyPrefixR p b) r 
+
 
         let rec tryFind kf node =
             match node with
@@ -116,38 +119,41 @@ module IntMap =
                     let inR = testCritbit k b
                     let k' = suffix k b
                     let struct(l,r) = load' np
-                    let (l',r') = if inR then (l, add k' v r) else (add k' v l, r)
-                    Inner (p, b, local l' r')
+                    let np' = if inR then local l (add k' v r)
+                                     else local (add k' v l) r
+                    Inner (p, b, np')
                 else // insert just above current node
-                    let b' = 1uy + b + Critbit.highBitIndex (p ^^^ kp)
-                    assert(63uy >= b')
+                    let kl = keyPrefixL p b
+                    let b' = Critbit.highBitIndex (kl ^^^ k)
+                    assert(b' > b)
+                    let oldNode = Inner(prefix (suffix kl b') b, b, np)
+                    let newLeaf = Leaf(suffix k b', v)
                     let inR = testCritbit k b'
-                    let node' = Inner(suffix p b', b, np)
-                    let leaf = Leaf(suffix k b', v)
-                    let np' = if inR then local node' leaf else local leaf node'
+                    let np' = if inR then local oldNode newLeaf
+                                     else local newLeaf oldNode
                     Inner (prefix k b', b', np')
             | Leaf (kl,vl) ->
                 if (kl = k) then Leaf(k,v) else
-                let b' = Critbit.highBitIndex (kl ^^^ k)
-                let node' = Leaf (suffix kl b', vl)
-                let leaf  = Leaf (suffix k b', v)
-                let inR = testCritbit k b'
-                let np' = if inR then local node' leaf else local leaf node'
-                Inner(prefix k b', b', np')
+                let b = Critbit.highBitIndex (kl ^^^ k)
+                let oldLeaf = Leaf (suffix kl b, vl)
+                let newLeaf = Leaf (suffix k  b, v)
+                let inR = testCritbit k b
+                let np = if inR then local oldLeaf newLeaf 
+                                else local newLeaf oldLeaf
+                Inner(prefix k b, b, np)
 
         let rec remove (k:Key) (node:Node<'V>) : Node<'V> option =
             match node with
             | Inner (p, b, np) ->
                 if (p <> prefix k b) then Some node else
                 let inR = testCritbit k b
-                let k' = suffix k b
                 let struct(l,r) = load np
                 if inR then 
-                    match remove k' r with
+                    match remove (suffix k b) r with
                     | Some r' -> Some (Inner (p, b, local l r'))
                     | None -> Some (mergeL p b l)
                 else
-                    match remove k' l with
+                    match remove (suffix k b) l with
                     | Some l' -> Some (Inner (p, b, local l' r))
                     | None -> Some (mergeR p b r)
             | Leaf (kl,_) -> if (kl = k) then None else Some node

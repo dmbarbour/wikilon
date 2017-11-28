@@ -1,19 +1,22 @@
 # Stowage.Data
 
-This module aims to provide useful data structures above Stowage.
+This module aims to provide useful data structures above Stowage. It also includes Stowage concepts:
 
-Initial goals include:
+* `Stowage` - remote value storage by secure hash
+* `RscHash` - concrete secure hash function 
+* `Codec` - interpret binary data as values
+* `DB` - durable software transactional memory
+* `VRef` - remote value reference
+* `LVRef` - VRef with caching, delayed write
+* `CVRef` - LVRef but uses memory for small values
+* `IntMap` - sparse associative array, indexed by uint64
+* `Trie` - tree with binary keys, prefix sharing
+* `LSMTrie` - trie with write buffering
 
-* `VRef` and `LVRef` - smart pointers for Stowage data
-* `IntMap` - a natural number indexed sparse associative array
-* `Trie` - bit-level patricia trie 
-* `LSMTrie` - trie enhanced with update buffers?
-* finger-tree sequences for vectors or dequeues
-* generic finger-trees (user-provided monoid)
+TODO:
 
-I should probably have for each collection type, a "compacting map" and "compacting filter" operation to avoid loading the entire collection into memory.
+* finger-tree sequences for vectors, deques
+* SeqHash or          
 
-I'm interested in developing the SeqHash structure, which is effectively a history-independent finger-tree sequence. Eventually. It's low priority. I don't fully grok the details yet.
-
-I'd also like to abstract the key-value store and transactional updates, leveraging the Codec and caching parsed data for lightweight comparisons. It would be convenient if we can model some sort of hierarchical transactions and buffer multiple commits as a single, efficient operation at the .Net layer before anything reaches the underlying database. The "durability" of a commit could be optional, too.
+I'm also interested in developing the SeqHash structure, which is roughly a history-independent finger-tree sequence. But that's low priority. I don't fully grok the details yet.
 

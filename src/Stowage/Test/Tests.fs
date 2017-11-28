@@ -9,6 +9,20 @@ open Xunit
 open Stowage
 open Data.ByteString
 
+let shuffle' (rng:System.Random) (a : 'T[]) : unit =
+    let rec shuffleIx ix =
+        if (ix = a.Length) then () else
+        let ixSwap = rng.Next(ix, Array.length a)
+        let tmp = a.[ix]
+        a.[ix] <- a.[ixSwap]
+        a.[ixSwap] <- tmp
+        shuffleIx (ix + 1)
+    shuffleIx 0
+
+let clearTestDir path =
+    if Directory.Exists(path) 
+        then Directory.Delete(path,true)
+
 [<Fact>]
 let ``hash test`` () =
     let h0s = "test"
@@ -22,10 +36,6 @@ let ``hash test`` () =
     Assert.Equal<string>(BS.toString h1, h1s)     
     Assert.Equal<string>(BS.toString h2, h2s)
     Assert.Equal<string>(BS.toString h3, h3s)
-
-let clearTestDir path =
-    if Directory.Exists(path) 
-        then Directory.Delete(path,true)
 
 [<Fact>]
 let ``intmap hbi`` () =
@@ -51,20 +61,113 @@ let ``intmap hbi`` () =
     Assert.Equal(63, hbi System.UInt64.MaxValue)
 
 [<Fact>]
-let ``intmap basics`` () =
-    let mutable m = IntMap.empty
-    for i = 1 to 50 do
-        let k = uint64 (2 * i)
-        m <- IntMap.add k k m
-    for i = 1 to 50 do
-        let k = uint64 ((2 * i) - 1)
-        m <- IntMap.add k k m
-    let a = IntMap.toArray m
-    //printfn "%A" a
-    Assert.Equal(100, Array.length a)
-    Assert.True(Array.forall (fun ((k,v)) -> (k = v)) a)
-    Assert.Equal(1UL, fst a.[0])
-    Assert.Equal(100UL, fst a.[99])
+let ``history independent intmap construction`` () =
+    let inline add i m = IntMap.add (uint64 i) i m
+    let m0 = IntMap.empty
+    let m3 = m0 |> add 0 |> add 1 |> add 2
+    // exhaustive testing for permutations of 3 items
+    Assert.Equal(m3, m0 |> add 0 |> add 1 |> add 2)
+    Assert.Equal(m3, m0 |> add 0 |> add 2 |> add 1)
+    Assert.Equal(m3, m0 |> add 1 |> add 0 |> add 2)
+    Assert.Equal(m3, m0 |> add 1 |> add 2 |> add 0)
+    Assert.Equal(m3, m0 |> add 2 |> add 0 |> add 1)
+    Assert.Equal(m3, m0 |> add 2 |> add 1 |> add 0)
+
+    // test idempotence of add
+    Assert.Equal(m3, m3 |> add 0)
+    Assert.Equal(m3, m3 |> add 1)
+    Assert.Equal(m3, m3 |> add 2)
+
+    // pseudo-random testing
+    let fromI i = (uint64 i, i)
+    let fromA a = IntMap.ofSeq (Seq.map fromI (Array.toSeq a))
+    let rng = new System.Random(21)
+    let a = Array.init 12 id
+    let asum = Array.fold (+) 0 a
+    let m0 = fromA a
+    let msum = IntMap.fold (fun s k v -> (s + v)) 0 m0
+    Assert.Equal(asum,msum)
+    Assert.True(IntMap.validate m0)
+    for i = 1 to 1000 do
+        shuffle' rng a
+        Assert.Equal(m0, fromA a)
+
+[<Fact>]
+let ``intmap removal`` () =
+    let inline add i m = IntMap.add (uint64 i) i m
+    let inline rm i m = IntMap.remove (uint64 i) m
+    let m0 = IntMap.empty
+    let m4 = IntMap.empty |> add 0 |> add 1 |> add 2 |> add 3
+
+    // test containment and lookup
+    Assert.True(IntMap.containsKey 0UL m4)
+    Assert.False(IntMap.containsKey 0UL (m4 |> rm 0))
+    Assert.True(IntMap.containsKey 1UL m4)
+    Assert.False(IntMap.containsKey 1UL (m4 |> rm 1))
+    Assert.True(IntMap.containsKey 2UL m4)
+    Assert.False(IntMap.containsKey 2UL (m4 |> rm 2))
+    Assert.True(IntMap.containsKey 3UL m4)
+    Assert.False(IntMap.containsKey 3UL (m4 |> rm 3))
+    Assert.False(IntMap.containsKey 4UL m4)
+
+    // test idempotence of removal
+    Assert.Equal(m4 |> rm 0 |> rm 0, m4 |> rm 0)
+    Assert.Equal(m4 |> rm 1 |> rm 1, m4 |> rm 1)
+    Assert.Equal(m4 |> rm 2 |> rm 2, m4 |> rm 2)
+    Assert.Equal(m4 |> rm 3 |> rm 3, m4 |> rm 3)
+
+    // removal of absent value
+    Assert.Equal(m4 |> rm 4, m4)
+
+    // exhaustive testing for four items (without ordering)
+    Assert.Equal(m4 |> rm 0, m0 |> add 1 |> add 2 |> add 3)
+    Assert.Equal(m4 |> rm 1, m0 |> add 0 |> add 2 |> add 3)
+    Assert.Equal(m4 |> rm 2, m0 |> add 0 |> add 1 |> add 3)
+    Assert.Equal(m4 |> rm 3, m0 |> add 0 |> add 1 |> add 2)
+    Assert.Equal(m4 |> rm 0 |> rm 1, m0 |> add 2 |> add 3)
+    Assert.Equal(m4 |> rm 0 |> rm 2, m0 |> add 1 |> add 3)
+    Assert.Equal(m4 |> rm 0 |> rm 3, m0 |> add 1 |> add 2)
+    Assert.Equal(m4 |> rm 1 |> rm 2, m0 |> add 0 |> add 3)
+    Assert.Equal(m4 |> rm 1 |> rm 3, m0 |> add 0 |> add 2)
+    Assert.Equal(m4 |> rm 2 |> rm 3, m0 |> add 0 |> add 1)
+    Assert.Equal(m4 |> rm 0 |> rm 1 |> rm 2, m0 |> add 3)
+    Assert.Equal(m4 |> rm 0 |> rm 1 |> rm 3, m0 |> add 2)
+    Assert.Equal(m4 |> rm 0 |> rm 2 |> rm 3, m0 |> add 1)
+    Assert.Equal(m4 |> rm 1 |> rm 2 |> rm 3, m0 |> add 0)
+    Assert.Equal(m4 |> rm 0 |> rm 1 |> rm 2 |> rm 3, m0)
+
+    // testing for order of removal
+    Assert.Equal(m4 |> rm 1 |> rm 0, m0 |> add 2 |> add 3)
+    Assert.Equal(m4 |> rm 2 |> rm 0, m0 |> add 1 |> add 3)
+    Assert.Equal(m4 |> rm 3 |> rm 0, m0 |> add 1 |> add 2)
+    Assert.Equal(m4 |> rm 2 |> rm 1, m0 |> add 0 |> add 3)
+    Assert.Equal(m4 |> rm 3 |> rm 1, m0 |> add 0 |> add 2)
+    Assert.Equal(m4 |> rm 3 |> rm 2, m0 |> add 0 |> add 1)
+
+    // random testing   
+    let a = Array.init 12 id
+    let fromA a = Array.toSeq a |> Seq.map (fun i -> (uint64 i, i)) |> IntMap.ofSeq
+    let valsA m = IntMap.toSeq m |> Seq.map snd |> Array.ofSeq
+    let msum m = IntMap.fold (fun s k v -> (s + v)) 0 m
+    Assert.Equal(msum (fromA a), Array.fold (+) 0 a)
+    let rng = new System.Random(22)
+    for i = 1 to 1000 do
+        shuffle' rng a
+        let mr = fromA a |> rm a.[0] |> rm a.[1] |> rm a.[2]
+        let mx = fromA (a.[3..])
+        Assert.Equal(mr,mx)
+
+[<Fact>]
+let ``trie construction`` () =
+    let a = Array.init 36 id
+    let fromI i = (BS.fromString (string i), i)
+    let fromA a = Array.toSeq a |> Seq.map fromI |> Trie.ofSeq
+    let rng = new System.Random(1111)
+    let t0 = fromA a
+    for i = 1 to 1000 do
+        shuffle' rng a
+        let t = fromA a
+        Assert.Equal(t0,t)
 
 // a fixture is needed to load the database
 type TestDB =
@@ -396,9 +499,31 @@ type DBTests =
         let struct(mCompact,szM) = Codec.compactSz cm (t.Stowage) m
         let mbytes = Codec.writeBytes cm mCompact
         Assert.Equal(BS.length mbytes, szM) // require exact size estimate
+        t.FullGC()
         let m' = Codec.readBytes cm (t.Stowage) mbytes
         Assert.Equal(100, Seq.length (IntMap.toSeq m))
         Assert.Equal<(uint64 * uint64) seq>(IntMap.toSeq m, IntMap.toSeq m')
+
+    [<Fact>]
+    member t.``intmap compaction`` () =
+        let s = seq { for i = 1 to 2000 do yield i }
+        let fromI i = (uint64 i, i)
+        let ss = Seq.map fromI s
+        let m = IntMap.ofSeq ss
+        let cm = IntMap.codec' 400 (EncVarInt32.codec) 
+        let struct(mCompact,szM) = Codec.compactSz cm (t.Stowage) m
+        //printfn "compacted to: %d" szM
+        Assert.True(szM < 500)
+        Assert.Equal(Some 7, IntMap.tryFind 7UL mCompact)
+        Assert.Equal(Some 201, IntMap.tryFind 201UL mCompact)
+        Assert.Equal(Some 999, IntMap.tryFind 999UL mCompact)
+        Assert.Equal(None, IntMap.tryFind 3000UL mCompact)
+        let mbytes = Codec.writeBytes cm mCompact
+        Assert.Equal(szM, BS.length mbytes)
+        t.FullGC()
+        let m' = Codec.readBytes cm (t.Stowage) mbytes
+        Assert.Equal(2000, Seq.length (IntMap.toSeq m))
+        Assert.Equal<(uint64 * int) seq>(IntMap.toSeq m, IntMap.toSeq m')
 
     // TODO: Test data structures.
 
