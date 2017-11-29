@@ -44,3 +44,4 @@ Modeling effects means providing outputs that result in some feedback. We could 
 
 IO involving independent channels can feasibly be decentralized by sharding a process network, assuming an appropriate context.
 
+

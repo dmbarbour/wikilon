@@ -32,7 +32,7 @@ There are four primitive computing combinators:
                [A]c == [A][A]       (copy)
                [A]d ==              (drop)
 
-Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their formal behavior can be understood in terms of these few primitives. However, Awelon also provides a few lightweight features for numbers, texts, words, big data, and labeled data.
+Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their formal behavior can be understood in terms of these few primitives. However, Awelon also provides a few lightweight features for numbers, texts, words, big data, and provisionally for labeled data (records and variants).
 
 This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, see a translation from lambda calculus at *Named Local Variables* or see this simple definition of the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic):
 
@@ -92,7 +92,7 @@ Awelon has native support for embedding texts inline between double quotes such 
 
 Definitions for `null` and `cons` are left to the dictionary. A typical encoding might fold over every element in the list. Like natural numbers, we have a structural guarantee of value type, and definitions are likely to be determined by available runtime acceleration. In this case, acceleration could support lists via arrays.
 
-Embedded texts are suitable only for simple things like test data, comments, and micro-DSLs such as regular expressions. They are not very suitable for general use. To work around these limitations, the primary options are:
+Embedded texts are suitable only for simple things like test data, comments, labels, and micro-DSLs such as regular expressions. They are not suitable for general use. To work around these limitations, the primary options are:
 
 * interpret, e.g. `"multiple\nlines" lit` to rewrite escapes
 * structure, e.g. `["multiple" ["lines" [null] cons] cons] unlines`
@@ -100,26 +100,26 @@ Embedded texts are suitable only for simple things like test data, comments, and
 
 Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, and evolve to support mixed data, but needs *Editable Views* to provide a usable syntax. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
 
-## Labeled Data (provisional)
+## Labeled Data (experimental!)
 
-Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon supports labeled data by introducing pairs of symbolic functions of form `:label` and `.label` where labels would be valid words. Effectively, a record works like this:
+Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon provisionally supports labeled data by introducing pairs of symbolic functions of form `:label` and `.label` where labels would be valid words. Effectively, a record works like this:
 
-        [[A] :a [B] :b [C] :c] .b == [B] [[A] :a [C] :c]
+        [[A] :a [B] :b [C] :c] .c == [C] [[A] :a [B] :b]
         [A] :a [B] :b == [B] :b [A] :a      (labels commute)
 
-Logically, we operate linearly on row-polymorphic record constructors:
+Logically, we operate linearly on abstract row-polymorphic record constructors:
 
-        {R without a} [A] :a == {R, a=[A]}
-        [{} → {R, a=[A]}] .a == [A] [{} → {R}]
+        :a      {R without a} [A] → {R, a=[A]}
+        .a      S [{} → {R, a=[A]}] → S [A] [{} → {R}]
 
-But those curly braces are a lie. The actual record value is abstract and ephemeral, lacking a concrete syntax. Instead, we treat the record constructor function `[[A]:a [B]:b [C]:c]` as the record value. Like other functions, a record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when factoring record constructors.
+The record value is ephemeral. There is no curly brace syntax within Awelon to introduce a record. Instead, we can treat the record constructor function `[[A]:a [B]:b [C]:c]` as the record value. Like other functions, a record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring record constructors. 
 
 For variants, first consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer will supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA]:a [OnB]:b [OnC]:c ...]`. Variant values could have concrete representation like `[.label [Value] case]`.
 
         [[OnA]:a [OnB]:b] .a [ValA] case == [ValA] OnA
         case = [] b b a a d
 
-*Background:* Originally, my intention for Awelon was to leverage accelerators and editable views to model labeled data explicitly. Church encoding of labeled data is not difficult: a record as a trie, a label as a path. I still feel reluctant about introducing labels as a primitive Awelon extension. However, primitive labels make it easier to infer static types, preserve labels in output or upon error, or reason locally about which observations can be made and which refactorings are safe. Further, it's easier to achieve acceptable performance without complicated accelerators.
+My original intention has been to leverage accelerators, editable views, embedded texts, and annotations to model labeled data explicitly. Church encoding of labeled data is not difficult: each label encodes a path through pairs, a record is a trie of pairs. Unfortunately, if we explicitly model labels it becomes much more complicated. It becomes difficult to syntactically factor code or preserve human-meaningful labels when reporting errors. To preserve the benefits of labeled data, it seems that making them primitive is valuable. But I'm still reluctant to commit to a specific model. Awelon's support for labeled data is still "experimental". I'll need to see how this idea works in practice, whether a different label model would be more appropriate (such as lenses), and also how nicely these labels work in context of KPN accelerators.
 
 ## Secure Hash Resources
 
@@ -451,18 +451,12 @@ Here `s` is a universally typed argument for the input stack. Because our types 
 
 The type `S[C][B][A]` then clearly aligns with a program of the same shape.
 
-For labeled data, our types might include the abstract record type with row polymorphic constraints. There is extensive related research regarding row-polymorphic records and variants. Notice we cannot construct a record environment, only operate on one.
-
-        :a  : {R without a} [A] → {R, a:typeOf(A)}
-        .a  : S [{} → {R, a:T}] → S [T] [{} → {R}]
-
 Conditional behavior requires special attention. In Awelon, we use Church-encodings. For example, the basic sum type `(A+B)` is encoded as a function of type `∀r.(A→r)→(B→r)→r`. It is difficult to infer locally that our sum must be parametric in `r` and have similar input arities. We can leverage a few 'typed identity' annotations to address this.
 
         (choice) : S [S → S'] [S → S']
         (option) : S [S → S'] [S V → S']
         (either) : S [S A → S'] [S B → S']
-        (select) : S [{} → {Rec of label:[S T_label → S']}]
-                   Output Type = Input Type in each case.       
+        (switch) : S [{} → {a:[S A → S'], b:[S B → S', ...}]
 
 Annotations can also augment static type analysis with hints, value sealers, substructural types, multi-stage programming, and so on. 
 
@@ -600,7 +594,7 @@ Assuming local variables, it's also feasible to develop infix notations, e.g. `(
 ### Qualified Namespaces
 
 Awelon's hierarchical dictionaries support a simple form of namespacing. But it falls to editable views to support local shorthand, e.g. some form of `using large_prefix as x` or `using package_of_nicknames`. If we assume editable views are maintained within the dictionary, it is feasible to use comments to help control the view, tweaking the language as needed. An intriguing possibility is to integrate a database of nicknames for secure hash resources into the view, where said database is represented within the dictionary.
- 
+
 ## Arrays and In-place Updates
 
 In-place updates are efficient - they can avoid overheads of persistent data structures related to indirection, allocation, and garbage collection, and they benefit from stronger cache locality. Although usually associated with imperative languages, purely functional languages can safely support in-place updates if they track sharing. For example, we can update an array in-place if that array is not shared; nobody will observe the mutation. Even if the array is shared, we can simply produce an unshared copy then update that - and this will be efficient if updates are batched or a lot more frequent than copies. 
