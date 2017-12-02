@@ -1,51 +1,80 @@
 
-# Awelon with Kahn Process Networks
+# Kahn Process Networks in Awelon
 
-[Awelon language](AwelonLang.md) is purely functional. Unfortunately, this presents significant challenges for scalable parallism and effects models. I've been considering use of [Kahn Process Networks (KPNs)](KPN_Effects.md) for this role, via acceleration. But it might be worthwhile to extend Awelon so KPNs are essentially the normal value. This is especially tempting in context of adding labeled data extensions to Awelon.
+[Awelon language](AwelonLang.md) is purely functional. Although purely functional code permits a lot of simple fork-join parallelism, it presents a challenge for the sort distributed parallel computation that requires a lot of message routing. Routing of messages becomes a form of centralized computation without a lot of fine-grained parallelism. To resolve this, my current intention is to borrow inspiration from a deterministic concurrency model such as [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks). KPNs are also very useful as a potential [effects model](KPN_Effects.md).
 
-## Data Extraction?
+My current intention is to work with KPNs via accelerated functions. But it is tempting to accept KPNs as the foundation for the Awelon project programming language, assuming appropriate rewrite rules can be discovered. What would this look like?
 
-One feature of KPNs that makes them valuable is the monotonic structure. We can incrementally add inputs and extract outputs. Ignoring concurrency concerns, this might be understood in terms of adding a primitive feature to Awelon to extract data:
+## Data Extraction Primitive? Reject.
+
+One feature of KPNs is that we can extract outputs monotonically. We might represent this in Awelon by introducing an operator `e`:
 
         [B[A]]e == [B][A]       (extract)
 
-Essentially, this would give us specialized support for partial computations. In a primitive step we can either bind one more input to our function or extract one more output. This would correspond to an external view of a KPN - we can add one input or extract one output without directly observing the internal process. *Aside:* I have contemplated an extract primitive `e` for Awelon in the past. But so far I've always rejected it. It seems simpler and wiser to explicitly use a pair to represent partial outputs and continuations.
+The extraction operation does enable us to represent non-terminating computations within `B` that will consume any number of inputs to produce any number of outputs - a lot like a single input channel coupled to a single output channel. This is incomplete for KPNs. We need more than one channel. I've contemplated this operator before, but it seems wiser to simply require programmers to model explict result-continuation pairs, explicit input-output frames.
 
-The other feature of KPNs that makes them valuable is concurrency. Inputs and outputs occur on multiple channels. There is a first-in-first-out ordering within a channel, but we cannot observe the order of messages between two channels. Further, a process network consists of multiple component processes. When we supply an input to the KPN, we can easily determine which component process will observe the input.
+## Explicit, Effectful Channels? Reject.
 
-## Labeled Channels?
+The Oz programming language has an interesting feature: variables are declared and assigned separately. The variables are single-assignment, but this is essentially a single-assignment channel. From this, we can define multiple-input channels by creating a variable for each input. For example:
 
-Recently, I've introduced provisional labeled data extensions for Awelon. It occurs to me that labels have a lot in common with channels. We can model records as trivial processes. However, there are also some important differences to ensure order-independence of inputs and concurrent computation. If I want to upgrade labeled data to labeled channels, how should this work? Specifically, how should it work while preserving local, confluent rewriting semantics?
+        [[A0] [[A1] [[A2] [{A_REM}] cons] cons] cons]
 
-Our Awelon functions additionally produce output on multiple channels. Channel outputs no longer interfere with computation, and outputs to distinct channels are order independent.
+Here `{A_REM}` would be a hole to be filled concurrently with `null` or `[A3] [{A_REM'}] cons`. In the latter case, we can add more to the channel. Hence, we could model full channels using single-assignment channels. 
 
-        [B] [A] :a == [A] :a [B]            channels hide communication
-        [A] :a [B] :b == [B] :b [A] :a      distinct channels commute
+Potentially, we could augment data extraction to instead create holes:
 
-We also need some means to observe data on a channel. This seems to be the more challenging feature. One significant issue is that observations on distinct channels mustn't interfere. Inputs must propagate across irrelevant observers. Hence, we need to scope our observers, such that we may commute across them. Hence, observers should be blocks of some sort. This could be represented as follows:
+        [A]e => [A {:Hole}] [{.Hole}]
+        [A]{:Hole} B [{.Hole}] => B [A]
 
-        [A] :a .b == .b [A] :a
-        [B] :b [OnB] .b == [[B]OnB]
+Here `{:Hole}` would be the assignment side of a hole, while `{.Hole}` would be the observer side. This acts as a wormhole of sorts to move data instantly. With this, we could represent first-class holes using `[]e`. Unfortunately, there are many difficulties with first-class holes. It's the same problem of "new" things in general - we need a global context to name the holes, and we cannot consider computations to be referentially transparent because `[]e` will create a distinct hole at each place it is used.
 
-This would use labels to bind inputs. Unfortunately, this doesn't make it easy to work with multiple inputs and outputs. What we really need is the ability to receive multiple inputs and produce multiple outputs within a scope. We could try a distinct scoping membrane:
+If we take this route, the Awelon language would naturally be effectful. Although this is simpler than many impure functional programming language effects models, it is a semantic complication I'd rather avoid. However, I mostly describe it as a basis for discussing *Implicit Channels*.
 
-        {a b - c | CODE}        receives on a,b; outputs on c
-        [A]:a {a | CODE} == {a | [A] :a CODE}
-        [C]:c {a | CODE} == {a | CODE} [C]:c
-        :a .a == 
-        {a - b | CODE [C]} == {a - b | CODE} [C]
-        {a - b | CODE [B]:b} == {a - b | CODE} [B]:b
+## Implicit Channels
 
-This would allow us to specify for a subprogram which channels it observes or writes to, and we could thus commute subprograms that don't have conflicting labels. Each scope would allow for multiple inputs and outputs. Essentially, this would give us syntactically enforced effect types for a channel-based effects model. I don't like it. I feel this adds too much syntactic overhead.
+If we reject modeling channels or holes explicitly, perhaps we can still have them implicitly, leveraging annotations. For example, given code of form `[P](t2)` we know it must evaluate to a pair, i.e. `P =>* [A][B]`. A parallel interpreter could feasibly produce placeholders for `[A][B]` before `P` even finishes evaluation. We might indicate this by combining `(t2)` and `(par)`.
 
-## Single Assignment Futures?
+        [P](par)(t2) => [[P{:B}{:A}](proc)d[{.A}][{.B}]]
 
-Another approach to deterministic concurrency involves single-assignment variables. Each variable is declared and assigned only once. This assignment is non-local, separated from the declaration. When a variable is assigned twice, the program is clearly in error. This is capable of modeling channels, i.e. a channel involves producing an infinite list of single-assignment variables, copying this list, then having one computation assign while the other reads. The difficulty with single assignment futures are those unassigned variables that escape local scope and might see use in multiple contexts. I'd prefer to avoid this technique, and similar techniques that construct 'new' stateful objects and rely on non-local interaction.
+Here `(proc)` suggests we must evaluate to a unit/identity behavior with assignment effects. A potential concern is that `P` might not complete evaluation - we might halt on a quota or error. Fortunately, we can recover by writing `P` back into our program and using a simple extraction algorithm to erase holes:
 
-However, I wouldn't mind using a similar idea without true single-assignment semantics. If we know from our type system that a value should be produced in the future, it seems feasible to introduce a placeholder in the meantime. This could permit a certain level of dataflow pipelining for carefully structured programs.
+        T(X,E) - extract variable X from E
+           X T(X,E) == E
+        T(X,E) when E does not have X => d
+        T(X,X) =>
+        T(X,[E]) => [T(X,E)]b
+        T(X,F G) 
+            when only F has X => T(X,F) G
+            when only G has X => [F]a T(X,G)
+            when both have X => c [T(X,F)] a T(X,G)
 
-## Other Ideas?
+Implicit placeholders hence have the nice properties of not requiring new features and being fully eraseable. The ability to work with placeholder results allows more parallelism opportunities compared to `(par)` alone. 
 
-I'll keep an open mind. If I can find a nice way to integrate KPN behavior with simple local rewrite semantics, I'll give it serious consideration.
+Unfortunately, it is not obvious how to leverage this technique to represent KPN-style message routing. We cannot route message conditionally! However, we could try *KPN Message Batching*. 
 
-I should also pay attention to whether labeled data is directly usable for a KPN accelerator.
+## KPN Message Batching
+
+I know at least two ways to represent a message between KPN processes.
+
+* variant that selects a port and carries one message
+* record of optional messages, one label is activated
+
+The variant approach is more efficient. However, the latter representation is a lot more friendly for implicit channels and placeholders because it enables "blind" routing of messages without even knowing which output port was used. We'll only need to filter `None` messages eventually when we try to observe the next message on a port.
+
+Further, the record of optional messages is trivially upgraded to a record of message lists, such that we can route entire batches of messages. This batching could mitigate many inefficiencies from blindly flooding every route.
+
+Evaluation of KPNs in this case could be frame-driven. In each frame:
+
+* every process receives a batch of messages on every port
+* we immediately produce placeholders for process outputs
+* in parallel, every process evaluates as far as it can
+* in parallel, we route placeholders to produce more inputs
+
+We must also limit how a process awaits messages to remove frame aliasing. But we would get a nice structural enforcement that routes are linear. 
+
+## Static Route Acceleration
+
+Routing placeholders on each evaluation frame is rather wasteful. But with KPNs, each evaluation frame has the same basic structure and shape. It seems feasible that we could perform some sort of logical fixpoint where we route sample placeholders only once and then pretend each future frame looks a lot like the previous (albeit, with each hole identifier including an implicit frame number).
+
+This would be interesting, because it would generalize KPN acceleration to any static, frame-driven routes within a fixpoint evaluation. This is a promising approach, although the details still escape me. Importantly, static routing is exactly where we benefit for distributed computations.
+

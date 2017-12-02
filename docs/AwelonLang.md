@@ -59,15 +59,15 @@ Arbitrary texts and binaries cannot be directly embedded into Awelon, but may be
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is no specific size limit, but words should usually be small in practice.
+Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is no size limit, but words should be small in practice. 
 
 Words are evaluated in context of a *Dictionary*. Each word is defined by an Awelon program, using other words. Valid definitions must form a directed acyclic graph and be block balanced (i.e. no unmatched `[` or `]` block characters). The formal semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
-Although structure within a word has no semantic properties, it may have connotations and conventions. For example, we might associate `foo_type` or `foo_doc` with `foo` in context of linking a development environment. Lightweight namespaces are also feasible.
+Structure within a word has no formal semantic properties. But there may be informal connotations, conventions, or special rendering hints in context of a development environment or [application model](ApplicationModel.md). For example, we might associate `foo_type` or `foo_doc` with `foo` in context of linking a development environment. Lightweight namespaces are also feasible. 
 
 The four primitive words `a`, `b`, `c`, and `d` cannot be redefined. The four words `zero`, `succ`, `null`, and `cons` should be defined to support natural numbers, embedded texts, and binary resources.
 
-*Aside:* A trivial cyclic definition of a word to itself is equivalent to an undefined word, and may be considered the default.
+*Aside:* A trivial cyclic definition of a word to itself is equivalent to an undefined word.
 
 ## Natural Numbers
 
@@ -92,17 +92,15 @@ Awelon has native support for embedding texts inline between double quotes such 
 
 Definitions for `null` and `cons` are left to the dictionary. A typical encoding might fold over every element in the list. Like natural numbers, we have a structural guarantee of value type, and definitions are likely to be determined by available runtime acceleration. In this case, acceleration could support lists via arrays.
 
-Embedded texts are suitable only for simple things like test data, comments, labels, and micro-DSLs such as regular expressions. They are not suitable for general use. To work around these limitations, the primary options are:
+Embedded texts are suitable for simple things like test data, comments, and micro-DSLs such as regular expressions. They are not suitable for general use. To work around these limitations, the primary options are:
 
 * interpret, e.g. `"multiple\nlines" lit` to rewrite escapes
 * structure, e.g. `["multiple" ["lines" [null] cons] cons] unlines`
 * use *Secure Hash Resources* to reference external binary
 
-Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, and evolve to support mixed data, but needs *Editable Views* to provide a usable syntax. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
-
 ## Labeled Data (experimental!)
 
-Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon provisionally supports labeled data by introducing pairs of symbolic functions of form `:label` and `.label` where labels would be valid words. Effectively, a record works like this:
+Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon provisionally supports labeled data by introducing pairs of symbolic functions of form `:label` and `.label` where labels must be syntactically valid words. Effectively, a record works like this:
 
         [[A] :a [B] :b [C] :c] .c == [C] [[A] :a [B] :b]
         [A] :a [B] :b == [B] :b [A] :a      (labels commute)
@@ -112,14 +110,16 @@ Logically, we operate linearly on abstract row-polymorphic record constructors:
         :a      {R without a} [A] → {R, a=[A]}
         .a      S [{} → {R, a=[A]}] → S [A] [{} → {R}]
 
-The record value is ephemeral. There is no curly brace syntax within Awelon to introduce a record. Instead, we can treat the record constructor function `[[A]:a [B]:b [C]:c]` as the record value. Like other functions, a record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring record constructors. 
+However, there is no curly brace syntax to introduce a record. Instead, the record constructor `[[A]:a [B]:b [C]:c]` is effectively the record value. Like other functions, the record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring. 
 
-For variants, first consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer will supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA]:a [OnB]:b [OnC]:c ...]`. Variant values could have concrete representation like `[.label [Value] case]`.
+For variants, first consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer will supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA] :a [OnB] :b [OnC] :c ...]`. Variant values could have concrete representation like `[.label [Value] case]`.
 
-        [[OnA]:a [OnB]:b] .a [ValA] case == [ValA] OnA
+        [[OnA] :a [OnB] :b] .a [ValA] case == [ValA] OnA
         case = [] b b a a d
 
-My original intention has been to leverage accelerators, editable views, embedded texts, and annotations to model labeled data explicitly. Church encoding of labeled data is not difficult: each label encodes a path through pairs, a record is a trie of pairs. Unfortunately, if we explicitly model labels it becomes much more complicated. It becomes difficult to syntactically factor code or preserve human-meaningful labels when reporting errors. To preserve the benefits of labeled data, it seems that making them primitive is valuable. But I'm still reluctant to commit to a specific model. Awelon's support for labeled data is still "experimental". I'll need to see how this idea works in practice, whether a different label model would be more appropriate (such as lenses), and also how nicely these labels work in context of KPN accelerators.
+This model of labeled data adds no expressiveness to Awelon. In general, a record can be encoded as a trie, a label as a path. It is something we could model explicitly by leveraging accelerators and editable views - and doing so was my original intention. However, making labels primitive and records abstract better preserves the several benefits of labeled data. For example, we don't need to decode partial labels when reporting type or partial evaluation errors. We don't need to worry about dynamic construction of labels or ad-hoc composition of records. We essentially can reason about commutativity at a syntactic layer, without non-local knowledge of how labels are implemented. 
+
+That said, I'm reluctant to introduce new language primitives. Before I remove "experimental" status, I'll need to see how well this feature works in practice, whether an alternative model would be more appropriate (perhaps lens-based), and also how nicely this labeled data model works in context of accelerators, especially accelerated evaluation for Kahn process networks involving labeled ports and processes.
 
 ## Secure Hash Resources
 
@@ -128,7 +128,7 @@ It is possible to identify binaries by their *secure hash*. Doing so has many ni
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
 
-Secure hash resources may appear anywhwere an Awelon word may appear, and are interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, albeit permitting the full range of bytes. Their semantics ultimately depend on the local definitions for `zero`, `succ`, `null`, and `cons`.
+Secure hash resources may appear anywhwere an Awelon word may appear. However, in source code, one should usually define a word to the secure hash simplify editing and human meaningful references. Like other definitions, resources are interpreted in context of a dictionary. For example, binaries use the same list encoding as embedded texts, relying on definitions of `zero`, `succ`, `null`, and `cons` - albeit permitting a full `0-255` range for each byte. 
 
 Awelon uses the 320-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 64 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. 
 
@@ -144,7 +144,7 @@ Some example hashes, chained from the word `test`:
 
 We can safely neglect the theoretical concern of secure hash collisions. Even if hash collision becomes a concern in the future, it is feasible to transitively rewrite entire Awelon systems to use a more robust hash. In practice, physical corruption should be a greater concern. I won't further belabor the issue.
 
-Awelon runtime systems must know where to seek secure hash resources, whether that be in a filesystem, database, web server, or content distribution network. Using *Stowage* annotations, Awelon runtime systems may also compute new secure hash resources during evaluation, treating this external space as a persistent virtual memory or a binary data server.
+Awelon runtime systems must know where to seek secure hash resources, whether that be in a filesystem, database, web server, or content distribution network. Using *Stowage* annotations, Awelon runtime systems may also compute new secure hash resources during evaluation, treating this external space as a persistent virtual memory or a binary data server. 
 
 Secure hash resources are generally subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective due to the acyclic and high-latency nature of secure hash resources.
 
@@ -190,7 +190,7 @@ A runtime will recognize and accelerate common functions. The accelerated implem
 
 The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Whenever `i` appears at the end of a subprogram, we might leverage the tail-call optimization.
 
-In general, recognition of accelerators is fragile under refactoring and abstraction. For example, it may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names might break accelerators. Due to this fragility, developers need some means to gain confidence in accelerators. Performance mustn't silently rot due to developments of the runtime. A simple convention is to support an `[code fragment](accel)` annotation that asserts a given fragment of code must be accelerated.
+In general, recognition of accelerators is fragile under refactoring and abstraction. For example, it may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names might break accelerators. Due to this fragility, developers need some means to gain confidence in accelerators. Performance mustn't silently rot due to independent development of the runtime. A simple convention is to support an `[code fragment](accel)` annotation that asserts the given fragment of code should be recognized and accelerated. Further, simple data plumbing accelerators like `i` and `w` or even fixpoint `z`, could be robustly recognized based on a static type analysis instead of specific definitions.
 
 Acceleration naturally extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 succ]`. But with runtime acceleration, natural numbers may be compactly represented by machine words and arithmetic on math might be accelerated to add and multiply these words directly. Similarly, accelerated records could use hashtables or be compiled to structs. And lists could be accelerated to use arrays. And evaluation of Kahn Process Network descriptions could be accelerated to leverage distributed CPUs and memory.
 
@@ -324,7 +324,7 @@ Development of useful optimizations will be a major area for Awelon's developmen
 
 Direct interpretation of Awelon code can be reasonably efficient, using threaded interpreters. 
 
-But to make it faster we can potentially rewrite code to an intermediate language that uses an auxiliary data/return stack, call-return operations, labels and jumps for tail-call optimized loops and so on. Even better, we can feasibly target a simple "register machine" model to eliminate data plumbing from the stack and avoid bindings on the heap if they're used statically, instead tracking a compile-time stack of logical register-objects.
+But to make it faster we can potentially rewrite code to an intermediate language that uses an auxiliary data/return stack, call-return operations, location labels and jumps for tail-call optimized loops and so on. Even better, we can feasibly target a simple "register machine" model to eliminate data plumbing from the stack and avoid bindings on the heap if they're used statically, instead tracking a compile-time stack of logical register-objects.
 
 Of course, when compiling a register machine, you might need to keep an extra code map back from the program pointer to the logical register objects so we can serialize code. But that isn't a new idea.
 
@@ -405,15 +405,13 @@ We may need to partially evaluate `A` to eliminate exposed `(now)` annotations b
 
 ### Symbolic Scope
 
-We can leverage labeled data to resist accidental use of data in the wrong context, e.g. `[%binaryRef :jpeg]` or `[.jpeg %binaryRef case]` might indicate JPEG formatted image data. This covers a lot of use cases. But it also has some runtime overhead, and it doesn't guard against unwise intentional access. In general, we might want [abstract data types (ADTs)](https://en.wikipedia.org/wiki/Abstract_data_type) to control coupling and simplify maintenance issues within a large codebase. For ADTs, we'll need specialized annotations.
-
-Consider pairs of annotations that cancel when adjacent:
+[Abstract data types (ADTs)](https://en.wikipedia.org/wiki/Abstract_data_type) are convenient to control coupling and simplify maintenance issues within a large codebase. To express ADTs in Awelon, we need specialized annotations. Consider pairs of annotations that cancel when adjacent:
 
         (seal_foo)(open_foo) ==
         (seal_bar)(open_bar) ==
         ...
 
-Taken alone, this isn't much more useful than labeled data. A sealed value could have form `[[value](seal_foo)]` and an accessor might use `i(open_foo)`. One minor benefit is we can erase annotations for a release-build. But if we add one small constraint, this becomes a lot more useful: `(seal_foo)` and `(open_foo)` may only be directly used in definitions of words that start with `foo_`. This property can be validated by a linter, and would essentially allow us to treat prefixes like `foo_` as module namespaces with private implementation types. Developers may thus "scope" their errors and reasoning symbolically, based on word prefixes. This doesn't seem too different from conventional ADTs, where a module or library hides implementation of some data types.
+A sealed value could be expressed as `[[value](seal_foo)]`. An accessor could then use `i(open_foo)`. These annotations would do a lot to resist accidental access to data, and we could simply search a codebase for the annotations to determine which functions access certain data structures. Further, a linter could raise an error when `(seal_foo)` or `(unseal_foo)` appears in source code outside of words with prefix `foo_`. This would allow us to treat `foo_` or any `prefix_` as an implicit module or package that can hide some implementation details from other parts of the codebase.
 
 ### Substructural Scope
 
@@ -451,6 +449,11 @@ Here `s` is a universally typed argument for the input stack. Because our types 
 
 The type `S[C][B][A]` then clearly aligns with a program of the same shape.
 
+Label functions can be typed based on row-polymorphic records:
+
+        :a  : {R without a} [A] → {R, a:[A]}
+        .a  : S [{} → {R, a:[A]}] → S [A] [{} → {R}]
+
 Conditional behavior requires special attention. In Awelon, we use Church-encodings. For example, the basic sum type `(A+B)` is encoded as a function of type `∀r.(A→r)→(B→r)→r`. It is difficult to infer locally that our sum must be parametric in `r` and have similar input arities. We can leverage a few 'typed identity' annotations to address this.
 
         (choice) : S [S → S'] [S → S']
@@ -477,9 +480,9 @@ A definition of `pick` could have the form `[pick body here]b(dyn)i`. The `(dyn)
 
 ### Termination Analysis
 
-Valid programs in Awelon should always terminate. Of course, even with guarantee of termination it's trivial to express computations with large inputs and high algorithmic complexity that would not terminate before the heat death of the universe. Quotas remain necessary in practice. But a guarantee of totality does make it a lot easier to reason about correctness of program behavior and composition.
+Awelon is Turing complete, so we cannot always decide whether a program terminates. However, Awelon is also purely functional, and any non-termination is a form of error. As much as possible, by default, Awelon systems should use static analysis to detect non-termination among other errors.
 
-I haven't yet thoroughly explored options for static termination analysis. But I do recommend termination analysis be performed by default, with explicit annotations to assume termination as needed. At the very least, we should track which functions are obviously 'total', and use totality as a constraint on input types or values.
+*Note:* Even with a guarantee of termination, it's trivial to express computations that would require extraordinary time and space resources. We still need quotas. The main benefit of termination analysis is to eliminate accidental sources of error, and to require extra annotations where reasoning is difficult.
 
 ### Structural Equivalence
 

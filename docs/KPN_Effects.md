@@ -20,7 +20,7 @@ But reactive and dynamic behavior requires some attention.
 
 ## Reactive
 
-Reactivity is not a built-in feature of KPNs, but can be supported indirectly by adding a simple time model to our KPNs. The simplest option, perhaps, is to rewrite every message type from `a` to `Either Wait a` where a `Wait` indicates passage of time. A little extra logic upon read could handle the waits and forward to output channels. 
+Reactivity is not a built-in feature of KPNs, but can be supported indirectly by adding a simple time model to our KPNs. The simplest option, perhaps, is to rewrite every message type from `a` to `(Tick + a)` where a `Wait` indicates passage of time. A little extra logic upon read could handle the waits and forward to output channels. 
 
 Hence, the fundamental KPN structure doesn't need to change.
 

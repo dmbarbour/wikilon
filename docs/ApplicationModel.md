@@ -7,16 +7,14 @@ This document is a brainstorm and exploration of potential patterns for modeling
 
 ## Command Pattern
 
-Appending commands
+A command pattern might be represented as:
 
-The command pattern might be represented as:
-
-        @foo_v0 initial state constructor
-        @foo_v1 foo0 command1
-        @foo_v2 foo1 command2
+        foo_v0 = initial state constructor
+        foo_v1 = foo0 command1
+        foo_v2 = foo1 command2
         ...
-        @foo_v99 foo_v98 command99
-        @foo foo_v99
+        foo_v99 = foo_v98 command99
+        foo = foo_v99
 
 Use of command pattern enables many small updates to construct and modify a large object. This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
 
@@ -27,13 +25,13 @@ Command pattern can be used for such things as:
 * editing documents modeled as finger-tree ropes
 * modeling user actions - a button press, HTTP POST
 
-Effectively, command pattern models a mutable object within a dictionary, albeit only mutable by external agents. 
+Effectively, command pattern models a mutable object within a dictionary, albeit only mutable by external agents. A disadvantage of the command pattern is its non-monotonic structure, the destructive update of `foo`
 
-## Futures and Promises
+## Monotonic Dictionaries
 
-Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation then usefully proceeds in context of multiple futures, enabling intermediate observations that do not depend on the definition of the future.
+It is feasible to operate on a dictionary monotonically - such that we never redefine a word. In some cases, this requires leaving undefined words in the dictionary as placeholders for the undefined "future". Awelon can easily evaluate in context of undefined words, although one must also arrange computation such that we can extract useful results from partial evaluations.
 
-Unlike command pattern, futures and promises can be fully monotonic. This is a very valuable feature. It means we do not need to recompute our views after an update. If the entire dictionary is monotonic, we can simply checkpoint and continue our computations as needed, without backtracking.
+The main advantage of monotonic dictionaries is that they may be continuously evaluated in-place. There is no need to recompute, only to continue computations. By leveraging stowage and secure hash resources, state may scale freely. Hence, a word may correspond to an application whose state is updated based on filling gaps in a definition. See also *Managed Dictionaries*, below - monotonic dictionaries are essentially *frozen* by default, and we might need to gradually GC the dictionary to limit size.
 
 ## Dictionary Objects
 
@@ -45,7 +43,7 @@ Code manipulation utilities can be designed to work with these informal objects.
 
 Dictionary objects should be relatively flat. While we can represent words like `foo_bar_baz_qux`, we would quickly hit the limitations of word size in Awelon. Also, in some contexts, it might be better to use *Hierarchical Dictionaries* as a basis for dictionary objects, e.g. `doc@foo` (word `doc` in dictionary `foo`) instead of `foo_doc`. 
 
-*Note:* It is also feasible to use mounted dictionaries to model dictionary objects, i.e. so we have `doc@foo` instead of `foo.doc`. This restricts connectivity because a mount cannot reference its parent. But that restriction isn't necessarily a bad one, and would be mitigated by use of localization. 
+*Note:* It is also feasible to use mounted dictionaries to model dictionary objects, i.e. so we have `doc@foo` instead of `foo_doc`. This restricts connectivity because a mount cannot reference its parent. But that restriction isn't necessarily a bad one, and would be mitigated by use of localization. 
 
 ## Hypermedia Applications
 
@@ -111,19 +109,13 @@ This would admit a corresponding set of rewrites:
 * *frozen* definitions may be *inlined* into *opaque* clients
 * *hidden* definitions may be *deleted* if they have no clients
 
-Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. Future values might be assumed opaque and frozen, but not always hidden.
+Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. However, when a secure hash resource is referenced from an opaque definition, we could rewrite the secure hash to a simplified or evaluated form.
 
-Representation of these attributes is ad-hoc, subject to de-facto standardization. We could add tag fields on a dictionary object. Or we might represent general policies under a word like `meta_gc`. There are a lot of options.
+Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo_meta_gc` for elements under `foo`, or we could represent our policies under a global word like `meta_gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
 
 ## Dictionary Passing or Synchronization
 
-The Awelon dictionary makes a powerful communication primitive. Consider a dictionary-passing message model. We'd send a `(message, dictionary)` pair, where our message is a short snippet of code (potentially a single word) and our dictionary contains the necessary vocabulary to interpret and use that message. 
-
-This is feasible because we don't need to deliver the *full* dictionary with every message. A secure hash will do the job. Further, it's easy to compile, cache, and reuse the dictionary for many messages. Even if some tweaks are needed over time, the provider can ensure that *most* of the dictionary can still be reused. Even further, de-facto standardization will result agents sharing most of their patched together vocabularies. A newcomer to the sytem will tend to inherit from existing agents. Costs are amortized across both messages and agents.
-
-Besides one-off immutable messages, documents are essentially messages that we maintain over time, and dictionaries can also serve as an effective foundation for publish-subscribe distributions - a publisher providing a whole dictionary, a subscriber synchronizing.
-
-Awelon supports these patterns via the *Hierarchical Dictionaries* feature.
+An Awelon dictionary can easily represent documents or databases, and it is convenient if we can pass these around in a first-class manner, referencing dictionaries by secure hash or URL. We can communicate a message together with a dictionary, such that our message is fully defined. It's easy to cache, compile, and reuse a referenced dictionary for many messages. Leveraging persistent data structures and secure hash resources, we can feasibly reuse most of our cached dictionary even for slight variations. Awelon supports application patterns relying on whole dictionary passing via the *Hierarchical Dictionaries* feature.
 
 ## Application Security
 
