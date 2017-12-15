@@ -287,6 +287,87 @@ module IntMap =
                     yield! toSeqR kl l
             }
 
+
+        let seqInL n = toSeq 0UL n |> Seq.map (fun (k,v) -> (k, InL v))
+        let seqInR n = toSeq 0UL n |> Seq.map (fun (k,v) -> (k, InR v))
+
+        let inline private loadMerged' p b np =
+            let struct(kl,kr) = keyPrefixes 0UL p b
+            let struct(nl,nr) = load' np
+            struct(mergeKP kl nl, mergeKP kr nr)
+
+        let inline private refEq npa npb =
+            if System.Object.ReferenceEquals(npa,npb) then true else
+            match (npa,npb) with
+            | (Remote ra, Remote rb) -> (ra = rb)
+            | _ -> false
+
+        let keyRange node =
+            match node with
+            | Leaf (k,_) -> struct(k,k)
+            | Inner (p,b,_) ->
+                let kmin = keyPrefixL p b
+                let cb = 1UL <<< int b
+                let kmax = kmin ||| cb ||| (cb - 1UL)
+                struct(kmin,kmax)
+
+        let below cb node =
+            match node with
+            | Leaf _ -> true
+            | Inner (_,b,_) -> (b < cb)
+
+        // reference-equality based diff, including equality for
+        // stowage resources, intended to minimize observation of nodes.
+        let rec diffRef na nb =
+            seq {
+                let struct(ka_min,ka_max) = keyRange na
+                let struct(kb_min,kb_max) = keyRange nb
+                if (ka_max < kb_min) then
+                    yield! seqInL na
+                    yield! seqInR nb
+                else if(kb_max < ka_min) then
+                    yield! seqInR nb
+                    yield! seqInL na
+                else
+                    match na with
+                    | Leaf (_,va) ->
+                        match nb with
+                        | Leaf (_,vb) -> 
+                            assert (ka_min = kb_min)
+                            yield (ka_min, InB (va,vb))
+                        | Inner (pb,bb,npb) -> 
+                            yield! diffRefB ka_min na pb bb npb
+                    | Inner (pa,ba,npa) ->
+                        match nb with 
+                        | Leaf _ -> 
+                            yield! diffRefA pa ba npa kb_min nb
+                        | Inner (pb,bb,npb) ->
+                            if (ba < bb) then
+                                yield! diffRefB ka_min na pb bb npb
+                            else if(bb < ba) then
+                                yield! diffRefA pa ba npa kb_min nb
+                            else
+                                assert ((pa = pb) && (ba = bb))
+                                if refEq npa npb then () else
+                                let struct(nal,nar) = loadMerged' pa ba npa
+                                let struct(nbl,nbr) = loadMerged' pb bb npb
+                                yield! diffRef nal nbl
+                                yield! diffRef nar nbr
+            }
+
+        and private diffRefB ka na pb bb npb =
+            assert((pb = prefix ka bb) && (below bb na))
+            let struct(nbl,nbr) = loadMerged' pb bb npb
+            if testCritbit ka bb 
+                then Seq.append (seqInR nbl) (diffRef na nbr)
+                else Seq.append (diffRef na nbl) (seqInR nbr)
+        and private diffRefA pa ba npa kb nb =
+            assert((pa = prefix kb ba) && (below ba nb))
+            let struct(nal,nar) = loadMerged' pa ba npa
+            if testCritbit kb ba
+                then Seq.append (seqInL nal) (diffRef nar nb)
+                else Seq.append (diffRef nal nb) (seqInL nar)
+
         // monotonic key suffixes
         let private validKeySuffix b node =
             let limit = (1UL <<< int b) 
@@ -454,109 +535,32 @@ module IntMap =
     let ofArray (a: (Key * 'V) array) : Tree<'V> =
         Array.fold (fun t (k,v) -> add k v t) empty a
 
+    /// Conservative difference of two trees based on reference equality
+    /// at inner tree nodes, including secure hash comparisons and memory
+    /// reference equality. Values are not compared! This offers benefits
+    /// for comparing persistent data structures with a few differences.
+    let diffRef (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
+        match a with
+        | Some na ->
+            match b with
+            | Some nb -> Node.diffRef na nb
+            | None    -> Node.seqInL na 
+        | None ->
+            match b with
+            | Some nb -> Node.seqInR nb
+            | None    -> Seq.empty
+        
 
-    module EnumDiff =
-        type Stack<'V> = Node<'V> list // key fully merged in node
-        type Elem<'V> = (Key * VDiff<'V>)
-        type State<'V> = (Elem<'V> option * (Stack<'V> * Stack<'V>))
+    let private trueDiff vd =
+        match vd with
+        | InB (l,r) -> (l <> r) 
+        | _ -> true
 
-        let iniStack t = Option.toList t
-        let iniState (a:Tree<'V>) (b:Tree<'V>) : State<'V> = 
-            (None, (iniStack a, iniStack b))
+    /// Precise value differences. Filters diffRef with value comparisons.
+    let diff a b = diffRef a b |> Seq.filter (snd >> trueDiff)
 
-        // load + keys merged
-        let split p b np = 
-            let struct(l,r) = Node.load' np
-            let l' = Node.mergeL p b l
-            let r' = Node.mergeR p b r
-            struct(l',r')
-
-        // step to next leaf value (if any)
-        let rec stepV n s =
-            match n with
-            | Leaf (k,v) -> struct(k,v,s)
-            | Inner (p,b,np) ->
-                let struct(l,r) = split p b np
-                stepV l (r::s)
-
-        let refEQ npa npb = // shallow reference equivalence
-            if (System.Object.ReferenceEquals(npa,npb)) then true else
-            match (npa,npb) with
-            | (Remote ra, Remote rb) -> (ra = rb) // stowage equivalence
-            | _ -> false
-
-        let rec stepDiff sa sb =
-            match sa with
-            | [] -> 
-                match sb with
-                | (nb::moreb) ->
-                    let struct(kb,vb,sb') = stepV nb moreb
-                    (Some(kb, InR vb), ([], sb'))
-                | [] -> (None, ([],[]))
-            | (Leaf(ka,va)::sa') -> 
-                match sb with
-                | (nb::moreb) ->
-                    let struct(kb,vb,sb') = stepV nb moreb
-                    stepDiffK ka va sa' kb vb sb'
-                | [] -> (Some(ka, InL va), (sa', []))
-            | (Inner(pa,ba,npa)::sa') ->
-                match sb with
-                | (Inner(pb,bb,npb)::sb') when (bb >= ba) ->
-                    let obviousEq = (ba = bb) && (pa = pb) && (refEQ npa npb)
-                    if obviousEq then stepDiff sa' sb' else
-                    let struct(lb,rb) = split pb bb npb
-                    stepDiff sa (lb::rb::sb')
-                | _ ->
-                    let struct(la,ra) = split pa ba npa
-                    stepDiff (la::ra::sa') sb
-        and stepDiffK ka va sa kb vb sb =
-            if (ka < kb) then
-                (Some (ka, InL va), (sa, Leaf(kb,vb)::sb))
-            else if (kb < ka) then
-                (Some (kb, InR vb), (Leaf(ka,va)::sa, sb))
-            else if (va <> vb) then
-                (Some (ka, InB(va,vb)), (sa, sb))
-            else stepDiff sa sb
-
-        type Enumerator<'V when 'V : equality>(s:State<'V>) =
-            member val private ST = s with get, set
-            member e.Peek() : Elem<'V> =
-                match fst e.ST with
-                | Some elem -> elem
-                | None -> invalidOp "no element"
-            interface System.Collections.Generic.IEnumerator<Elem<'V>> with
-                member e.Current with get() = e.Peek()
-            interface System.Collections.IEnumerator with
-                member e.Current with get() = upcast e.Peek()
-                member e.MoveNext() =
-                    let (l,r) = snd e.ST
-                    e.ST <- stepDiff l r
-                    Option.isSome (fst e.ST)
-                member e.Reset() = raise (System.NotSupportedException())
-            interface System.IDisposable with
-                member e.Dispose() = ()
-            
-        type Enumerable<'V when 'V : equality> =
-            val private L : Tree<'V>
-            val private R : Tree<'V>
-            new(l,r) = { L = l; R = r }
-            member e.GetEnum() = new Enumerator<'V>(iniState (e.L) (e.R))
-            interface System.Collections.Generic.IEnumerable<Elem<'V>> with
-                member e.GetEnumerator() = upcast e.GetEnum()
-            interface System.Collections.IEnumerable with
-                member e.GetEnumerator() = upcast e.GetEnum()
-
-    /// Structural Difference of IntMap Trees
-    ///
-    /// This function leverages reference equality for both Stowage secure
-    /// hashes and .Net object references to filter subtrees at splits if
-    /// feasible. This assumes equal binaries correspond to equal values.
-    let diff<'V when 'V : equality> (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
-        upcast (EnumDiff.Enumerable(a,b))
-
-    /// Deep structural equality for Trees. (Tests for diff.)
-    let deepEq<'V when 'V : equality> (a:Tree<'V>) (b:Tree<'V>) : bool = 
-        Seq.isEmpty (diff a b)
+    /// Deep structural equality for Trees. Basically tests for diff.
+    let deepEq a b = Seq.isEmpty (diff a b)
 
     // TODO: effective support for union-merge. Ideally something better
     // than just folding over a diff.
