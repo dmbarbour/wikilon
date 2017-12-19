@@ -288,13 +288,9 @@ module IntMap =
             }
 
 
-        let seqInL n = toSeq 0UL n |> Seq.map (fun (k,v) -> (k, InL v))
-        let seqInR n = toSeq 0UL n |> Seq.map (fun (k,v) -> (k, InR v))
+        let seqInL kp n = toSeq kp n |> Seq.map (fun (k,v) -> (k, InL v))
+        let seqInR kp n = toSeq kp n |> Seq.map (fun (k,v) -> (k, InR v))
 
-        let inline private loadMerged' p b np =
-            let struct(kl,kr) = keyPrefixes 0UL p b
-            let struct(nl,nr) = load' np
-            struct(mergeKP kl nl, mergeKP kr nr)
 
         let inline private refEq npa npb =
             if System.Object.ReferenceEquals(npa,npb) then true else
@@ -302,78 +298,93 @@ module IntMap =
             | (Remote ra, Remote rb) -> (ra = rb)
             | _ -> false
 
-        let keyRange node =
+        let keyRange kp node =
             match node with
-            | Leaf (k,_) -> struct(k,k)
+            | Leaf (ks,_) -> 
+                let k = kp ||| ks
+                struct(k,k)
             | Inner (p,b,_) ->
-                let kmin = keyPrefixL p b
+                let kmin = kp ||| (keyPrefixL p b)
                 let cb = 1UL <<< int b
                 let kmax = kmin ||| cb ||| (cb - 1UL)
                 struct(kmin,kmax)
 
-        let below cb node =
+        let private nodeInRight kp node cb =
             match node with
-            | Leaf _ -> true
-            | Inner (_,b,_) -> (b < cb)
+            | Leaf (kf,_) -> testCritbit (kp ||| kf) cb
+            | Inner (p,b,_) -> 
+                assert(b < cb) // cannot place nodes out of critbit order
+                let kmin = kp ||| (keyPrefixL p b)
+                testCritbit kmin cb
 
         // reference-equality based diff, including equality for
         // stowage resources, intended to minimize observation of nodes.
-        let rec diffRef na nb =
+        let rec diffRef kpa na kpb nb =
+            // filter the most obviously equivalent nodes
+            let eq = (kpa = kpb) && System.Object.ReferenceEquals(na,nb)
+            if eq then Seq.empty else
             seq {
-                let struct(ka_min,ka_max) = keyRange na
-                let struct(kb_min,kb_max) = keyRange nb
+                // trivial case for non-overlapping keys
+                let struct(ka_min,ka_max) = keyRange kpa na
+                let struct(kb_min,kb_max) = keyRange kpb nb
                 if (ka_max < kb_min) then
-                    yield! seqInL na
-                    yield! seqInR nb
+                    yield! seqInL kpa na
+                    yield! seqInR kpb nb
                 else if(kb_max < ka_min) then
-                    yield! seqInR nb
-                    yield! seqInL na
+                    yield! seqInR kpb nb
+                    yield! seqInL kpa na
+                // otherwise, handle key overlaps
                 else
                     match na with
                     | Leaf (_,va) ->
                         match nb with
                         | Leaf (_,vb) -> 
-                            assert (ka_min = kb_min)
+                            // we don't compare values here
                             yield (ka_min, InB (va,vb))
                         | Inner (pb,bb,npb) -> 
-                            yield! diffRefB ka_min na pb bb npb
+                            yield! diffRefSplitB kpa na kpb pb bb npb
                     | Inner (pa,ba,npa) ->
                         match nb with 
                         | Leaf _ -> 
-                            yield! diffRefA pa ba npa kb_min nb
+                            let inR = testCritbit kb_min ba
+                            yield! diffRefSplitA kpa pa ba npa kpb nb 
                         | Inner (pb,bb,npb) ->
+                            // split node with larger critbit
                             if (ba < bb) then
-                                yield! diffRefB ka_min na pb bb npb
+                                yield! diffRefSplitB kpa na kpb pb bb npb
                             else if(bb < ba) then
-                                yield! diffRefA pa ba npa kb_min nb
-                            else
-                                assert ((pa = pb) && (ba = bb))
+                                yield! diffRefSplitA kpa pa ba npa kpb nb 
+                            else // overlap keys with same critbit 
+                                // only possible if prefixes match
+                                assert ((kpa = kpb) && (pa = pb))
                                 if refEq npa npb then () else
-                                let struct(nal,nar) = loadMerged' pa ba npa
-                                let struct(nbl,nbr) = loadMerged' pb bb npb
-                                yield! diffRef nal nbl
-                                yield! diffRef nar nbr
+                                let struct(kpl,kpr) = keyPrefixes kpa pa ba
+                                let struct(nal,nar) = load' npa
+                                let struct(nbl,nbr) = load' npb
+                                yield! diffRef kpl nal kpl nbl
+                                yield! diffRef kpr nar kpr nbr
             }
 
-        and private diffRefB ka na pb bb npb =
-            assert((pb = prefix ka bb) && (below bb na))
-            let struct(nbl,nbr) = loadMerged' pb bb npb
-            if testCritbit ka bb 
-                then Seq.append (seqInR nbl) (diffRef na nbr)
-                else Seq.append (diffRef na nbl) (seqInR nbr)
-        and private diffRefA pa ba npa kb nb =
-            assert((pa = prefix kb ba) && (below ba nb))
-            let struct(nal,nar) = loadMerged' pa ba npa
-            if testCritbit kb ba
-                then Seq.append (seqInL nal) (diffRef nar nb)
-                else Seq.append (diffRef nal nb) (seqInL nar)
+        and private diffRefSplitB kpa na kpb pb bb npb =
+            let struct(kbl,kbr) = keyPrefixes kpb pb bb
+            let struct(nbl,nbr) = load' npb
+            if nodeInRight kpa na bb
+                then Seq.append (seqInR kbl nbl) (diffRef kpa na kbr nbr)
+                else Seq.append (diffRef kpa na kbl nbl) (seqInR kbr nbr)
+        and private diffRefSplitA kpa pa ba npa kpb nb =
+            let struct(kal,kar) = keyPrefixes kpa pa ba
+            let struct(nal,nar) = load' npa
+            if nodeInRight kpb nb ba
+                then Seq.append (seqInL kal nal) (diffRef kar nar kpb nb)
+                else Seq.append (diffRef kal nal kpb nb) (seqInL kar nar)
 
         // monotonic key suffixes
         let private validKeySuffix b node =
             let limit = (1UL <<< int b) 
             match node with
             | Leaf (k,_) -> (limit > k)
-            | Inner (pn,bn,_) -> ((prefix limit bn) > pn)
+            | Inner (pn,bn,_) -> 
+                (b > bn) && ((prefix limit bn) > pn)
 
         let rec validate node =
             match node with
@@ -539,15 +550,18 @@ module IntMap =
     /// at inner tree nodes, including secure hash comparisons and memory
     /// reference equality. Values are not compared! This offers benefits
     /// for comparing persistent data structures with a few differences.
+    ///
+    /// Note: The precision for this comparison is relatively low. You will
+    /// need additional filters on the resulting sequence.
     let diffRef (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
         match a with
         | Some na ->
             match b with
-            | Some nb -> Node.diffRef na nb
-            | None    -> Node.seqInL na 
+            | Some nb -> Node.diffRef 0UL na 0UL nb
+            | None    -> Node.seqInL 0UL na 
         | None ->
             match b with
-            | Some nb -> Node.seqInR nb
+            | Some nb -> Node.seqInR 0UL nb
             | None    -> Seq.empty
         
 

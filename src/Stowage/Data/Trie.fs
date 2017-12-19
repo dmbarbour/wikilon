@@ -319,9 +319,97 @@ module Trie =
             let cs' = IntMap.add ix c' (t.children)
             { t with children = cs' }
         | None -> t
-        
+
+
+    // divide a node at a given index in the prefix. This will
+    // result in an equivalent tree, albeit an invalid one with
+    // one linear child. Used temporarily to simplify diffs.
+    let inline private splitPrefixAt n t =
+        assert (n < BS.length t.prefix)
+        let c = { t with prefix = (BS.drop (n+1) (t.prefix)) }
+        let ix = uint64 (t.prefix.[n])
+        { prefix = BS.take (n) (t.prefix)
+          value = None
+          children = IntMap.singleton ix c
+        }
+
+
+    let inline private seqInL t = toSeq t |> Seq.map (fun (k,v) -> (k, InL v))
+    let inline private seqInR t = toSeq t |> Seq.map (fun (k,v) -> (k, InR v))
+
+    // notes: currently I simply use splitPrefixAt to align nodes and
+    // retry when one key is fully matched.
+    let rec diffRef' (p:ByteString) (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
+        seq {
+            let n = bytesShared (a.prefix) (b.prefix)
+            if (n < (BS.length a.prefix)) then
+                if (n < (BS.length b.prefix)) then
+                    // keys in tree fully diverge at offset `n`
+                    let a' = addPrefix p a
+                    let b' = addPrefix p b
+                    if (a.prefix.[n] < b.prefix.[n]) 
+                        then yield! Seq.append (seqInL a') (seqInR b')
+                        else yield! Seq.append (seqInR b') (seqInL a')
+                else yield! diffRef' p (splitPrefixAt n a) b 
+            else if (n < (BS.length b.prefix)) then
+                yield! diffRef' p a (splitPrefixAt n b)
+            else // tree keys match at current node
+                let p' = BS.append p (a.prefix)
+                // potentially yield value at this node.
+                match a.value with
+                | None ->
+                    match b.value with
+                    | None -> ()
+                    | Some vb -> yield (p', InR vb)
+                | Some va ->
+                    match b.value with 
+                    | None -> yield (p', InL va)
+                    | Some vb ->
+                        // leveraging reference comparisons on Option types
+                        let eq = System.Object.ReferenceEquals(a.value, b.value)
+                        if eq then () else yield (p', InB (va,vb))
+                // yield diffs for child nodes
+                for (ix,cd) in IntMap.diffRef (a.children) (b.children) do
+                    assert (ix < 256UL)
+                    match cd with
+                    | InL ca -> 
+                        let p' = joinBytes p (byte ix) (ca.prefix)
+                        let ca' = { ca with prefix = p' }
+                        yield! seqInL ca'
+                    | InR cb ->
+                        let p' = joinBytes p (byte ix) (cb.prefix)
+                        let cb' = { cb with prefix = p' }
+                        yield! seqInR cb'
+                    | InB (ca,cb) ->
+                        if System.Object.ReferenceEquals(ca,cb) then () else
+                        yield! diffRef' (BS.snoc p (byte ix)) ca cb
+        } // end seq
+                        
+
+
+    /// Conservative difference based on reference equality of nodes.
+    /// This does not compare values directly, but will filter subtrees
+    /// based on equivalent secure hashes or memory references.
+    ///
+    /// This can help for fast diffs given small persistent updates to
+    /// a tree structure.
+    let diffRef a b = 
+        if System.Object.ReferenceEquals(a,b) then Seq.empty else
+        if isEmpty a then seqInR b else
+        if isEmpty b then seqInL a else
+        diffRef' (BS.empty) a b 
+
+    let private trueDiff vd =
+        match vd with
+        | InB (l,r) -> (l <> r) 
+        | _ -> true
+
+    /// Precise value differences. Filters diffRef with value comparisons.
+    let diff a b = diffRef a b |> Seq.filter (snd >> trueDiff)
+
+
+
     // TODO:
-    // - efficient structural diffs (low priority)
     // - efficient tree merges 
 
     module Enc =
