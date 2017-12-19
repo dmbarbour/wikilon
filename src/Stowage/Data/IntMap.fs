@@ -322,46 +322,44 @@ module IntMap =
             // filter the most obviously equivalent nodes
             let eq = (kpa = kpb) && System.Object.ReferenceEquals(na,nb)
             if eq then Seq.empty else
-            // trivial case for non-overlapping keys. 
-            let struct(ka_min,ka_max) = keyRange kpa na
-            let struct(kb_min,kb_max) = keyRange kpb nb
-            if (ka_max < kb_min) then
-                Seq.append (seqInL kpa na) (seqInR kpb nb)
-            else if(kb_max < ka_min) then
-                Seq.append (seqInR kpb nb) (seqInL kpa na)
-            else diffRefOverlapped kpa na kpb nb
-
-        and private diffRefOverlapped kpa na kpb nb =
-            match na with
-            | Leaf (_,va) ->
-                match nb with
-                | Leaf (ksb,vb) ->
-                    Seq.singleton ((kpb ||| ksb), InB (va,vb))
-                | Inner (pb,bb,npb) -> 
-                    diffRefSplitB kpa na kpb pb bb npb
-            | Inner (pa,ba,npa) ->
-                match nb with 
-                | Leaf _ -> 
-                    diffRefSplitA kpa pa ba npa kpb nb 
-                | Inner (pb,bb,npb) ->
-                    // split node with larger critbit
-                    if (ba < bb) then
-                        diffRefSplitB kpa na kpb pb bb npb
-                    else if(bb < ba) then
-                        diffRefSplitA kpa pa ba npa kpb nb 
-                    else // overlap keys with same critbit 
-                        // only possible if prefixes match
-                        assert ((kpa = kpb) && (pa = pb))
-                        if refEq npa npb then Seq.empty else
-                        seq {
-                            let struct(kpl,kpr) = keyPrefixes kpa pa ba
-                            let struct(nal,nar) = load' npa
-                            let struct(nbl,nbr) = load' npb
-                            printfn "keys-l %A b %A" kpl ba
-                            yield! diffRef kpl nal kpl nbl
-                            printfn "keys-r %A b %A" kpr ba
-                            yield! diffRef kpr nar kpr nbr
-                        }
+            seq {
+                // detect non-overlapping keys to simplify code
+                let struct(ka_min,ka_max) = keyRange kpa na
+                let struct(kb_min,kb_max) = keyRange kpb nb
+                if (ka_max < kb_min) then
+                    yield! seqInL kpa na 
+                    yield! seqInR kpb nb
+                else if(kb_max < ka_min) then
+                    yield! seqInR kpb nb
+                    yield! seqInL kpa na
+                // otherwise handle overlapping keys
+                else 
+                    match na with
+                    | Leaf (_,va) ->
+                        match nb with
+                        | Leaf (ksb,vb) ->
+                            yield ((kpb ||| ksb), InB (va,vb))
+                        | Inner (pb,bb,npb) -> 
+                            yield! diffRefSplitB kpa na kpb pb bb npb
+                    | Inner (pa,ba,npa) ->
+                        match nb with 
+                        | Leaf _ -> 
+                            yield! diffRefSplitA kpa pa ba npa kpb nb 
+                        | Inner (pb,bb,npb) ->
+                            // split node with larger critbit
+                            if (ba < bb) then
+                                yield! diffRefSplitB kpa na kpb pb bb npb
+                            else if(bb < ba) then
+                                yield! diffRefSplitA kpa pa ba npa kpb nb 
+                            else // overlap keys with same critbit.
+                                // The two paths have identical keys. 
+                                if refEq npa npb then () else
+                                let struct(kpl,kpr) = keyPrefixes kpa pa ba
+                                let struct(nal,nar) = load' npa
+                                let struct(nbl,nbr) = load' npb
+                                yield! diffRef kpl nal kpl nbl
+                                yield! diffRef kpr nar kpr nbr
+            }
 
         and private diffRefSplitB kpa na kpb pb bb npb =
             let struct(kbl,kbr) = keyPrefixes kpb pb bb

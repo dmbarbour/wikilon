@@ -202,19 +202,35 @@ let ``trie access and removal`` () =
 
 [<Fact>]
 let ``efficient intmap diffs`` () =
-    let t0 = seq { for i = 1 to 3 do yield i }
-                 |> Seq.map (fun i -> (uint64 i, i))
+    let t0 = seq { for i = 1 to 300 do yield i }
+                 |> Seq.map (fun i -> (uint64 i, 0))
                  |> IntMap.ofSeq
-(*    let inc k t =
-        let v0 = 
-            match IntMap.tryFind (uint64 k) t with
-            | Some v -> v
-            | None -> 0
-        IntMap.add (uint64 k) (v0 + 1) t
-*)
+    let add k t = IntMap.add (uint64 k) k t
     let rem k t = IntMap.remove (uint64 k) t
-    printfn "rem1a: %A" (IntMap.diffRef (t0 |> rem 1) t0)
-    //printfn "rem1b: %A" (IntMap.diffRef t0 (t0 |> rem 1))
+    let t1 = t0 |> add 11 |> add 12 |> add 13
+                |> add 20 |> add 22 |> add 24
+                |> add 31 |> add 34 |> add 37
+                |> add 40 |> add 44 |> add 48
+    let t2 = t1 |> rem 51 |> rem 52 |> rem 53
+                |> rem 60 |> rem 62 |> rem 64
+                |> rem 71 |> rem 74 |> rem 77
+                |> rem 80 |> rem 84 |> rem 88
+    let t3 = t2 |> add 100 |> rem 101 |> add 102
+                |> rem 111 |> add 112 |> rem 113
+                |> add 120 |> rem 122 |> add 124
+                |> rem 131 |> add 133 |> rem 135
+
+    let d1 = Seq.length (IntMap.diffRef t0 t1)
+    Assert.True(d1 < 36)
+    Assert.Equal(d1, Seq.length (IntMap.diffRef t1 t0))
+
+    let d2 = Seq.length (IntMap.diffRef t1 t2)
+    Assert.True(d2 < 36)
+    Assert.Equal(d2, Seq.length (IntMap.diffRef t2 t1))
+
+    let d3 = Seq.length (IntMap.diffRef t2 t3)
+    Assert.True(d3 < 36)
+    Assert.Equal(d3, Seq.length (IntMap.diffRef t3 t2))
 
 
 // a fixture is needed to load the database
