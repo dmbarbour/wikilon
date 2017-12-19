@@ -200,6 +200,21 @@ let ``trie access and removal`` () =
     Assert.Equal(None, lu 110 t2)
     
 
+[<Fact>]
+let ``efficient intmap diffs`` () =
+    let t0 = seq { for i = 1 to 3 do yield i }
+                 |> Seq.map (fun i -> (uint64 i, i))
+                 |> IntMap.ofSeq
+(*    let inc k t =
+        let v0 = 
+            match IntMap.tryFind (uint64 k) t with
+            | Some v -> v
+            | None -> 0
+        IntMap.add (uint64 k) (v0 + 1) t
+*)
+    let rem k t = IntMap.remove (uint64 k) t
+    printfn "rem1a: %A" (IntMap.diffRef (t0 |> rem 1) t0)
+    //printfn "rem1b: %A" (IntMap.diffRef t0 (t0 |> rem 1))
 
 
 // a fixture is needed to load the database
