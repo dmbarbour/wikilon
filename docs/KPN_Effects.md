@@ -20,9 +20,11 @@ But reactive and dynamic behavior requires some attention.
 
 ## Reactive
 
-Reactivity is not a built-in feature of KPNs, but can be supported indirectly by adding a simple time model to our KPNs. The simplest option, perhaps, is to rewrite every message type from `a` to `(Tick + a)` where a `Wait` indicates passage of time. A little extra logic upon read could handle the waits and forward to output channels. 
+Reactivity is not a built-in feature of KPNs, but can be supported indirectly by adding a simple time model to our KPNs. The simplest option, perhaps, is to modify every message type from `a` to `(Tick + a)` such that we can express waiting on a message until time advances on a pipeline.
 
-Hence, the fundamental KPN structure doesn't need to change.
+## Pushback
+
+Pushback is when sending a message causes a process to wait, in order to limit the number of pending messages. KPNs don't usually have pushback, but it's a useful constraint for limiting memory usage. It's easiest to explicitly model pushback via explicit acknowledgement channels, rather than adding them to the model directly. That is, after sending we await acknowledgement - but we can start with a few 'acks' already in the queue to represent bounded buffer channels.
 
 ## Dynamic
 

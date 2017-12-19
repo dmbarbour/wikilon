@@ -1,42 +1,27 @@
 
 # Kahn Process Networks in Awelon
 
-[Awelon language](AwelonLang.md) is purely functional. Although purely functional code permits a lot of simple fork-join parallelism, it presents a challenge for the sort distributed parallel computation that requires a lot of message routing. Routing of messages becomes a form of centralized computation without a lot of fine-grained parallelism. To resolve this, my current intention is to borrow inspiration from a deterministic concurrency model such as [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks). KPNs are also very useful as a potential [effects model](KPN_Effects.md).
+[Awelon language](AwelonLang.md) is purely functional. Although purely functional code permits a lot of simple fork-join parallelism, it presents a challenge for distributed parallel computation, modeling of parallel pipelines and so on. Mostly, the issue regards routing of messages. A purely functional representation of routing will be relatively deterministic and centralized, so it's difficult to leverage arrival-order non-determinism (race conditions) to improve parallelism. 
 
-My current intention is to work with KPNs via accelerated functions. But it is tempting to accept KPNs as the foundation for the Awelon project programming language, assuming appropriate rewrite rules can be discovered. What would this look like?
+To resolve this, my current intention is to borrow inspiration from a deterministic concurrency model - especially one such as [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) that does not require external effects to model channels or single-assignment variables. 
 
-## Data Extraction Primitive? Reject.
+KPNs are also very useful as a potential [effects model](KPN_Effects.md) and process or application model, essentially capable of representing monads and comonads with multiple IO ports. KPNs support reactive or real-time systems by adding a simple time model, e.g. the ability to deliver `Tick + a` messages on every channel instead of just `a` messages. Pushback can also be modeled explicitly by adding acknowledgement feedback messages to the downstream processes.
 
-One feature of KPNs is that we can extract outputs monotonically. We might represent this in Awelon by introducing an operator `e`:
+## Single Assignment Placeholders
 
-        [B[A]]e == [B][A]       (extract)
+We can conceptually model single assignment variables using pseudo-words:
 
-The extraction operation does enable us to represent non-terminating computations within `B` that will consume any number of inputs to produce any number of outputs - a lot like a single input channel coupled to a single output channel. This is incomplete for KPNs. We need more than one channel. I've contemplated this operator before, but it seems wiser to simply require programmers to model explict result-continuation pairs, explicit input-output frames.
+        [A] /put_K =>       (single assignment)
+        /get_K => [A]       (after assignment)
 
-## Explicit, Effectful Channels? Reject.
+Awelon doesn't support single assignment variables directly, but an optimizer or interpreter could presumably introduce placeholders to improve parallelism. In particular, `\get_K` may behave as a value word to be delivered through a computation in parallel with the computation that produces the final value `[A]`.
 
-The Oz programming language has an interesting feature: variables are declared and assigned separately. The variables are single-assignment, but this is essentially a single-assignment channel. From this, we can define multiple-input channels by creating a variable for each input. For example:
+Using this technique, we can shift some computations (specifically those with a known output type) into a separate "parallel region" such that the parallel region will ultimately have an identity behavior. 
 
-        [[A0] [[A1] [[A2] [{A_REM}] cons] cons] cons]
+        [Expr](par)(t2) =>  [/get_1 /get_2]         (locally)
+                            Expr /put_2 /put_1      (parallel region)
 
-Here `{A_REM}` would be a hole to be filled concurrently with `null` or `[A3] [{A_REM'}] cons`. In the latter case, we can add more to the channel. Hence, we could model full channels using single-assignment channels. 
-
-Potentially, we could augment data extraction to instead create holes:
-
-        [A]e => [A {:Hole}] [{.Hole}]
-        [A]{:Hole} B [{.Hole}] => B [A]
-
-Here `{:Hole}` would be the assignment side of a hole, while `{.Hole}` would be the observer side. This acts as a wormhole of sorts to move data instantly. With this, we could represent first-class holes using `[]e`. Unfortunately, there are many difficulties with first-class holes. It's the same problem of "new" things in general - we need a global context to name the holes, and we cannot consider computations to be referentially transparent because `[]e` will create a distinct hole at each place it is used.
-
-If we take this route, the Awelon language would naturally be effectful. Although this is simpler than many impure functional programming language effects models, it is a semantic complication I'd rather avoid. However, I mostly describe it as a basis for discussing *Implicit Channels*.
-
-## Implicit Channels
-
-If we reject modeling channels or holes explicitly, perhaps we can still have them implicitly, leveraging annotations. For example, given code of form `[P](t2)` we know it must evaluate to a pair, i.e. `P =>* [A][B]`. A parallel interpreter could feasibly produce placeholders for `[A][B]` before `P` even finishes evaluation. We might indicate this by combining `(t2)` and `(par)`.
-
-        [P](par)(t2) => [[P{:B}{:A}](proc)d[{.A}][{.B}]]
-
-Here `(proc)` suggests we must evaluate to a unit/identity behavior with assignment effects. A potential concern is that `P` might not complete evaluation - we might halt on a quota or error. Fortunately, we can recover by writing `P` back into our program and using a simple extraction algorithm to erase holes:
+We'll create fresh variables as needed, i.e. very `/put_K` will use a distinct `K`. If computation terminates successfully, all of these put and get pseudo-words should be eliminated. However, if we halt due to error or quota, we may need to extract these placeholders. This can be achieved via simple value extraction algorithm:
 
         T(X,E) - extract variable X from E
            X T(X,E) == E
@@ -48,33 +33,24 @@ Here `(proc)` suggests we must evaluate to a unit/identity behavior with assignm
             when only G has X => [F]a T(X,G)
             when both have X => c [T(X,F)] a T(X,G)
 
-Implicit placeholders hence have the nice properties of not requiring new features and being fully eraseable. The ability to work with placeholder results allows more parallelism opportunities compared to `(par)` alone. 
+Essentially, we can prefix incomplete parallel computations onto our programs then rewrite them back to equivalent inline programs.
 
-Unfortunately, it is not obvious how to leverage this technique to represent KPN-style message routing. We cannot route message conditionally! However, we could try *KPN Message Batching*. 
+## Stable Frame Routing
 
-## KPN Message Batching
+To model routing of messages, one option is to process available messages in large "frames", touching every channel even if no message is available for that frame. Doing so naively is inefficient but does have potential advantages for batching and especially for routing of *placeholders* because we don't need to know anything about the potential messages before we route them.
 
-I know at least two ways to represent a message between KPN processes.
+An interesting possibility is to leverage knowledge about stable routes such that we only need to route placeholders once for a frame then deliver multiple times by reusing the existing routes. Essentially, routes become `/put_K` and `/get_K` pairs reusable across multiple update frames without explicitly performing the data plumbing each time. 
 
-* variant that selects a port and carries one message
-* record of optional messages, one label is activated
+## Identity Frames and Fixpoints
 
-The variant approach is more efficient. However, the latter representation is a lot more friendly for implicit channels and placeholders because it enables "blind" routing of messages without even knowing which output port was used. We'll only need to filter `None` messages eventually when we try to observe the next message on a port.
+A KPN won't update further when no messages are added. Essentially, we have a clear fixpoint condition - something easy to check dynamically, and potentially to verify statically. Evaluation of KPNs will always proceed to this fixpoint. Knowing this condition, we can optimize by avoiding routing to a subnetwork when there are no messages. More importantly, we can support "race conditions" within the KPN so long as we clearly determine which subnets might update.
 
-Further, the record of optional messages is trivially upgraded to a record of message lists, such that we can route entire batches of messages. This batching could mitigate many inefficiencies from blindly flooding every route.
+However, we might need to pay attention to representation of pending messages to ensure this fixpoint behavior. For example, we might need to know we're appending lists.
 
-Evaluation of KPNs in this case could be frame-driven. In each frame:
+If we route stable frames in a fixpoint loop, with a clear halting condition, we'll have the essence of KPNs.
 
-* every process receives a batch of messages on every port
-* we immediately produce placeholders for process outputs
-* in parallel, every process evaluates as far as it can
-* in parallel, we route placeholders to produce more inputs
+## Acceleration
 
-We must also limit how a process awaits messages to remove frame aliasing. But we would get a nice structural enforcement that routes are linear. 
+Ideally, acceleration of KPNs in Awelon shouldn't rely too much on a specialized KPN data structure. We could do that, but I'd prefer something more generalized based on lightweight static analysis involving stable routes and identity frames.
 
-## Static Route Acceleration
-
-Routing placeholders on each evaluation frame is rather wasteful. But with KPNs, each evaluation frame has the same basic structure and shape. It seems feasible that we could perform some sort of logical fixpoint where we route sample placeholders only once and then pretend each future frame looks a lot like the previous (albeit, with each hole identifier including an implicit frame number).
-
-This would be interesting, because it would generalize KPN acceleration to any static, frame-driven routes within a fixpoint evaluation. This is a promising approach, although the details still escape me. Importantly, static routing is exactly where we benefit for distributed computations.
 

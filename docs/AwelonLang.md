@@ -454,29 +454,31 @@ Label functions can be typed based on row-polymorphic records:
         :a  : {R without a} [A] → {R, a:[A]}
         .a  : S [{} → {R, a:[A]}] → S [A] [{} → {R}]
 
-Conditional behavior requires special attention. In Awelon, we use Church-encodings. For example, the basic sum type `(A+B)` is encoded as a function of type `∀r.(A→r)→(B→r)→r`. It is difficult to infer locally that our sum must be parametric in `r` and have similar input arities. We can leverage a few 'typed identity' annotations to address this.
+Conditional behavior requires special attention. In Awelon, we use Church-encodings. For example, the basic sum type `(A+B)` is encoded as a function of type `∀r.(A→r)→(B→r)→r`. It is difficult to infer locally that our sum must be parametric in `r` and have similar input arities. We can leverage a few annotations to address this.
 
         (choice) : S [S → S'] [S → S']
         (option) : S [S → S'] [S V → S']
-        (either) : S [S A → S'] [S B → S']
-        (switch) : S [{} → {a:[S A → S'], b:[S B → S', ...}]
+        (either) : S [S [A] → S'] [S [B] → S']
+        (switch) : S [{} → {a:[S [A] → S'], b:[S [B] → S', ...}]
 
 Annotations can also augment static type analysis with hints, value sealers, substructural types, multi-stage programming, and so on. 
 
 ### Staged and Deferred Typing
 
-Consider the `pick` function from Forth, which copies an element from the stack at a depth based on a given natural number. Although `pick` isn't very interesting, it can be taken as an example of metaprogramming.
+Consider the `pick` function from Forth, which copies an element from the stack at a depth based on a given natural number. 
 
         [Vk]..[V1][V0] k pick == [Vk]..[V1][V0][Vk]
 
-A static type for `pick` would require a sophisticated, dependent type system. However, for `3 pick` it is feasible to compute a simple static type. Trivially, we could define `pick` such that `3 pick` statically expands into a program `[] b b b w c [w a] a`, where the number of sequential `b` operations is based on the specific value `3`. We need only to defer type inference until after this expansion.
+Although `pick` isn't very interesting, it is difficult to provide a simple static type. We could feasibly leverage dependent types, but that would not be simple. However, for `3 pick` it is feasible to compute a simple static type. Trivially, we could define `pick` such that `3 pick` statically expands into a program `[] b b b w c [w a] a`, where the number of sequential `b` operations is based on the specific value `3`. We need only to defer type analysis until after expansion. 
 
-Delay of type analysis until after performing some useful evaluations should not be unfamiliar to users of preprocessors, macro systems, or template metaprogramming in conventional languages. It's simple, powerful, and convenient. For Awelon, we don't need a separate layer or feature for partial evaluations. But having some means to inform our type analysis system of our intentions is quite useful. I propose two annotations:
+Delay of type analysis until after partial evaluation should be familiar to users of preprocessors, macro systems, or template metaprogramming in more conventional programming languages. The feature is simple, powerful, and convenient. Due to Awelon's local rewriting semantics, we don't require special support for partial evaluations. But we do need some means to describe our intentions and provide feedback in the form of fast failure. I propose two annotations:
 
         [F](dyn) == [F]     
         [F](stat) == [F]    iff F does not contain (dyn)
 
-A definition of `pick` could have the form `[pick body here]b(dyn)i`. The `(dyn)` annotation simply tells our static type analysis tools to suppress complaints due to incomplete type inference. Recognized type errors should still be reported. Meanwhile, `(stat)` would enable us to scope use of dynamic structure and enforce clean boundaries or staging between macros and normal functions.
+A definition of `pick` could have the form `[pick body here]b(dyn)i`. The `(dyn)` annotation simply tells our static type analysis tools to suppress complaints due to incomplete type inference. Obvious type errors should still be reported. Meanwhile, `(stat)` would enable us to scope use of dynamic behavior. For example, this would allow us to suppress use of macros at runtime for a given subprogram.
+
+*Aside:* There are similarities to the `(now)` and `(later)` annotations proposed for multi-stage programming. However, there is no implicit constraint against dynamic behavior, and a significant volume of a dictionary may have dynamic behavior if developers are not careful to scope its use.
 
 ### Termination Analysis
 
