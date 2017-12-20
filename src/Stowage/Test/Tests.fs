@@ -219,6 +219,9 @@ let ``efficient intmap diffs`` () =
                 |> rem 111 |> add 112 |> rem 113
                 |> add 120 |> rem 122 |> add 124
                 |> rem 131 |> add 133 |> rem 135
+                |> add 310 |> add 311
+
+    //printfn "t3-t2=%A" (Array.ofSeq (IntMap.diffRef t3 t2))
 
     let d1 = Seq.length (IntMap.diffRef t0 t1)
     Assert.True(d1 < 36)
@@ -231,6 +234,24 @@ let ``efficient intmap diffs`` () =
     let d3 = Seq.length (IntMap.diffRef t2 t3)
     Assert.True(d3 < 36)
     Assert.Equal(d3, Seq.length (IntMap.diffRef t3 t2))
+
+[<Fact>] 
+let ``efficient trie diff`` () = 
+    let key k = string k |> BS.fromString 
+    let t0 = seq { for i = 0 to 999 do yield i }
+                |> Seq.map (fun i -> (key i, 0))
+                |> Trie.ofSeq
+    let add k t = Trie.add (key k) k t
+    let rem k t = Trie.remove (key k) t
+    let t1 = t0 |> add 0 |> add 11 |> add 112 |> add 1100 
+                |> rem 999 |> rem 92
+    let diff a b = Trie.diffRef a b |> Seq.map (fun (k,v) -> (BS.toString k, v))
+    printfn "t1-t0=%A" (Array.ofSeq (diff t1 t0))
+    Assert.True(Seq.length (diff t1 t0) < 18)
+    Assert.Equal(Seq.length (diff t1 t0), Seq.length (diff t0 t1))
+
+
+    
 
 
 // a fixture is needed to load the database
@@ -588,6 +609,10 @@ type DBTests =
         let m' = Codec.readBytes cm (t.Stowage) mbytes
         Assert.Equal(2000, Seq.length (IntMap.toSeq m))
         Assert.Equal<(uint64 * int) seq>(IntMap.toSeq m, IntMap.toSeq m')
+
+    // TODO:
+    //  - Trie compaction
+    //  - diffRef for compact IntMap and Trie
 
     // TODO: Test data structures.
 

@@ -324,7 +324,7 @@ module Trie =
     // divide a node at a given index in the prefix. This will
     // result in an equivalent tree, albeit an invalid one with
     // one linear child. Used temporarily to simplify diffs.
-    let inline private splitPrefixAt n t =
+    let private splitPrefixAt n t =
         assert (n < BS.length t.prefix)
         let c = { t with prefix = (BS.drop (n+1) (t.prefix)) }
         let ix = uint64 (t.prefix.[n])
@@ -338,7 +338,8 @@ module Trie =
     let inline private seqInR t = toSeq t |> Seq.map (fun (k,v) -> (k, InR v))
 
     // notes: currently I simply use splitPrefixAt to align nodes and
-    // retry when one key is fully matched.
+    // retry when one key is fully matched. This means each key fragment
+    // might be compared twice.
     let rec diffRef' (p:ByteString) (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
         seq {
             let n = bytesShared (a.prefix) (b.prefix)
@@ -354,35 +355,31 @@ module Trie =
             else if (n < (BS.length b.prefix)) then
                 yield! diffRef' p a (splitPrefixAt n b)
             else // tree keys match at current node
-                let p' = BS.append p (a.prefix)
+                let k = BS.append p (a.prefix) 
                 // potentially yield value at this node.
                 match a.value with
                 | None ->
                     match b.value with
                     | None -> ()
-                    | Some vb -> yield (p', InR vb)
+                    | Some vb -> yield (k, InR vb)
                 | Some va ->
                     match b.value with 
-                    | None -> yield (p', InL va)
+                    | None -> yield (k, InL va)
                     | Some vb ->
                         // leveraging reference comparisons on Option types
                         let eq = System.Object.ReferenceEquals(a.value, b.value)
-                        if eq then () else yield (p', InB (va,vb))
+                        if eq then () else 
+                        yield (k, InB (va,vb))
                 // yield diffs for child nodes
                 for (ix,cd) in IntMap.diffRef (a.children) (b.children) do
                     assert (ix < 256UL)
+                    let p' = BS.snoc k (byte ix)
                     match cd with
-                    | InL ca -> 
-                        let p' = joinBytes p (byte ix) (ca.prefix)
-                        let ca' = { ca with prefix = p' }
-                        yield! seqInL ca'
-                    | InR cb ->
-                        let p' = joinBytes p (byte ix) (cb.prefix)
-                        let cb' = { cb with prefix = p' }
-                        yield! seqInR cb'
+                    | InL ca -> yield! seqInL (addPrefix p' ca)
+                    | InR cb -> yield! seqInR (addPrefix p' cb)
                     | InB (ca,cb) ->
                         if System.Object.ReferenceEquals(ca,cb) then () else
-                        yield! diffRef' (BS.snoc p (byte ix)) ca cb
+                        yield! diffRef' p' ca cb
         } // end seq
                         
 
