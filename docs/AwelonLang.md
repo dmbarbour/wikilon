@@ -204,9 +204,9 @@ Stowage is a simple idea, summarized by rewrite rules:
         [small value](stow) => [small value]
         [large binary](stow) => %secureHash
 
-Stowage allows secure hash resources to be constructed at runtime and removed from working memory until later required. Essentially, this gives us a functional, persistent virtual memory model. Further, these hashes can be used efficiently together with memoization as a basis for incremental computing for very large systems.
+Stowage allows secure hash resources to be constructed at runtime and removed from working memory until later required. Essentially, this gives us a functional, persistent, garbage collected virtual memory model. Further, these hashes can be used efficiently together with memoization as a basis for incremental computing involving small updates to large, persistent data structures.
 
-What "large value" means is heuristic, but should be reproducible. If configured, it should be configurable from the dictionary, perhaps by defining `stow_threshold`. It might also be useful to support a few different size thresholds, enabling use of `(stow_small)` vs. `(stow_large)`.
+What "large value" means is heuristic. But it should be simple to predict, understand, and deterministically reproduce. It may be configurable from a dictionary, perhaps by defining a word like `stow_threshold` to a number of bytes. It may also prove useful to support a few stowage options with variable sizes, such that we can use `(stow_small)` vs. `(stow_large)`.
 
 ## Dictionary
 
@@ -282,21 +282,19 @@ The latter encoding for supports early 'return' with type `r`. Further variants 
 
 ## Memoization
 
-The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). 
+The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). Memoization may be implicit for definitions of words or secure hash resources, but requires annotations to work with anonymous data:
 
-The essential idea is to record a computation and its result, and then to lookup the result rather than recompute it. In context of Awelon systems, word definitions and `$secureHash` references are natural targets for memoization because the computation has already been recorded and the overhead for lookup of the result is much smaller. But we can support flexible and precise access to runtime memoization through annotations:
+        [computation](memo) => [result]
 
-        [computation](memo)
+Effectively, memoization involves seeking a representation of the computation in a separate table then replacing it by the result from that table. The exact mechanism might be different, perhaps recording traces of instrumented computations such that traces can be partially reused. There are no strong guarantees: memoization may be probabilistic, table entries may be concurrently expired, and so on. Fortunately, even if memoization works only part of the time, it can result in significant savings for recursive computations on persistent data structures.
 
-The main challenge for effective memoization is precise lookup. Irrelevant differences between very similar dictionaries should not interfere with this lookup. Ideally, even comments and basic data plumbing can be excluded. Hence, our lookup might operate on a partially optimized representation of the computation that potentially knows about types and arities. However, even imprecise implementations of memoization can be effective and useful. The sophistication of memoization is left to the runtime.
-
-To support incremental computing, memoization must be combined with cache-friendly computing patterns and data structures. Persistent data structures leveraging stowage - finger trees, tries - are especially useful. For example, if we memoize a computed monoidal value for each node in a persistent tree, computing a slightly different tree could easily reuse most of the memoization effort.
+To support incremental computing, memoization must be combined with cache-friendly computing patterns. Persistent data structures leveraging stowage - such as finger trees and tries - are especially useful. For example, if we compute a monoidal value for each node in a persistent tree, computing a slightly different tree could easily reuse most of the memoization effort while use of stowage would reduce costs for comparing data.
 
 ## Static Linking
 
 Consider a redirect, `foo = bar`. When we link `foo`, we'll always link `bar`. This is due to the lazy evaluation rule: we won't link `foo` unless doing so also results in rewrites other than a trivial inlining of foo's definition. Hence, we could skip the intermediate rewrite to word `bar` and simply rewrite to bar's definition. Transitively, we can say foo's static link definition is bar's static link definition.
 
-This isn't limited to redirects. Similar analysis can be performed in context of arity annotations and type analysis. It is feasible to optimize static link definitions far beyond simple evaluation. Annotations could make static link optimizations explicit and visible in the program.
+This isn't limited to redirects. Similar analysis can be performed in context of arity annotations and type analysis. It is feasible to optimize static link definitions far beyond simple evaluation. A `[program](link)` annotation might expose runtime link optimizations.
 
 ## Optimization
 
