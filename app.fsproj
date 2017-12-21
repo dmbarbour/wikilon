@@ -1,20 +1,19 @@
-﻿<Project Sdk="FSharp.NET.Sdk;Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>netcoreapp1.1</TargetFramework>
+    <TargetFramework>netcoreapp2.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/Main.fs" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="FSharp.Core" Version="4.1.*" />
-    <PackageReference Include="FSharp.NET.Sdk" Version="1.0.*" PrivateAssets="All" />
-    <PackageReference Include="Suave" Version="2.1.1" />
+    <PackageReference Include="Suave" Version="2.2.1" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="src\Stowage\Stowage.fsproj" />
-    <ProjectReference Include="src\Wikilon\Wikilon.fsproj" />
     <ProjectReference Include="src\Data.ByteString\Data.ByteString.fsproj" />
+    <ProjectReference Include="src\Stowage\Stowage.fsproj" />
     <ProjectReference Include="src\Stowage\Data\Stowage.Data.fsproj" />
+    <ProjectReference Include="src\Awelon\Awelon.fsproj" />
+    <ProjectReference Include="src\Wikilon\Wikilon.fsproj" />
   </ItemGroup>
 </Project>

@@ -535,7 +535,6 @@ module DB =
     ///
     /// Assumes exclusive write access to the given Storage. This is
     /// a relatively convenient way to create a full Stowage DB.
-    let fromStorage (s:Storage) : DB =
-        upcast (new StorageDB.RootDB(s))
+    let fromStorage s = (new StorageDB.RootDB(s :> Storage)) :> DB
 
 

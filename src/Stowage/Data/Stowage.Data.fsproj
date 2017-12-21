@@ -1,41 +1,24 @@
-﻿<Project Sdk="FSharp.NET.Sdk;Microsoft.NET.Sdk">
-
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>netstandard1.6</TargetFramework>
+    <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
-
   <ItemGroup>
     <Compile Include="RscHash.fs" />
     <Compile Include="Stowage.fs" />
     <Compile Include="Codec.fs" />
-
+    <Compile Include="CommonEncoders.fs" />
     <Compile Include="VRef.fs" />
     <Compile Include="LVRef.fs" />
     <Compile Include="CVRef.fs" />
-    <Compile Include="CommonEncoders.fs" />
     <Compile Include="VDiff.fs" />
-
     <Compile Include="IntMap.fs" />
     <Compile Include="Trie.fs" />
-    <Compile Include="LSMTrie.fs" />
-
-    <Compile Include="Measured.fs" />
-    <Compile Include="Monoid.fs" />
-    <Compile Include="FingerTree.fs" />
-    <Compile Include="Seq.fs" />
-
     <Compile Include="DB.fs" />
   </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="FSharp.Core" Version="4.1.*" />
-    <PackageReference Include="FSharp.NET.Sdk" Version="1.0.*" PrivateAssets="All" />
-    <PackageReference Include="System.ValueTuple" Version="4.3.1" />
-    <PackageReference Include="Konscious.Security.Cryptography.Blake2" Version="1.0.5" />
-  </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\..\Data.ByteString\Data.ByteString.fsproj" />
   </ItemGroup>
-
+  <ItemGroup>
+    <PackageReference Include="Konscious.Security.Cryptography.Blake2" Version="1.0.5" />
+  </ItemGroup>
 </Project>

@@ -1,15 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
+
   <ItemGroup>
-    <Compile Include="WS.fs" />
+    <Compile Include="Library.fs" />
   </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Suave" Version="2.2.1" />
-  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />
     <ProjectReference Include="..\Stowage\Data\Stowage.Data.fsproj" />
   </ItemGroup>
+
 </Project>

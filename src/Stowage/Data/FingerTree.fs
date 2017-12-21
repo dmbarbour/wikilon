@@ -8,6 +8,8 @@ namespace Stowage
 ///
 /// This finger tree assumes relatively cheap computation for measures,
 /// and chooses to recompute rather than cache for local data.
+///
+/// TODO: This module is still far from complete.
 module FingerTree =
 
     /// Branches for the 2-3 tree structure.
