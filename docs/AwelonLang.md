@@ -55,7 +55,7 @@ Awelon is encoded using a subset of ASCII, bytes 32..126.
 
 Newlines are among the rejected characters. However, line breaks may be transparently replaced by spaces where appropriate upon input of a program. Humans will usually manipulate Awelon code through *Editable Views* that may present a more sophisticated surface syntax, potentially including tables or graphical representations or *Named Local Variables* and infix notations. 
 
-Arbitrary texts and binaries cannot be directly embedded into Awelon, but may be referenced indirectly as *Secure Hash Resources*, or even constructed at runtime by leveraging *Stowage*.
+Arbitrary texts and binaries cannot be directly embedded into Awelon, but may be referenced indirectly as *Secure Hash Resources*, which serve a similar role as external data files.
 
 ## Words
 
@@ -85,12 +85,14 @@ Definitions for `zero` and `succ` are left to the dictionary. A typical encoding
 
 ## Embedded Texts
 
-Awelon has native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specifically the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters. Semantically, a text represents a binary list.
+Awelon has limited native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specifically the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters, and there is no Unicode support. Semantically, a text represents a binary list.
 
         ""      = [null]
         "hello" = [104 "ello" cons]
 
-Definitions for `null` and `cons` are left to the dictionary. A typical encoding might fold over every element in the list. Like natural numbers, we have a structural guarantee of value type, and definitions are likely to be determined by available runtime acceleration. In this case, acceleration could support lists via arrays.
+This limited support for texts is intended for unit test data, lightweight DSLs (such as regular expressions), lookup keys, comments and rendering hints, and similar features. More general, sophisticated text should instead be represented using binary *Secure Hash Resources* (see below) or structured data models.
+
+Definitions for `null` and `cons`, and hence the basic type for a list, are left to the dictionary. In practice, however, the dictionary definitions will be determined based on available runtime accelerations. In this case, acceleration may support lists using arrays under the hood.
 
 Embedded texts are suitable for simple things like test data, comments, and micro-DSLs such as regular expressions. They are not suitable for general use. To work around these limitations, the primary options are:
 
@@ -100,7 +102,7 @@ Embedded texts are suitable for simple things like test data, comments, and micr
 
 ## Labeled Data (experimental!)
 
-Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Many modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon provisionally supports labeled data by introducing pairs of symbolic functions of form `:label` and `.label` where labels must be syntactically valid words. Effectively, a record works like this:
+Labeled data is convenient for human meaningful documentation, lightweight extensibility of data models, and commutative structure. Most modern programming languages have built-in support for labeled products and sums - aka records and variants. Awelon provisionally supports labeled data by introducing pairs of symbolic functions of form `:label` and `.label`. Modulo the prefix character, each label must be syntactically valid as a word. Effectively, a record works like this:
 
         [[A] :a [B] :b [C] :c] .c == [C] [[A] :a [B] :b]
         [A] :a [B] :b == [B] :b [A] :a      (labels commute)
@@ -110,16 +112,18 @@ Logically, we operate linearly on abstract row-polymorphic record constructors:
         :a      {R without a} [A] → {R, a=[A]}
         .a      S [{} → {R, a=[A]}] → S [A] [{} → {R}]
 
-However, there is no curly brace syntax to introduce a record. Instead, the record constructor `[[A]:a [B]:b [C]:c]` is effectively the record value. Like other functions, the record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring. 
+A record value `{a=[A],b=[B],c=[C]}` is abstract, never represented syntactically. But the record constructor `[[A]:a [B]:b [C]:c]` can effectively be treated as a record value. Like other functions, the record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring.
 
-For variants, first consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer will supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA] :a [OnB] :b [OnC] :c ...]`. Variant values could have concrete representation like `[.label [Value] case]`.
+For variants, consider that basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer will supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA] :a [OnB] :b [OnC] :c ...]`. Variant values could have concrete representation like `[.label [Value] case]`.
 
         [[OnA] :a [OnB] :b] .a [ValA] case == [ValA] OnA
-        case = [] b b a a d
+        case = w d w i
 
-This model of labeled data adds no expressiveness to Awelon. In general, a record can be encoded as a trie, a label as a path. It is something we could model explicitly by leveraging accelerators and editable views - and doing so was my original intention. However, making labels primitive and records abstract better preserves the several benefits of labeled data. For example, we don't need to decode partial labels when reporting type or partial evaluation errors. We don't need to worry about dynamic construction of labels or ad-hoc composition of records. We essentially can reason about commutativity at a syntactic layer, without non-local knowledge of how labels are implemented. 
+This model of labeled data adds no expressiveness to Awelon. In general, a record can be encoded as a trie, a label as a path. It is something we could model explicitly by leveraging accelerators and editable views. Doing so was my original intention. However, making labels primitive and records abstract better preserves the several benefits of labeled data. For example, we don't need to decode partial labels when reporting type or partial evaluation errors. We don't need to worry about dynamic construction of labels or ad-hoc composition of records. We essentially can reason about commutativity at a syntactic layer, without non-local knowledge of how labels are implemented. 
 
 That said, I'm reluctant to introduce new language primitives. Before I remove "experimental" status, I'll need to see how well this feature works in practice, whether an alternative model would be more appropriate (perhaps lens-based), and also how nicely this labeled data model works in context of accelerators, especially accelerated evaluation for Kahn process networks involving labeled ports and processes.
+
+*Aside:* Awelon lacks a model of "modules", but records can serve that role - especially if used carefully together with annotations for staging and delayed type checking (such as `(now)` and `(dyn)`).
 
 ## Secure Hash Resources
 
@@ -239,7 +243,7 @@ Awelon's basic evaluation strategy is simple:
 * evaluate before copy 
 * evaluate final values
 
-Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
+Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. (However, techniques to introduce and extract hidden variables can work nicely with laziness or parallelism. See *Named Local Variables*.) Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
 Annotations can greatly affect evaluation strategy. As two examples, `[A](eval)` could enforce evaluation of the value `[A]` before erasing `(eval)`, while `[A](lazy)` could replace "evaluate before copy" with a call-by-need strategy for a specific value.
 
@@ -354,10 +358,10 @@ An `(assert)` passes if the given function would evaluate inline without error. 
 
 ## Garbage Data
 
-In some cases, it might be convenient to erase data that we know we shouldn't use in the future to recover memory resources, yet leave a placeholder and preserve other annotations (such as `(nd)` for relevant data). We could represent this pattern by use of a `(trash)` annotation:
+In some cases, it might be convenient to erase data that we know we shouldn't use in the future to recover memory resources, yet preserve a placeholder and substructural type information (such as `(nd)` for relevant data). We could represent this pattern by use of a `(trash)` annotation that erases data and replaces it with an error value:
 
-        [A](trash)      => [](error)
-        [A](nd)(trash)  => [](nd)(error)
+        [A](trash)      => [(error)]
+        [A](nd)(trash)  => [(error)](nd)
 
 We drop data but preserve substructure. Because the data has been lost, the resulting value is marked erroneous. Memory required for `A` may then be recycled. This is essentially a form of manual memory management.
 
@@ -425,6 +429,16 @@ An affine value models a limited resource while a relevant value models a respon
 
 Because copy and drop are explicit in Awelon, it isn't difficult to check substructural properties dynamically. However, it's still undesirable overhead. Ideally we should validate substructural types statically.
 
+### Quota Control
+
+Evaluation of programs requires resources, notably memory and CPU time. Normally, these resources aren't specific to evaluation for any subprogram. However, in practice it is convenient to control evaluation efforts for specific subprograms or at least quickly discover and debug resource errors. For Awelon, it is feasible to annotate a subprogram - a block - with quotas for its evaluation. For example, consider: 
+
+        [Expression][500 :mem 1000 :cpu](quota)d
+
+This should indicate that we should evaluate the given expression within 500 memory units and 1000 cpu time units, perhaps corresponding to kilobytes and milliseconds. After we're done annotating the quota, we can simply drop it. If evaluation halts on quota, a runtime can serialize the partially evaluated expression together with the remaining quota.
+
+*Note:* I haven't deeply contemplated the details for quota control annotations, so the above is just an initial concept. It must be tested and tuned in practice. Additionally, a runtime might control ad-hoc resources such as stowage and memoization.
+
 ## Static Typing
 
 Awelon can be evaluated without static typing. There is no type driven dispatch or overloading. But if we can detect errors early by static analysis, that is a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static type analysis makes a *very* nice default.
@@ -452,14 +466,14 @@ Label functions can be typed based on row-polymorphic records:
         :a  : {R without a} [A] → {R, a:[A]}
         .a  : S [{} → {R, a:[A]}] → S [A] [{} → {R}]
 
-Conditional behavior requires special attention. In Awelon, we use Church-encodings. For example, the basic sum type `(A+B)` is encoded as a function of type `∀r.(A→r)→(B→r)→r`. It is difficult to infer locally that our sum must be parametric in `r` and have similar input arities. We can leverage a few annotations to address this.
+Conditional behavior requires special attention. In Awelon, we use Church-encodings. For example, the basic sum type `(A+B)` is encoded as a function of type `∀r.(A→r)→(B→r)→r`. It is difficult to infer locally that two handler arguments must match the observed type `r`, but we can use annotations to provide hints for type safety analysis:
 
-        (choice) : S [S → S'] [S → S']
-        (option) : S [S → S'] [S V → S']
-        (either) : S [S [A] → S'] [S [B] → S']
-        (switch) : S [{} → {a:[S [A] → S'], b:[S [B] → S', ...}]
+        (choice) : E [S → S'] [S → S']
+        (option) : E [S → S'] [S [V] → S']
+        (either) : E [S [A] → S'] [S [B] → S']
+        (switch) : E [{} → {a:[S [A] → S'], b:[S [B] → S', ...}]
 
-Annotations can also augment static type analysis with hints, value sealers, substructural types, multi-stage programming, and so on. 
+Annotations can generally augment static type analysis with hints, value sealers, substructural types, multi-stage programming, and so on. 
 
 ### Staged and Deferred Typing
 
@@ -482,7 +496,7 @@ A definition of `pick` could have the form `[pick body here]b(dyn)i`. The `(dyn)
 
 Awelon is Turing complete, so we cannot always decide whether a program terminates. However, Awelon is also purely functional, and any non-termination is a form of error. As much as possible, by default, Awelon systems should use static analysis to detect non-termination among other errors.
 
-*Note:* Even with a guarantee of termination, it's trivial to express computations that would require extraordinary time and space resources. We still need quotas. The main benefit of termination analysis is to eliminate accidental sources of error, and to require extra annotations where reasoning is difficult.
+*Note:* Even for programs that are guaranteed to terminate, they may have exponential costs. Quota control is typically necessary in practice.
 
 ### Structural Equivalence
 
@@ -504,25 +518,26 @@ Awelon doesn't specify a type description language, but we're free to use string
 
 ## Hierarchical Dictionaries
 
-Awelon reserves character `@` for symbolic context, primarily for hierarchical dictionaries. The intention is to support [application models](ApplicationModel.md) that share dictionaries through messaging or publish-subscribe systems, dictionaries as documents or spreadsheets or databases, explicitly versioned dictionaries, and other coarse grained applications. Hierarchical dictionaries are unsuitable for use as namespaces or modules.
+For several [application models](ApplicationModel.md), it is convenient if an agent can inject definitions or operate in an isolated sandbox. For some application models, we might even wish to treat "dictionaries" as a unit - a document, database, or spreadsheet that to be shared, versioned, maintained via publish-subscribe. To support these models, I introduce a concept of *hierarchical dictionaries*. A dictionary may contain and reference other dictionaries. 
 
-Words of form `foo@dict` refer to definition of `foo` in context of `dict`. Blocks also may be qualified with context: `[foo bar]@d` is equivalent to `[foo@d bar@d]`. Similarly, `42@d` is `[41 succ]@d` is `[41@d succ@d]`, and `"hello"@d` is `[104 "ello" cons]@d`, and `$secureHash@d` must interpret the secure hash resource in context of `d`. Even annotations may be usefully qualified, and we'll move the `@` character to the word within the parentheses. For example, `[X](eq_z@d)` is an assertion that `[X]` is equivalent to `[z@d]`.
+We'll use an `@dict` suffix to reference a component dictionary. 
 
-Symbolic context is monotonic and second-class. Hierarchical dictionaries permit the parent to reference the child, the child dictionary cannot reference the parent. There is no stepping back, no `..` path, and every dictionary must be fully self-contained. The context for any fragment of Awelon code can be determined locally. No space is permitted to separate a word or block from its `@dict` qualifier. The symbol `dict` must also be a valid word.
+        bar@d       (has behavior of `bar` from dictionary `d`)
+        42@d        => [41 succ]@d
+        [41 succ]@d => [41@d succ@d]
+        "hello"@d   => [104 "ello"]@d
 
-Deep hierarchical contexts are possible and are left-associative, e.g. `foo@xy@zzy` is `foo@xy` in context of `zzy`. However, by Law of Demeter, this should rarely appear in source code. A development environment should raise a warning unless it is suppressed for a dictionary.
+Component dictionaries must be named using normal words (modulo the `@` character). Dictionary references are second class - we cannot syntactically separate the `@dict` suffix from the word or block being modified, no whitespace is permitted. 
 
-*Note:* Although Awelon doesn't specify representation for dictionaries, I strongly recommend that hierarchical dictionaries leverage persistent data structures and secure hash resources. This enables a great deal of structure sharing, which is valuable because child dictionaries will have many definitions in common with each other and the parent.
+There is no means for a component dictionary to reference its host or siblings. Each dictionary will be fully self-contained. In practice, this requires replicating common dependencies such as definitions for numbers and arithmetic. However, we are permitted to erase qualifiers when they are not relevant. For example, if `42@d` has the same behavior as `42` (due to equivalent behavior for `succ` and `zero`), then a localizing evaluator is free to rewrite the former to the latter.
 
-### Localization
+To save disk space, it's best that dictionaries are represented in a manner that supports a high degree of structure sharing. For example, leveraging secure hash resources with a trie data structure should enable component dictionaries to efficiently share structure with host, sibling, and version history.
 
-As a special optimization, an evaluator can erase insignificant hierarchical qualifiers. For example, if `42@d` means the same thing as `42` due to equivalent definitions for `zero` and `succ`, then we may freely rewrite `42@d` to `42`. This helps mitigate the inability for child dictionaries to reference the parent.
+*Note:* Hierarchical dictionaries are unsuitable as a basis for modules or namespaces. For modules, try *Labeled Data* records. For namespaces, try *Editable Views*.
 
 ## Editable Views
 
-Awelon is designed to use a simple technique to support richer programming styles, DSLs, and larger programs: Awelon shifts the rich syntax burden to [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) in the form of *editable views*. 
-
-*Aside:* By *editable views* I mean to emphasize purely functional, bidirectional rewrites between serializable representations. Similar to functional lenses. Projectional editing encompasses editable views and a lot more.
+Awelon is designed to use a simple technique to support richer programming styles, DSLs, and larger programs: Awelon shifts the rich syntax burden to [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html), preferably in the form of *editable views*. By *editable views* I mean to emphasize purely functional, bidirectional, RESTful rewrites between serializable representations.
 
 My initial emphasis is textual views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through a conventional filesystem. Numbers are a useful example for textual editable views. A viable sketch:
 
@@ -557,6 +572,8 @@ With editable views, individual definitions can scale many orders of magnitude. 
 Although initial emphasis is textual views, it is feasible to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined into the current view. 
 
 *Aside:* The vast majority of punctuation characters were reserved for use with editable views. It's a lot easier to develop sophisticated editable views when we don't need to worry about ambiguity with Awelon words. 
+
+*Note:* This approach to syntax - starting with something simple and projecting over it - is not something widely experimented with in conventional programming systems. We'll need to see how well it works in practice.
 
 ### Named Local Variables
 
@@ -594,9 +611,21 @@ Local variable names are not semantically meaningful, but are often human meanin
 
 Assuming local variables, it's also feasible to develop infix notations, e.g. `((X + Y) * X)`. Thus we can achieve conveniences of conventional languages where doing so is useful, but keep it at the editable view without complicating the semantics.
 
+### Session Views
+
+It is not difficult for *Editable Views* to operate on multiple definitions as a set. For example, we might take all the definitions prefixed by `foo_` as a set and edit them together as one large text file. Intriguingly, we can also support spreadsheet-like editable views if we assume a set of tabular definitions following a simple convention such as `foo_a1` and `foo_b3`. A few such ideas are discussed as [application models](ApplicationModel.md) for Awelon.
+
+Session views can be made first-class by "defining" session words. Consider:
+
+        my_session = [foo][bar][baz]
+
+Here our session view might involve editing the words `foo` `bar` and `baz`. Additionally, we would edit the definition of `my_session` if we open or close words while editing. A more sophisticated session model might additionally support namespaces, rendering or view hints, task lists, recent history, composition, and so on.
+
 ### Qualified Namespaces
 
-Awelon's hierarchical dictionaries support a simple form of namespacing. But it falls to editable views to support local shorthand, e.g. some form of `using large_prefix as x` or `using package_of_nicknames`. If we assume editable views are maintained within the dictionary, it is feasible to use comments to help control the view, tweaking the language as needed. An intriguing possibility is to integrate a database of nicknames for secure hash resources into the view, where said database is represented within the dictionary.
+Namespaces support shorthand expression of large names. This role naturally falls under the domain of editable views. A view could easily support comments of form `using large_prefix as x` such that `x_foo` rewrites to `large_prefix_foo` in the code. We could also model packages of nicknames, such that a package is accessed by `using package_of_nicknames` or `using jargon`. Some views may support keywords or DSLs with implicit namespaces.
+
+*Note:* Editable views don't easily support "search" based namespaces, where we search a dictionary for an appropriate definition in a given context. However, a development environment could provide likely candidates at edit time based on fuzzy find for type and name. For interactive development like this, we could also use color or iconography to distinguish words instead of prefixes.
 
 ## Arrays and In-place Updates
 
