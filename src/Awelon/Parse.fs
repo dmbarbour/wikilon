@@ -52,7 +52,7 @@ module AST =
 
     let isValidWord w =
         if (BS.isEmpty w) then false else
-        isAlpha (BS.unsafeHead w) && BS.forall isWC (BS.unsafeTail w)
+        isWordStart (BS.unsafeHead w) && BS.forall isWordChar (BS.unsafeTail w)
 
     let inline hasWordStart r =
         (not (BS.isEmpty r)) && (isWordStart (BS.unsafeHead r))
@@ -78,12 +78,13 @@ module AST =
     let inline hasNatStart r =
         not (BS.isEmpty r) && (isNumChar (BS.unsafeHead r))
 
-    /// This accepts `0 | [1-9][0-9]*` followed by a word separator.
+    /// This accepts `0 | [1-9][0-9]*` but rejects if not separated from
+    /// valid word characters.
     let tryParseNat (r : ByteString) : (struct(Nat * ByteString)) option =
         let struct(ns,r') = BS.span isNumChar r
         let accept = not (BS.isEmpty ns) && hasWordSep r'
                   && ((byte '0' <> BS.unsafeHead ns) || (1 = BS.length ns))
-        if accept then Some (parseNat ns) else None
+        if accept then Some (struct(parseNat ns, r')) else None
 
     /// Texts embedded in Awelon code are constrained rather severely.
     /// They may only contain ASCII characters minus C0, DEL, and `"`.
@@ -103,113 +104,64 @@ module AST =
         | Hier of Action * Word // Action @ Word
     and Program = Action list
 
-    // NOTE: Improving the 'list' type used here could potentially
-    // offer significant efficiency benefits. But it is not a high
-    // priority at this time.
-
-    let annoError = Anno (BS.fromString "error")
-
     // Parser Notes:
     //
     // - most programs should be relatively short
-    // - parse from bytestring, streaming is rare
+    // - parse from bytestring, no need for streaming
     // 
     // The current parser allocates more than I'd prefer, which will
     // hurt performance somewhat. But it shouldn't be a huge problem.
     // It's something I can try to resolve later.
 
-    /// A ParseState is returned for partial parsing.
-    [<Struct>]
-    type ParseState = 
-        val program : Program // reverse ordered, current block
-        val context : Program list // stack of open blocks
-        val remainder : ByteString // unprocessed bytes
-        val wsep : bool // parsed a clean word separator (SP or '[' or ']')
-        new(p,cx,r,ws) = { program = p; context = cx; remainder = r; wsep = ws }
+    /// An incomplete program is represented by a stack of reversed programs.
+    /// E.g. `foo [bar baz [qux` should produce `[qux; baz bar; foo]`.
+    type IncompleteProg = Program list
 
-    let parseInit (s:ByteString) : ParseState = 
-        new ParseState(List.empty,List.empty,s,true)
-    let parseAddend (ps:ParseState) (s:ByteString) : ParseState =
-        new ParseState(ps.program, ps.context, BS.concat (ps.remainder) s, ps.wsep)
+    /// Parse result is either a valid program or a partial program
+    /// and remaining bytes.
+    type ParseResult =
+        | ParseOK of Program
+        | ParseErr of IncompleteProg * ByteString
 
-    /// Returns true iff the parse is in a valid final state.
-    /// This means: no unparsed data, all blocks are closed. 
-    let inline parseOK (ps:ParseState) : bool =
-        BS.isEmpty (ps.remainder) && List.isEmpty (ps.context) 
+    let private parseHalt cx p s =
+        if (BS.isEmpty s) && (List.isEmpty cx) 
+           then ParseOK (List.rev p)
+           else ParseErr (p::cx, s)
 
-    /// Return a program from a parse state. This will always
-    /// succeed (assuming sufficient memory), but an invalid
-    /// program is truncated and silently addends `(error)`.
-    let parsedProg (ps:ParseState) : Program =
-        if parseOK ps then List.rev (ps.program) else
-        let rec truncateProg p s =
-            match s with
-            | (pp::s') -> truncateProg (B (List.rev p) :: pp) s'
-            | [] -> List.rev (annoError :: p)
-        truncateProg (ps.program) (ps.context)
+    let rec parseHier a s =
+        if (BS.isEmpty s) || (byte '@' <> BS.unsafeHead s) then struct(a,s) else
+        match tryParseWord (BS.unsafeTail s) with
+        | Some (struct(w,s')) -> parseHier (Hier(a,w)) s'
+        | None -> struct(a,s)
 
-    /// Parse hierarchical dictionary route.
-    let rec parseHier (a:Action) (r:ByteString) : struct(Action * ByteString) =
-        
-        if (BS.isEmpty r) || (byte '@' <> BS.unsafeHead r) then struct(a,r) else
-        match tryParseWord
-        
-        
-        
+    let tryParseAction (s:ByteString) : (struct(Action * ByteString)) option =
+        raise (System.NotImplementedException "todo: parse actions")
 
-    let rec private parse' p cx r =
-        if BS.isEmpty rem then ParseState(p,cx,r) else
-        let c0 = BS.unsafeHead r
+    let rec parse' cx p s = 
+        if (BS.isEmpty s) then parseHalt cx p s else
+        let c0 = BS.unsafeHead s
         if (byte ' ' = c0) then
-            parse' p cx (BS.unsafeTail r)
+            parse' cx p (BS.unsafeTail s)
         else if (byte '[' = c0) then
-            parse' (List.empty) (p::cx) (BS.unsafeTail r)
+            parse' (p :: cx) (List.empty) (BS.unsafeTail s)
         else if (byte ']' = c0) then
             match cx with
-            | (pp::cx') -> 
+            | (pp :: cx') ->
                 let a = B (List.rev p)
-                let struct(a',r') = parseHier a (BS.unsafeTail r)
-                parse' (a' :: pp) cx' r'
-            | [] -> ParseState(p,cx,r)
+                let struct(a',s') = parseHier a (BS.unsafeTail s)
+                parse' cx' (a' :: pp) s'
+            | [] -> parseHalt cx p s
         else 
-            match tryParseAtom r with
-            | Some (struct(a,ra)) -> 
-                let struct(a',r') = parseHier a ra
-                
+            match tryParseAction s with
+            | Some (struct(a,sa)) ->
+                let struct(a',s') = parseHier a sa
+                parse' cx (a' :: p) s'
+            | None -> parseHalt cx p s
+
+    let inline parse (s:ByteString) : ParseResult = 
+        parse' (List.empty) (List.empty) s
 
 
-parseH a p cx r'
-            | None -> ParseState(p,cx,r) // invalid code
-    
-    
-
-if isWordStart c0 then
-            let rwe = skipWordEnd tl
-            let wlen = BS.length r - BS.length r'
-            parseH (W (BS.take wlen r)) p cx r'
-            let w = BS.take wlen r
-            let struct(a,r') = parseH (W w) rwe
-            let w = BS.take (BS.length r - BS.length r') r
-            let wlen = 1 + BS.length (BS.takeWhile isWordChar tl)
-            let w = BS.take wlen r
-            let r' = BS.drop wlen r
-            
-        else if (isNumChar c0) then
-            let natLen = 1 + BS.length (BS.takeWhile isNumChar (BS.unsafe
-
-if (isWordStart c0) then
-        
 
 
-    /// Parse operation.
-    ///
-    /// This evaluates/rewrites a ParseState, parsing as much as
-    /// possible. Use `parseOK` and `parsedProg` to observe the
-    /// result.
-    let inline parse (ps:ParseState) : ParseState =
-        parse' (ps.context) (ps.program) (ps.remainder)
-    
-
-        
-   
 

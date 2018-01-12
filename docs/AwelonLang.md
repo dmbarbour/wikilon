@@ -518,11 +518,11 @@ Awelon doesn't specify a type description language, but we're free to use string
 
 ## Hierarchical Dictionaries
 
-For several [application models](ApplicationModel.md), it is convenient if an agent can inject definitions or operate in an isolated sandbox. For some application models, we might even wish to treat "dictionaries" as a unit - a document, database, or spreadsheet that to be shared, versioned, maintained via publish-subscribe. To support these models, I introduce a concept of *hierarchical dictionaries*. A dictionary may contain and reference other dictionaries. 
+For several [application models](ApplicationModel.md), it is convenient if an agent can share definitions or operate in a confined sandbox. For some application models, we might even wish to treat "dictionaries" as a unit - a document, database, or spreadsheet that to be shared, versioned, maintained via publish-subscribe. To support these models, I introduce a concept of *hierarchical dictionaries*. A dictionary may contain and reference other dictionaries. 
 
 We'll use an `@dict` suffix to reference a component dictionary. 
 
-        bar@d       (has behavior of `bar` from dictionary `d`)
+        bar@d       (has behavior of `bar` from dictionary `@d`)
         42@d        => [41 succ]@d
         [41 succ]@d => [41@d succ@d]
         "hello"@d   => [104 "ello"]@d
