@@ -619,13 +619,17 @@ Session views can be made first-class by "defining" session words. Consider:
 
         my_session = [foo][bar][baz]
 
-Here our session view might involve editing the words `foo` `bar` and `baz`. Additionally, we would edit the definition of `my_session` if we open or close words while editing. A more sophisticated session model might additionally support namespaces, rendering or view hints, task lists, recent history, composition, and so on.
+Here our session view might involve editing the words `foo` `bar` and `baz`. Additionally, we would edit the definition of `my_session` if we open or close words while editing. A more sophisticated session model might additionally support namespaces and other rendering hints, task lists, recent history, composition, and so on.
 
-### Qualified Namespaces
+### Namespaces
 
-Namespaces support shorthand expression of large names. This role naturally falls under the domain of editable views. A view could easily support comments of form `using large_prefix as x` such that `x_foo` rewrites to `large_prefix_foo` in the code. We could also model packages of nicknames, such that a package is accessed by `using package_of_nicknames` or `using jargon`. Some views may support keywords or DSLs with implicit namespaces.
+Shorthand for large names is convenient for reading and writing code. One common mechanism for this shorthand is "namespaces". Conventionally, namespaces hide a common prefix for large, fully qualified names. Namespaces ultimately a user experience concern, a natural fit for editable views and projectional editing. 
 
-*Note:* Editable views don't easily support "search" based namespaces, where we search a dictionary for an appropriate definition in a given context. However, a development environment could provide likely candidates at edit time based on fuzzy find for type and name. For interactive development like this, we could also use color or iconography to distinguish words instead of prefixes.
+Support for qualified namespaces is very simple and unambiguous. For example, we comment `import large_prefix as x` then we subsequently resolve `x_foo` to `large_prefix_foo`. But we can also support ambiguous namespaces, e.g. if we `import foo` and `import bar` then a symbol `xyzzy` refers ambiguously to word `foo_xyzzy` or `bar_xyzzy` or plain old `xyzzy`.
+
+In context of editable views, ambiguities must be resolved at edit time. The code saved into the dictionary will use fully qualified names. Resolution of ambiguity can be achieved heuristically (search for defined words, match on types) or interactively (e.g. via code completion, intellisense). Conversely, a development environment could render an ambiguous word using a color or subscript to reduce ambiguity for the human reader. For environments where such mechanisms aren't available, it seems wiser to favor qualified namespaces.
+
+*Aside:* Namespaces are best managed separately from function definitons, e.g. at the *Session View* layer. This separation helps amortize overheads, reduce clutter, and avoid entanglement between definitions and development environment. Namespaces could feasibly be customized per user or project. This observation might generalize to many other rendering hints.
 
 ## Arrays and In-place Updates
 
