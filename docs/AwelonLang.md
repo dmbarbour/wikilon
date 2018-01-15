@@ -123,7 +123,9 @@ This model of labeled data adds no expressiveness to Awelon. In general, a recor
 
 That said, I'm reluctant to introduce new language primitives. Before I remove "experimental" status, I'll need to see how well this feature works in practice, whether an alternative model would be more appropriate (perhaps lens-based), and also how nicely this labeled data model works in context of accelerators, especially accelerated evaluation for Kahn process networks involving labeled ports and processes.
 
-*Aside:* Awelon lacks a model of "modules", but records can serve that role - especially if used carefully together with annotations for staging and delayed type checking (such as `(now)` and `(dyn)`).
+### Awelon Modules
+
+Words are the unit for user definition and mutability in an Awelon codebase. The definition of a word is essentially a function. Awelon does not support the common module system and import/export models from many other languages. However, it is feasible to use records to model first-class modules, especially if leveraged together with annotations for staged programming.
 
 ## Secure Hash Resources
 
@@ -214,17 +216,15 @@ What "large value" means is heuristic. But it should be simple to predict, under
 
 ## Dictionary
 
-Awelon words are defined in a dictionary. Evaluation of Awelon code occurs in context of an immutable dictionary. Definitions for words must form a directed acyclic graph. Assigning a trivial cycle such as `foo = foo` may be treated as equivalent to deleting word `foo` from the dictionary.
+Awelon words are defined in a codebase called a "dictionary". Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon is designed to use community curated dictionaries as a starting point for software projects. This replaces the more conventional approach of using "libraries" - packages of definitions. Libraries are troublesome because of dependencies, versioning, configuration management, and software ownership issues. A dictionary, however, can simply include all the words one is likely to need, tested and known to work together, every definition uniformly accessible by the programmer.
 
-Awelon doesn't specify a dictionary representation. I hope for de-facto standards to arise around the import, export, sharing, and backup of dictionaries, and potentially dictionaries as first-class values. Dictionaries are usually manipulated through services, such as a web application or a [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) filesystem adapter. The use of such layers is also necessary to provide useful *Editable Views*.
+Awelon language does not specify how dictionaries are represented. However, my intention is that dictionaries should leverage *Secure Hash Resources* for structure sharing and lazy downloading. This would mitigate the issues that arise from shoving multiple gigabytes of libraries into one flat, community curated dictionary.
 
-As an interesting point, it is feasible to leverage `(eq_foo)` to implicitly define a dictionary from within an Awelon program. 
-
-        [definition of foo](eq_foo) => [foo]
-
-This could be understood as an implied single-assignment of `foo = definition of foo`. Hence, it is feasible to represent dictionaries directly as Awelon programs, albeit in a rather second-class manner.
+In practice, dictionaries will be edited through various services, leveraging *Editable Views* and perhaps *Session Views*.
 
 See also *Hierarchical Dictionaries*.
+
+*Note:* Developers can still model "libraries" as packages of trusted definitions that we "install" into a dictionary - essentially, a patch on the codebase, perhaps using common prefixes. This is not encouraged, but may be suitable for experimental definitions that aren't yet accepted by a community.
 
 ## Evaluation
 
@@ -518,7 +518,7 @@ Awelon doesn't specify a type description language, but we're free to use string
 
 ## Hierarchical Dictionaries
 
-For several [application models](ApplicationModel.md), it is convenient if an agent can share definitions or operate in a confined sandbox. For some application models, we might even wish to treat "dictionaries" as a unit - a document, database, or spreadsheet that to be shared, versioned, maintained via publish-subscribe. To support these models, I introduce a concept of *hierarchical dictionaries*. A dictionary may contain and reference other dictionaries. 
+For several [application models](ApplicationModel.md), it is convenient if multiple agents can use their own definitions or operate in securely confined sandboxes without conflict. We might even wish to treat some "dictionaries" as documents, databases, or data resources that can be safely shared and synchronized. To support these models, I propose a concept of *hierarchical dictionaries*. A dictionary may contain other dictionaries and reference them.
 
 We'll use an `@dict` suffix to reference a component dictionary. 
 
@@ -526,14 +526,13 @@ We'll use an `@dict` suffix to reference a component dictionary.
         42@d        => [41 succ]@d
         [41 succ]@d => [41@d succ@d]
         "hello"@d   => [104 "ello"]@d
+        (eq_z)@d    (behavior of (eq_z) in dictionary `@d`)
 
-Component dictionaries must be named using normal words (modulo the `@` character). Dictionary references are second class - we cannot syntactically separate the `@dict` suffix from the word or block being modified, no whitespace is permitted. 
+Dictionaries are named using words prefixed by `@`. Hence, dictionary names do not conflict with normal words. The dictionary suffix is second class: it must directly modify an atom or block. Whitespace is not permitted before the `@dict` suffix.
 
-There is no means for a component dictionary to reference its host or siblings. Each dictionary will be fully self-contained. In practice, this requires replicating common dependencies such as definitions for numbers and arithmetic. However, we are permitted to erase qualifiers when they are not relevant. For example, if `42@d` has the same behavior as `42` (due to equivalent behavior for `succ` and `zero`), then a localizing evaluator is free to rewrite the former to the latter.
+References are strictly hierarchical - i.e. a definition can reference a contained dictionary, but a contained dictionary cannot reference its host. Consequently, every dictionary must be fully self-contained. In practice, contained dictionaries will replicate a lot of common dependency code such as natural numbers and arithmetic. A representation of dictionaries with effective structure sharing will be essential for efficient storage.
 
-To save disk space, it's best that dictionaries are represented in a manner that supports a high degree of structure sharing. For example, leveraging secure hash resources with a trie data structure should enable component dictionaries to efficiently share structure with host, sibling, and version history.
-
-*Note:* Hierarchical dictionaries are unsuitable as a basis for modules or namespaces. For modules, try *Labeled Data* records. For namespaces, try *Editable Views*.
+A localizing evaluator may remove the dictionary suffix when it doesn't affect behavior. For example, if `42@d` has the same behavior as `42` then we are free to rewrite the former to the latter. Common elements, such as the `a b c d` primitives, labels `:label` and `.label`, and most annotations can easily be localized.
 
 ## Editable Views
 
@@ -553,27 +552,17 @@ Awelon's natural numbers here are given the `#` prefix in favor of a more aesthe
 
 Beyond numbers, we can develop editable views that are convenient for continuation-passing style, generators, or monadic computation. Editable views can feasibly support records and labeled data. Support for tables and graphs are feasible. Conveniently, it isn't difficult to experiment with editable views, tuning them to a user or project or developing them over time, because the views aren't the primary representation for Awelon code.
 
-Most editable views should have an escape for code that they isn't recognized. For example, the `#42` escape for natural numbers might be generalized as an escape for words `#foo` or even full blocks `#[raw awelon code]`. This ensures universal access to Awelon behavior and the dictionaries. Of course, some DSL-inspired views might cleverly constrain subprograms to a subset of Awelon to better support acceleration.
+Most editable views should provide an escape for raw Awelon code. For example, the `#42` escape for natural numbers might be generalized to an escape for arbitrary words `#foo` or even full blocks `#[raw awelon code]`. This ensures universal access to Awelon behavior and the dictionaries. Of course, some DSL-inspired views might cleverly constrain subprograms to a subset of Awelon to better enforce performance or correctness.
 
-Ideally, most editable views should be computable, in the sense of having a normal form that can be the result of a normal evaluation process. Computable views enable the *evaluated result* of the program to have the *same view* as our programs. Or perhaps another, more suitable view. When we add 3.141 and -0.007, we want to see 3.134 in the program output. Hence, `[3134 -3 decimal]` should be a normal form, perhaps via arity annotations in `decimal`.
-
-Design of computable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
-
-With computable views in mind, we might represent comments as:
+Ideally, editable views for values should be in normal form, i.e. such that `[3143 -3 decimal]` does not evaluate further and can be constructed by a normal evaluation. This allows us to reuse our views on the evaluated code, and hence rewrite one view into another. Design of views is consequently sensitive to arity annotations and accelerators. Similarly, comments should also be computable, for example:
 
         // comment  ==  "comment"(a2)d
 
-The arity annotation ensures the comment is not deleted until it might prevent progress from the left side, and hence we can always inject comments into values. A relevant point is that we aren't limited to one 'type' of comment, and comments of other types can easily inject flexible rendering hints into Awelon code. The discussion on *Named Local Variables* offers one very useful example, or a comment might include trace output for active debugging.
+The arity annotation delays deletion of the comment, and enables us to construct new comments as part of evaluation. Of course, we aren't limited to plain text comments, and we might use comments as rendering hints - for example, see *Named Local Variables* below.
 
-Editable views essentially form a compiler/decompiler that treats Awelon language as a functional macro-assembly. The main difference from conventional languages above a bytecode is that the Awelon code is treated as the canonical source, and we're forced to 'decompile' said code into our language of editing. The indirection provided by the decompiler simplifies issues like whitespace formatting and forwards/backwards compatibility.
+Editable views effectively treat Awelon language as a functional macro-assembly. The view compiles code to Awelon, or decompiles Awelon into code of the view language. The main difference from conventional languages above a bytecode is that the Awelon code is treated as the canonical source, and we're always forced to 'decompile' said code into our language of editing. The indirection provided by the decompiler simplifies issues surrounding whitespace formatting, backwards compatibility, experimental extensions, or modeling preferences per project or user.
 
-With editable views, individual definitions can scale many orders of magnitude. It is even possible to represent conventional 'modules' in terms of expressions that construct first-class records of functions, though I'd encourage one word per independently useful function as the normal case.
-
-Although initial emphasis is textual views, it is feasible to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined into the current view. 
-
-*Aside:* The vast majority of punctuation characters were reserved for use with editable views. It's a lot easier to develop sophisticated editable views when we don't need to worry about ambiguity with Awelon words. 
-
-*Note:* This approach to syntax - starting with something simple and projecting over it - is not something widely experimented with in conventional programming systems. We'll need to see how well it works in practice.
+Although initial emphasis is plain text views, it is feasible to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined into the current view.
 
 ### Named Local Variables
 
