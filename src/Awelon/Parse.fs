@@ -54,15 +54,13 @@ module AST =
         if (BS.isEmpty w) then false else
         isWordStart (BS.unsafeHead w) && BS.forall isWordChar (BS.unsafeTail w)
 
-    let inline hasWordStart r =
-        (not (BS.isEmpty r)) && (isWordStart (BS.unsafeHead r))
-
-    let inline hasWordSep r =
-        (BS.isEmpty r) || not (isWordChar (BS.unsafeHead r))
+    let inline private startsWith pred s = 
+        (not (BS.isEmpty s)) && (pred (BS.unsafeHead s))
 
     let tryParseWord (r:ByteString) : (struct(Word * ByteString)) option =
-        if not (hasWordStart r) then None else
-        Some (BS.span isWordChar r)
+        if startsWith (isWordStart) r 
+            then Some (BS.span isWordChar r)
+            else None
 
     /// A Natural number is currently represented via BigInteger.
     /// Naturally, only non-negative values are valid.
@@ -78,11 +76,10 @@ module AST =
     let inline hasNatStart r =
         not (BS.isEmpty r) && (isNumChar (BS.unsafeHead r))
 
-    /// This accepts `0 | [1-9][0-9]*` but rejects if not separated from
-    /// valid word characters.
+    /// This accepts `0 | [1-9][0-9]*`
     let tryParseNat (r : ByteString) : (struct(Nat * ByteString)) option =
         let struct(ns,r') = BS.span isNumChar r
-        let accept = not (BS.isEmpty ns) && hasWordSep r'
+        let accept = not (BS.isEmpty ns) 
                   && ((byte '0' <> BS.unsafeHead ns) || (1 = BS.length ns))
         if accept then Some (struct(parseNat ns, r')) else None
 
@@ -96,46 +93,90 @@ module AST =
         | W of Word         // hello_world
         | N of Nat          // 0, 1, 42
         | T of Text         // "text"
-        | LW of Word        // :word
-        | LR of Word        // .word
         | Anno of Word      // (word)
+        | LPut of Word      // :word
+        | LGet of Word      // .word
         | Bin of RscHash    // %secureHash
         | Ext of RscHash    // $secureHash
         | Hier of Action * Word // Action @ Word
     and Program = Action list
 
-    // Parser Notes:
-    //
-    // - most programs should be relatively short
-    // - parse from bytestring, no need for streaming
-    // 
-    // The current parser allocates more than I'd prefer, which will
-    // hurt performance somewhat. But it shouldn't be a huge problem.
-    // It's something I can try to resolve later.
+    /// An incomplete program may have several open blocks. I record
+    /// this information in a reverse-ordered list for fast addend.
+    ///
+    ///   foo [bar baz [qux   =>    [qux; baz bar; foo]
+    ///
+    /// Additionally, parse may fail before it reaches the end of the
+    /// input, so we may need to return the unparsed input. Looking at
+    /// the first character of the input can provide some hints about
+    /// the error.
+    type IncompleteProg = (struct(Program list * ByteString))
 
-    /// An incomplete program is represented by a stack of reversed programs.
-    /// E.g. `foo [bar baz [qux` should produce `[qux; baz bar; foo]`.
-    type IncompleteProg = Program list
-
-    /// Parse result is either a valid program or a partial program
-    /// and remaining bytes.
+    /// Parse result is either a valid program or an incomplete program
+    /// with remaining bytes. 
     type ParseResult =
         | ParseOK of Program
-        | ParseErr of IncompleteProg * ByteString
+        | ParseErr of IncompleteProg
 
-    let private parseHalt cx p s =
-        if (BS.isEmpty s) && (List.isEmpty cx) 
-           then ParseOK (List.rev p)
-           else ParseErr (p::cx, s)
+    let inline private matchChar c s = 
+        startsWith ((=) (byte c)) s
 
     let rec parseHier a s =
-        if (BS.isEmpty s) || (byte '@' <> BS.unsafeHead s) then struct(a,s) else
+        if not (matchChar '@' s) then struct(a,s) else
         match tryParseWord (BS.unsafeTail s) with
         | Some (struct(w,s')) -> parseHier (Hier(a,w)) s'
         | None -> struct(a,s)
 
+    let inline private tryParseHash (s:ByteString) : (struct(RscHash * ByteString)) option =
+        let struct(h,s') = BS.span (RscHash.isHashByte) s
+        if(RscHash.size <> BS.length h) then None else
+        Some (struct(h,s')) 
+
     let tryParseAction (s:ByteString) : (struct(Action * ByteString)) option =
-        raise (System.NotImplementedException "todo: parse actions")
+        if BS.isEmpty s then None else
+        let c0 = BS.unsafeHead s // looking at one character is sufficient
+        if isWordStart c0 then // common words
+            match tryParseWord s with
+            | Some (struct(w,s')) -> Some (struct(W w,s'))
+            | _ -> None
+        else if(isNumChar c0) then // natural numbers
+            match tryParseNat s with
+            | Some (struct(n,s')) when not (startsWith isWordChar s') ->
+                // filtering out stuff like `42zed`. Require separation.
+                Some (struct(N n, s'))
+            | _ -> None
+        else if(byte '"' = c0) then // embedded texts
+            let struct(txt,s') = BS.span isTextChar (BS.unsafeTail s)
+            if (matchChar '"' s') 
+                then Some (struct(T txt, BS.unsafeTail s'))
+                else None
+        else if(byte '(' = c0) then // annotation
+            match tryParseWord (BS.unsafeTail s) with
+            | Some (struct(w,s')) when matchChar ')' s' ->
+                Some (struct(Anno w, BS.unsafeTail s'))
+            | _ -> None
+        else if(byte ':' = c0) then // record label 
+            match tryParseWord (BS.unsafeTail s) with
+            | Some (struct(w,s')) -> Some (struct(LPut w, s'))
+            | _ -> None
+        else if(byte '.' = c0) then // record label access
+            match tryParseWord (BS.unsafeTail s) with
+            | Some (struct(w,s')) -> Some (struct(LGet w, s'))
+            | _ -> None
+        else if(byte '%' = c0) then // binary resource
+            match tryParseHash (BS.unsafeTail s) with
+            | Some (struct(h,s')) -> Some (struct(Bin h, s'))
+            | _ -> None
+        else if(byte '$' = c0) then // stowage resource
+            match tryParseHash (BS.unsafeTail s) with
+            | Some (struct(h,s')) -> Some (struct(Ext h, s'))
+            | _ -> None
+        else None
+
+    let private parseHalt cx p s =
+        if (BS.isEmpty s) && (List.isEmpty cx) 
+           then ParseOK (List.rev p)
+           else ParseErr (struct(p::cx, s))
 
     let rec parse' cx p s = 
         if (BS.isEmpty s) then parseHalt cx p s else
@@ -158,8 +199,68 @@ module AST =
                 parse' cx (a' :: p) s'
             | None -> parseHalt cx p s
 
+    /// Parse from a ByteString.
+    ///
+    /// I assume Awelon programs are relatively small, up to a few
+    /// dozen kilobytes (given editable views), so stream processing
+    /// isn't essential. Larger programs should be broken into small
+    /// programs as needed.
     let inline parse (s:ByteString) : ParseResult = 
         parse' (List.empty) (List.empty) s
+
+
+    // Write program to byte string. Currently this will perform
+    // a naive recursive write, so there may be stack issues if
+    // the input program is very large or deep.
+    //
+    // TODO: consider eliminating unnecessary whitespace.
+    let rec writeProgram (p:Program) (dst:ByteDst) : unit =
+        match p with
+        | (a :: p') -> 
+            writeAction a dst
+            if List.isEmpty p' then () else
+            ByteStream.writeByte (byte ' ') dst
+            writeProgram p' dst
+        | [] -> ()
+    and writeAction (a:Action) (dst:ByteDst) : unit =
+        match a with
+        | B b ->
+            ByteStream.writeByte (byte '[') dst
+            writeProgram b dst
+            ByteStream.writeByte (byte ']') dst
+        | W w ->
+            ByteStream.writeBytes w dst
+        | N n -> 
+            ByteStream.writeBytes (BS.fromString (string n)) dst
+        | T t ->
+            ByteStream.writeByte (byte '"') dst
+            ByteStream.writeBytes t dst
+            ByteStream.writeByte (byte '"') dst
+        | Anno w ->
+            ByteStream.writeByte (byte '(') dst
+            ByteStream.writeBytes w dst
+            ByteStream.writeByte (byte ')') dst
+        | LPut lbl ->
+            ByteStream.writeByte (byte ':') dst
+            ByteStream.writeBytes lbl dst
+        | LGet lbl ->
+            ByteStream.writeByte (byte '.') dst
+            ByteStream.writeBytes lbl dst
+        | Bin h ->
+            ByteStream.writeByte (byte '%') dst
+            ByteStream.writeBytes h dst
+        | Ext h ->
+            ByteStream.writeByte (byte '$') dst
+            ByteStream.writeBytes h dst
+        | Hier (a,d) ->
+            writeAction a dst
+            ByteStream.writeByte (byte '@') dst
+            ByteStream.writeBytes d dst
+
+    /// Write a Program to a ByteString.
+    let inline write (p:Program) : ByteString = 
+        ByteStream.write (writeProgram p)
+
 
 
 
