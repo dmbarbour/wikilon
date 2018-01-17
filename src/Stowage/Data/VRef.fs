@@ -42,7 +42,7 @@ module VRef =
     /// Create VRef by packaging Codec, Stowage DB, and RscHash.
     ///
     /// Assumes client is passing ownership of the reference. You
-    /// might need to explicitly increfRscDB in some cases.
+    /// might need to explicitly apply `db.Incref h` in some cases.
     let wrap' (c:Codec<'V>) (db:Stowage) (h:RscHash) : VRef<'V> = 
         new VRef<'V>(c,db,BS.toArray h)
 
