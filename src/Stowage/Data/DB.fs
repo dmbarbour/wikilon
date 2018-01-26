@@ -66,13 +66,26 @@ type DB =
     /// that read dependencies are tracked and writes are aggregated.
     /// Ideally has snapshot isolation, so read-only transactions do
     /// not fail. Commit is implicit on returning and may fail. The
-    /// extra boolean result reports commit success. Any exception 
-    /// will cleanly abort the transaction.
+    /// extra boolean result reports commit success. An exception
+    /// should cleanly abort the transaction. (See DB.Retry)
     /// 
     /// For high-contention variables, clients should use external
     /// synchronization to improve chances of transaction success.
     abstract member Transact : (DB -> 'X) -> struct('X * bool)
 
+// TODO: Reactive Extensions for DB??
+//
+// I'd like the ability to wait upon a set of dependencies, such
+// that we can intelligently react to changes, to replay or retry
+// a transaction or simply to maintain cached computations.
+//
+// One possible approach is to install "automatic" transactions
+// that play once when installed and again whenever a dependency
+// changes, before final commit. However, insisting everything
+// be atomic might be a bad idea.
+//
+// Since I don't have a nice API or clear requirements, for now
+// I leave reactive extensions to ad-hoc DB wrappers.
 
 module DB =
 

@@ -14,6 +14,7 @@
     <Compile Include="VDiff.fs" />
     <Compile Include="IntMap.fs" />
     <Compile Include="Trie.fs" />
+    <Compile Include="LSMTrie.fs" />
     <Compile Include="DB.fs" />
   </ItemGroup>
   <ItemGroup>

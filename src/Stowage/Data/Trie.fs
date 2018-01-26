@@ -309,17 +309,10 @@ module Trie =
         | None -> false
 
     /// Minimally rewrite a tree such that isKeyRemote returns false.
-    let rec touch (k:Key) (t:Tree<'V>) : Tree<'V> =
-        let n = bytesShared k (t.prefix)
-        if ((n = k.Length) || (n <> t.prefix.Length)) then t else
-        let ix = uint64 (k.[n])
-        match IntMap.tryFind ix (t.children) with
-        | Some c ->
-            let c' = touch (BS.drop (n+1) k) c
-            let cs' = IntMap.add ix c' (t.children)
-            { t with children = cs' }
-        | None -> t
-
+    let touch (k:Key) (t:Tree<'V>) : Tree<'V> =
+        match tryFind k t with
+        | Some v -> add k v t
+        | None -> remove k t
 
     // divide a node at a given index in the prefix. This will
     // result in an equivalent tree, albeit an invalid one with
@@ -332,7 +325,6 @@ module Trie =
           value = None
           children = IntMap.singleton ix c
         }
-
 
     let inline private seqInL t = toSeq t |> Seq.map (fun (k,v) -> (k, InL v))
     let inline private seqInR t = toSeq t |> Seq.map (fun (k,v) -> (k, InR v))

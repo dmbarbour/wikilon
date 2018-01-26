@@ -3,13 +3,11 @@ open Data.ByteString
 
 /// A Log Structured Merge (LSM) Tree above Stowage, based on Tries.
 ///
-/// An LSM tree is an associative structure with built-in update buffers.
-/// Recent updates aggregate near the tree root, creating an efficient 
-/// working set for write-heavy work loads.
-/// 
-/// Representing these trees in stowage allows for first-class, immutable,
-/// persistent, larger-than-memory key-value databases with structured data.
-/// It is easy to keep histories or model forks and branches.
+/// An LSM tree is an associative structure with built-in buffering for
+/// updates. This buffering reduces average write costs, especially if 
+/// most updates are applied to a relatively small working set. LSM trees
+/// are history dependent, but still support a large degree of structure
+/// sharing based on shared histories or common leaf volumes.
 module LSMTrie =
 
     /// Keys in our Trie should be short, simple bytestrings. Even
@@ -18,7 +16,8 @@ module LSMTrie =
 
     /// Each tree node has a key fragment, a value at that key, a sparse
     /// array of children indexed 0..255, and buffered updates. If values
-    /// are potentially very large, use CVRef<'V> type for indirection.
+    /// are potentially large, try CVRef<'V> type for indirection to limit
+    /// node sizes.
     ///
     /// Updates to remote tree nodes are buffered locally until compaction.
     /// A compaction operation will heuristically flush update buffers.
@@ -47,7 +46,7 @@ module LSMTrie =
         }
 
     /// Test whether LSMTrie is empty. (Assuming valid structure.)
-    let isEmpty (t:Tree<_>) : bool =
+    let inline isEmpty (t:Tree<_>) : bool =
         Option.isNone (t.value) && IntMap.isEmpty (t.children)
 
     let rec private validChild k (t:Tree<_>) : bool =
@@ -113,7 +112,7 @@ module LSMTrie =
             ByteStream.writeBytes c dst)
 
     // make a node after partial filtering of value or children.
-    // Assumes empty update set and valid child set.
+    // assumes remote update-set is valid relative to child-set.
     let private mkNode p v cs us =
         if (Option.isSome v) || not (IntMap.isEmpty us) then 
             { prefix = p; value = v; children = cs; updates = us }
@@ -124,7 +123,7 @@ module LSMTrie =
                 { c with prefix = joinBytes p (byte b) (c.prefix) }
             | _ -> { prefix = p; value = None; children = cs; updates = IntMap.empty }
 
-
+ 
     let inline private setChildAt ix c' cs =
         if isEmpty c'
             then IntMap.remove ix cs
@@ -133,11 +132,12 @@ module LSMTrie =
     /// Return copy of tree minus a specified key.
     ///
     /// If the key is associated with a Stowage resource, we'll instead
-    /// record the key for pending deletion.
+    /// record the key in a local update buffer for pending deletion.
     let rec remove (k:Key) (t:Tree<'V>) : Tree<'V> =
         let n = bytesShared k (t.prefix)
-        if (n <> t.prefix.Length) then t 
+        if (n <> t.prefix.Length) then t // nothing to remove
         else if (n = k.Length) then 
+            // remove value at current tree node
             mkNode (t.prefix) None (t.children) (t.updates)
         else
             let ix = uint64 (k.[n])
@@ -159,7 +159,7 @@ module LSMTrie =
 
     /// Remove key from tree only if it exists. This avoids rewriting
     /// the tree or adding to the update buffer in the cases where the
-    /// key is unlikely to be present. 
+    /// key is not present. However, it also costs a lookup.
     let inline checkedRemove (k:Key) (t:Tree<'V>) : Tree<'V> =
         if containsKey k t then remove k t else t
 
@@ -213,23 +213,19 @@ module LSMTrie =
               updates = IntMap.empty
             }
 
-    /// Return copy of key with key-value pair added or updated.
+    /// Return copy of tree with key-value pair added or updated.
     let add (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
         if isEmpty t then singleton k v else add' k v t
-
     
     let private addUpd k vOpt c =
         match vOpt with
         | None -> remove k c
         | Some v -> add k v c 
 
+    let inline private flushUpd u t = Trie.foldBack addUpd u t
     let private addUpdates ix upd cs =
         let c = defaultArg (IntMap.tryFind ix cs) empty
-        let c' = Trie.foldBack addUpd upd c
-        if isEmpty c' 
-            then IntMap.remove ix cs
-            else IntMap.add ix c' cs
-
+        setChildAt ix (flushUpd upd c) cs
     // fully merge update set into child set
     let inline private flush us cs = IntMap.foldBack addUpdates us cs
 
@@ -311,13 +307,14 @@ module LSMTrie =
     /// Unsuitable for huge trees. Consider compactingFilter. 
     let inline filter (pred:Key -> 'V -> bool) (t:Tree<'V>) : Tree<'V> =
         filterMap (fun k v -> if pred k v then Some v else None) t
-        
+
     /// Add a prefix to all keys in a tree.
     let addPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
         if isEmpty t then empty else
         {t with prefix = (BS.append p (t.prefix)) }
 
-    /// Drop key prefix and all keys that don't match.
+    /// Drop key prefix and all keys that don't match, i.e. such
+    /// that remaining keys are suffixes from given prefix.
     let rec remPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
         let n = bytesShared p (t.prefix)
         if (n = p.Length) then
@@ -373,6 +370,154 @@ module LSMTrie =
             (tl,tr)
         else if(k.[n] < t.prefix.[n]) then (empty,t)
         else (t,empty)
+
+    /// Test whether a key access requires dereferencing stowage.
+    /// Keys in the local update buffer are considered local.
+    let rec isKeyRemote (k:Key) (t:Tree<'V>) : bool =
+        let n = bytesShared k (t.prefix)
+        if ((n = k.Length) || (n <> t.prefix.Length)) then false else
+        let ix = uint64 (k.[n])
+        let k' = BS.drop (n+1) k
+        let keyInUpdates = 
+            match IntMap.tryFind ix (t.updates) with
+            | Some u -> Trie.containsKey k' u
+            | None -> false
+        if keyInUpdates then false else
+        if IntMap.isKeyRemote ix (t.children) then true else
+        match IntMap.tryFind ix (t.children) with
+        | Some c -> isKeyRemote k' c
+        | None -> false
+
+    /// Rewrite a tree such that isKeyRemote returns false. For LSM trees,
+    /// this copies a remote value (if any) into a local update buffer.
+    let touch (k:Key) (t:Tree<'V>) : Tree<'V> =
+        match tryFind k t with
+        | Some v -> add k v t
+        | None -> remove k t 
+
+    // divide a node at a given index in the prefix. This will
+    // result in an equivalent tree, albeit an invalid one with
+    // one linear child. Used temporarily to simplify diffs.
+    let private splitPrefixAt n t =
+        assert (n < BS.length t.prefix)
+        let c = { t with prefix = (BS.drop (n+1) (t.prefix)) }
+        let ix = uint64 (t.prefix.[n])
+        { prefix = BS.take (n) (t.prefix)
+          value = None
+          children = IntMap.singleton ix c
+          updates = IntMap.empty
+        }
+
+
+    let inline private seqInL t = toSeq t |> Seq.map (fun (k,v) -> (k, InL v))
+    let inline private seqInR t = toSeq t |> Seq.map (fun (k,v) -> (k, InR v))
+
+    let inline private updatesAt ix (t:Tree<'V>) : Trie<'V option> =
+        match IntMap.tryFind ix (t.updates) with
+        | Some t -> t
+        | None -> Trie.empty
+
+    let inline private childrenAt ix (t:Tree<'V>) : Tree<'V> =
+        match IntMap.tryFind ix (t.children) with
+        | Some c -> c
+        | None -> empty
+
+    let inline private fullChildrenAt ix (t:Tree<'V>) : Tree<'V> =
+        flushUpd (updatesAt ix t) (childrenAt ix t)
+
+    let private hasDiffRefVal (vdiff:VDiff<'V>) : bool =
+        match vdiff with
+        | InB(va,vb) -> not (System.Object.ReferenceEquals(va,vb))
+        | _ -> true
+
+    // notes: currently I simply use splitPrefixAt to align nodes and
+    // retry when one key is fully matched. This means each key fragment
+    // might be compared twice.
+    // 
+    //
+    // Updates are simply flushed as we compare trees. This
+    // only works nicely if updates are focused on a few shared prefixes.
+    // If updates are widely distributed, this may result in many extra
+    // comparisons.
+    let rec diffRef' (p:ByteString) (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
+        seq {
+            let n = bytesShared (a.prefix) (b.prefix)
+            if (n < (BS.length a.prefix)) then
+                if (n < (BS.length b.prefix)) then
+                    // keys in tree fully diverge at offset `n`
+                    let a' = addPrefix p a
+                    let b' = addPrefix p b
+                    if (a.prefix.[n] < b.prefix.[n]) 
+                        then yield! Seq.append (seqInL a') (seqInR b')
+                        else yield! Seq.append (seqInR b') (seqInL a')
+                else yield! diffRef' p (splitPrefixAt n a) b 
+            else if (n < (BS.length b.prefix)) then
+                yield! diffRef' p a (splitPrefixAt n b)
+            else // tree keys match at current node
+                let k = BS.append p (a.prefix) 
+                // potentially yield value at this node.
+                match a.value with
+                | None ->
+                    match b.value with
+                    | None -> ()
+                    | Some vb -> yield (k, InR vb)
+                | Some va ->
+                    match b.value with 
+                    | None -> yield (k, InL va)
+                    | Some vb ->
+                        // leveraging reference comparisons on Option types
+                        let eq = System.Object.ReferenceEquals(a.value, b.value)
+                        if eq then () else 
+                        yield (k, InB (va,vb))
+
+                // prescan for potential differences in child nodes.
+                let diffAt : bool[] = Array.create 256 false
+                for ((ix,vdif)) in IntMap.diffRef (a.updates) (b.updates) do
+                    if hasDiffRefVal vdif then diffAt.[int ix] <- true
+                for ((ix,vdif)) in IntMap.diffRef (a.children) (b.children) do
+                    if hasDiffRefVal vdif then diffAt.[int ix] <- true
+
+                // yield differences
+                for ix = 0UL to 255UL do
+                    if not (diffAt.[int ix]) then () else
+                    let p' = BS.snoc k (byte ix)
+                    let ca = fullChildrenAt ix a
+                    let cb = fullChildrenAt ix b
+                    yield! diffRef' p' ca cb
+                   
+        } // end seq
+    
+    // possible improvements for diffRef
+    //   At moment, prescan means we can load several remote nodes
+    //   before we require them. That risks LVRef cache overflow,
+    //   and we might load nodes more than once. But it also hugely
+    //   simplifies the logic. We could try to do better here.
+
+                        
+    /// Conservative difference based on reference equality of nodes.
+    /// This does not compare values directly, but can filter subtrees
+    /// based on equivalent secure hashes or runtime memory references.
+    /// This can help for fast diffs given small persistent updates to
+    /// a tree structure. 
+    ///
+    /// For LSM trees this feature is somewhat hindered by processing
+    /// of pending updates, such that nodes are rarely equivalent. But
+    /// we still make a best effort to avoid unnecessary comparisons.
+    /// If the working set is relatively focused, this is a non-issue.
+    let diffRef a b = 
+        if System.Object.ReferenceEquals(a,b) then Seq.empty else
+        if isEmpty a then seqInR b else
+        if isEmpty b then seqInL a else
+        diffRef' (BS.empty) a b 
+
+    let private trueDiff vd =
+        match vd with
+        | InB (l,r) -> (l <> r) 
+        | _ -> true
+
+    /// Precise value differences. Filters diffRef with value comparisons.
+    let diff a b = diffRef a b |> Seq.filter (snd >> trueDiff)
+
 
 
     module Enc =
@@ -445,8 +590,6 @@ module LSMTrie =
     let inline compactingFilter (cTree:Codec<Tree<'V>>) (db:Stowage) (pred:Key -> 'V -> bool) (t:Tree<'V>) : Tree<'V> =
         let fn k v = if pred k v then Some v else None
         compactingFilterMap cTree db fn t
-
-
 
 
 type LSMTrie<'V> = LSMTrie.Tree<'V>
