@@ -213,20 +213,16 @@ module AST =
     // a naive recursive write, so there may be stack issues if
     // the input program is very large or deep.
     //
-    // TODO: consider eliminating unnecessary whitespace.
-    let rec writeProgram (p:Program) (dst:ByteDst) : unit =
+    // This writer tries to minimize unnecessary whitespace. 
+    let rec writeProgram (ws:bool) (p:Program) (dst:ByteDst) : unit =
         match p with
-        | (a :: p') -> 
-            writeAction a dst
-            if List.isEmpty p' then () else
-            ByteStream.writeByte (byte ' ') dst
-            writeProgram p' dst
+        | (a :: p') -> writeAction ws p' a dst
         | [] -> ()
-    and writeAction (a:Action) (dst:ByteDst) : unit =
+    and writeAction (ws:bool) (p:Program) (a:Action) (dst:ByteDst) : unit =
         match a with
         | B b ->
             ByteStream.writeByte (byte '[') dst
-            writeProgram b dst
+            writeProgram true b dst
             ByteStream.writeByte (byte ']') dst
         | W w ->
             ByteStream.writeBytes w dst

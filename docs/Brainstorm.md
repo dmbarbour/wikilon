@@ -25,7 +25,11 @@ My intuition is that this isn't a great idea. I do like the idea of modeling 'sp
 
 The idea with lazy memo copy is to evaluate `[A]c` to produce `[A][A]` while tracking this equivalence relationship under the hood via use of aliasing. When either copy is evaluated, the other will also receive the same benefits of the evaluation effort. 
 
-But this is a fragile optimization. It won't survive serialization, distribution, persistence. It may also complicate program debugging snapshots a little, since we'll need to distinguish snapshot copies (which cannot share further memoization of evaluation) from normal copies. Further, we cannot rely on lazy memo copy for laziness for the serialized output anyway, thus it won't work nicely as a basis for coinductive data and incremental computing.
+But this is a fragile optimization. It won't survive serialization, distribution, persistence. It may also complicate program debugging snapshots a little, since we'll need to distinguish snapshot copies (which cannot share further memoization of evaluation) from normal copies. This latter point could be mitigated by using the variable extraction algorithm when rendering with lazy values.
+
+Further, we cannot rely on lazy memo copy for laziness for the serialized output anyway, thus it won't work nicely as a basis for coinductive data and incremental computing.
 
 These weaknesses had me instead favor arity annotations to defer computation and independent `(memo)` to share computations where possible, with memoization having a more robust basis than aliasing in memory. The cost is expensive memoization and laziness that requires explicit attention.
+
+
 

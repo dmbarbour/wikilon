@@ -71,9 +71,9 @@ Fortunately, a lot of views and data fit these constraints or at least can be ad
 
 Publish subscribe is a model for continuous, live programming of real world systems.
 
-Command pattern provides a basis for small updates to large objects. Compositional views provide a basis for efficient ad-hoc subscriptions including large objects. Between these, large Awelon resources can be observed and updated in real-time by both human and software agents. A human may subscribe to dashboard views and use commands (or direct manipulation) to update policy. An 'internet of things' device might use a command pattern to publish time-series data while subscribing to a schedule of goal states.
+With ad-hoc conventions a dictionary might describe subscriptions to external data resources. An agent can fulfill these subscriptions, copying external data into the dictionary. If this agent is built into a runtime system for well-understood resources, it is feasible to leverage lazy and logical copies (depending on durability requirements). Conversely, external agents might subscribe to words or expressions in the dictionary and observe changes in their evaluation due to changes in the underlying data. 
 
-The ability to share flexible views of large objects without requiring each endpoint to manage fine-grained update events makes Awelon a lot more expressive and easier to use than many state-of-the-art publish subscribe systems.
+I believe that Awelon dictionaries could make an excellent basis for flexible publish-subscribe systems.
 
 ## Effectful Work Orders
 

@@ -3,44 +3,54 @@
 
 # Awelon Runtime Design
 
-I want state of the art performance without a heroic or long term effort.
+## CLR
 
-## A viable (but too long) Haskell path
+To leverage .NET JIT, I'll start by reimplementing in F#. This should enable access to runtime code generation mechanisms (e.g. CodeDOM), assuming a suitable 'accelerated' intermediate language. I've selected the `dotnet` core, which unfortunately excludes some nice libraries like WebSharper but has a relatively clean and portable toolset.
 
-Haskell simplifies many problems surrounding GC, parallelism, parsing, serialization, stowage, linking, and indexing. OTOH, my Haskell interpreters for prior Awelon definitions have consistently been at least 10x worse than C interpreters, sometimes 100x worse.
+I'll need to implement ByteStrings, since CLR's UTF-16 strings aren't very appropriate for Awelon.
 
-First, accelerators. I can and should get started much earlier on a widely useful "standard library" of accelerated functions and data types. If every time I see a significant performance bottleneck, I accelerate, I can consistently ratchet up performance and parallelism both, even if I'm assuming simple interpreters.
+## Stowage
 
-Second, compilation from Awelon to an intermediate language designed for fast naive interpretation or further JIT. I've already discussed under [Awelon Language](AwelonLang.md) how it isn't too difficult to rewrite a lot of Awelon code to an intermediate language where we have call-return, labeled jumps, more conventional loops and branching, perhaps even a few registers for data plumbing. Hand crafted accelerators and types would become primitives at this layer. 
+To support a large-scale runtime supporting massive filesystem-sized dictionaries, I must implement *Stowage* and several data structures such as tries. Stowage will use secure hashes to reference binary resources, and reference-counting GC. LMDB shall be leveraged for Stowage.
 
-Third, compilation from this intermediate language into Haskell, something we can link directly into our runtimes. We can leverage Template Haskell to represent a "standard library" Awelon dictionary in a subdirectory of the Wikilon project, and compile everything fully to well-typed Haskell, with an option for gate-keeper code where appropriate. This would make it a lot easier to extend the set of accelerators. And I believe I can achieve excellent performance this way.
+## Dictionary Representation
 
-Fourth, we can dynamially compile Haskell code at runtime. This is feasible either by use of the GHC `plugins` system or by constructing independent Haskell processes to which we may delegate computations. I can feasibly leverage type-indexed products to represent a shared context API without use of imports. I imagine this would make for very high-latency JIT. But it should be sufficient for the more stable of software components.
+A basic dictionary can be represented by a trie or variant in Stowage. I'm leaning towards an log-structured merge trie, i.e. a tree with byte-level branching and internally buffered updates. The update buffering allows for O(1) writes and effective support for "working sets". 
 
-Fifth, compilation from the same intermediate language via LibClang, OpenCL, or LLVM. This would provide a basis for true JIT compilation. I could compile to use a memory-mapped region for the stack and heap, or compile for external processes or virtual machines to distribute computation. Compiling to binaries for external use could provide integration with conventional systems.
+Unfortunately, I suspect I'll need fast diffs on a regular basis. In that context, it may be necessary to explicitly track recent updates or 'patches' of some form, such that global diffs are not required - instead, agents would remember how much of each dictionary's "history" they've recently processed.
 
-I believe this is a viable and scalable long-term performance path for Awelon.
+## Cache Management
 
-The first two ideas might be combined, since every accelerated type and function must also be represented in our intermediate language. The intermediate language requires much attention. As will developing a useful set of "primitive" accelerators.
+I need a lot of caching for my goals with Wikilon. Consequently, these caches must be managed and updated effectively.
 
-## A Shorter Path? Leverage JVM or CLR
+Each dictionary might be associated with multiple cached observations. Examples:
 
-With JVM or CLR we can leverage JIT and dynamic code generation. Leveraging this would allow me to take advantage of existing and ongoing optimization efforts. Code generation may also simplify construction or plug-ins for server-side agents to support various application models.
+* reverse lookup index (word to client set)
+* word definition version hashes (word to hash)
+* version hashes to evaluated definitions
+* version hashes to type descriptors
+* version hashes to link-optimized definitions
+* version hashes to intermediate compiled code
+* fuzzy find indices - find words by suffix, initialisms, types
 
-CLR has a few advantages - a cleaner CodeDOM, full abstraction. OTOH, the .Net ecosystem is a mess with all the different frameworks. The .Net core seems to clean things up a fair bit, but a lot of stuff hasn't been ported to .Net core yet. WebSharper is interesting, too, but is not currently usable from the .Net core. JVM is also usable. But I'll give CLR with F# a fair try first.
+Ideally, I want to share a lot of cache across versions and forks of a dictionary. To achieve this, indirection via 'version hashes' seems appropriate. A version hash would be a secure hash that uniquely summarizes a word and its transitive dependencies, e.g. like a minimal dictionary.
 
-Strings are an issue. Awelon uses UTF-8 exclusively, but JVM and CLR strings are UTF-16 by default. I'll just need to translate everything, I suppose.
+However, when dealing with transitive dependencies, maintaining these indices atomically becomes infeasible. Even updating all the version hashes could involve millions of writes, and ideally should be handled lazily or asynchronously. I think we need asynchronous and background computations. We'll also want the ability to extend the system with new caches as required for the development environment. A reasonable paradigm for cached observations is perhaps to model it in terms of multiple external but interdependent agents asynchronously indexing the dictionary. An agent's cache should be robust, regenerable, reproducible even if the agent misses some intermediate update events. Hence, cache should be computed from RESTful states, although diffs might be used against a remembered state.
 
+Ideally, we should leverage a topographical sort on inter-cache dependencies to avoid unnecessary rework. It's feasible to achieve this schedule implicitly using appropriate asynchronous await methods of .Net. But for snapshot consistency, I believe a more explicit schedule may be required. Perhaps we can model the appropriate "dependencies" in terms of "watching" Stowage TVars?
+
+If I focus cache on TVars, then perhaps a viable option is to extend the `DB` type with watching variables and automatic transactions. We can perform a transaction once, remember its dependencies and outputs, and add it to a topographical sort. We could leverage a return value to determine whether we continue watching. In some cases, perhaps, we might want to abort the transaction but retry automatically when dependencies change. Cached data would then be accessible via computed TVars. Durability is optional. This seems like a very promising direction!
+
+A related concern is real-time processing. Awelon application models depend on efficient dictionary updates and low-latency observations for multiple agents, along with explicit memoization for large data. It seems to me that this could easily be associated with multi-agent cache management models.
 
 ## Spike Solution
 
-I need to get several APIs working ASAP:
+Goals:
 
-* import and export of codebases
- * via secure hash resources
- * via .tar file or similar
+* efficient import and export of dictionaries (.tar?)
+ * primarily secure hashes, stowage
 
-* dictionary entry, lookup, evaluations
+
 
 
 Initial requirements:
@@ -60,85 +70,6 @@ An interesting point with Awelon's current definition is that I don't really nee
 For uploads, it might be best to immediately root every upload by binding it to a word or dictionary.
 
 I'm not going to worry about security or user tracking quite yet.
-
-## Indexing of Dictionaries?
-
-I need a simple data structure suitable for a few different operations:
-
-* efficient insertion and deletion, obviously
-* efficient diff and merge for database-level ops
-* efficient search with common suffix is convenient
-* structure sharing: data determines representation
-* easy batching of updates, avoid temporary stowage
-
-Tries and crit-bit trees are the most promising options here. 
-
-With crit-bit trees, however, we do must occasionally peek at a sample key when performing diffs and merges so we can detect differences *prior* to the first crit-bit. It is feasible to shift the key from one of the two child nodes upwards into the parent, e.g. such that the least key is always represented in the parent node. This results in a structure akin to:
-
-        data CBT  = CBT (Maybe Root)
-        data Root = Root Eph Key Node   -- 'Eph' resists GC of stowage
-        data Node = Inner Int Node Key Node
-                  | Leaf Data
-
-This ensures we always have immediate access to the least key in the tree. The Inner node includes the least key from the right-hand tree, assuming we have received our least key for the child key from the parent.
-
-An intriguing property of crit-bit trees is that we could easily reorder visitation of bits based on priority for flattening the tree. This is the [prioritized crit-bit trees (PCBT)](http://unisonweb.org/2015-12-22/data-api-implementation.html) developed by Paul Chiusano for the Unison project. Such trees are not readily merged, but they could offer superior read-only performance.
-
-
-It may be we can modify a crit-bit tree a little, i.e. such that we record a range of keys in each node.
-
-I'm looking mostly at tries and crit-bit trees as my options.
-
-Crit-bit trees have a lot of simplicity advantages. I guess my main concern is efficient 'diff' on trees, convenient for comparing full databases. Can we efficiently `diff` 
-
-
-Crit-bit trees
-
-I can use crit-bit key-value trees, adapted for stowage, for most of my data. 
-
-The root of a CBT is maybe a node, otherwise empty. It may need to hold some ephemeron roots, so we'll also keep a root ephemeron holster. A node is either inner or a leaf. A leaf has a key-value pair, while a node has an integer then left and right children. With *stowage*, our key and value may be represented inline or using an external reference.
-
-
-
-When serializing these nodes, we must be careful to avoid hindering recognition of secure hash resources within our key-value data. We may also benefit from supporting lightweight inlining of nodes, such that an Inner node may be inlined or not. It seems feasible to combine the Leaf and Inner types in their serialized forms, simply using 0 for our Int value within the leaf-node.
-
-If we do this carefully, it should also be feasible to process the index with minimal parsing of it, e.g. just skip the first node to read the second, or skip the key to read the data. This would require one extra size field in the serialized form.
-
-index our data using binary representations directly, without parsing. This would enable a quick search without copying.
-
-Intriguingly, it is feasible to reuse crit-bit tree representation with very little alteration for a , reordering visit bits to ensure .
-
- as a batch process. Doing so would provide a more optimal index, but would hinder dynamism since we cannot easily add, remove, or update elements from a PCBT.
-
-
-
-The real trick here will be ensuring our node sizes inline enough to be worthwhile. 
-
-It is feasible to use a fixed-width node size to represent several branches. But it might be wiser to simply 
-
-
-
-
- node in a CBT is either inner or leaf
-
-assuming we don't need to merge our trees.
-
-A related performance concern regards how I should go about indexing of dictionaries and the various related structures. 
-
-Desiderata:
-
-* index multiple versions of dictionaries
-* structure sharing between indices
-* composable indices (monoid class)
-* integrated data stowage, batch updates 
-
-The simplest index that guarantees structure sharing regardless of construction history is the trie. A critical-bit tree is also a potential basis, though it may prove difficult to integrate with stowage. It's essentially a bit-level trie. 
-
-An interesting idea from the Unison Web project is the , which would correspond to a trie where we're not forced to discriminate on the *first* character difference. Instead we can discriminate over the Nth bit or character in the path, selected to optimize information with each branch. The PCBT has some nice properties, but we can't readily model composition of indices or insertion of new data.
-
-For now, a simple bytestring trie should do the job well enough, especially with a little support for batched input and composition at the stowage layers. Importantly, trie's are a simple, predictable, composable, and comprehensible data structure. 
-
-Later, new index structures may be introduced on an as-needed basis. Indexing, fortunately, is a feature that doesn't need to be perfect up front.
 
 ## Accelerators and Intermediate Language
 
@@ -202,41 +133,6 @@ This short-term solution can be extended to mid-term via "hot swap" features tha
 Long term, I'd like to properly bootstrap Awelon, and have it self-compile with its own compiler and runtime. Hopefully, the short and mid term solutions can provide a scaffolding here.
 
 *Notes:* It seems feasible to leverage `plugins` as a lightweight approach for hot swapping the reference dictionaries. We might also use `compact` to reduce GC overheads for static indexes.
-
-## Dictionary Indexing
-
-I must efficiently index a dictionary to:
-
-* find definition, given a word
-* find references to a word or annotation
-* find words with common suffix (or prefix)
-
-For efficient import/export of dictionaries, I want want to preserve structure of dictionary resources.
-
-But it is feasible to operate mostly off the indexes, and to generate a new dictionary resource that represents the same dictionaries more efficiently. Importantly, such indices must be incremental and composable, such that a composition of patches can be indexed by a function composing their indices. Structure sharing, so updates aren't scattered throughout the dictionary, may also be valuable.
-
-All of this suggests use of trees or tries to me. Tries, unlike most search trees, have a nice property of fully deterministic structure based on the *elements* they contain rather than their update order. I lean in favor of tries to improve structure sharing between independently developed dictionaries.
-
-* to find a definition, use trie from word to definition
-* to find clients, use trie from word to a set of words
-* one trie encodes words backwards for suffix lookups
-* set of words is encoded as a trie, using keys only
-
-During evaluation, I'll probably need to maintain another index for cached evaluations, localization of words, etc. - again, having a lot of structure sharing would be convenient.
-
-Tries require a lot of references between tree nodes, which seems a problem given 60-byte resource IDs. Use of stowage size heuristics - e.g. don't stow anything smaller than 256 or 512 bytes - might help by collapsing smaller nodes.
-
-All of this involves a lot of references between index nodes. Of course, when references are large secure hashes, having lots of small nodes is problematic. This can be mitigated using stowage style heuristics, deciding whether to collapse a node based on its apparent size. 
-
-Definitions could be included directly, again via stowage, instead of a `(resource, offset)` indirection. This would be important if we wish to share structure of indices independtly of dictionary update order or patch structure. 
-
-Anyhow, the runtime will need to be relatively good at working with tries and stowage.
-
-## Concurrent Update
-
-A context shall represent a transaction on the dictionary, in the sense that it may conflict with updates from other contexts on the same dictionary. 
-
-It seems feasible to model discretionary locks within a dictionary. Or to keep some form of write journal, to support DVCS-style workspaces with fork and ad-hoc merge. But such features won't be supported by the runtime.
 
 ## API Concepts
 

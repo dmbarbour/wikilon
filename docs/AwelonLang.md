@@ -81,7 +81,8 @@ Awelon has native support for natural numbers. Syntactically, numbers are repres
         42 = [41 succ]
         (et cetera)
 
-Definitions for `zero` and `succ` are left to the dictionary. A typical encoding might copy and apply a function N times to represent number N. Wrapping everything in blocks provides a simple structural guarantee that numbers may be treated as values regardless of definition. In practice, natural numbers must be defined based on *Acceleration*. With accelerated arithmetic, for example, we could add two numbers in log-time rather than linear time. Awelon does not support any other number types natively, but *Editable Views* can be leveraged to support numerical towers at the syntactic layer.
+Definitions for `zero` and `succ` are left to the dictionary. However, in practice the definitions will be standardized and runtime-approved to simplify *Acceleration* for natural numbers and arithmetic. Although Awelon does not support other number types, 
+ Awelon does not support any other number types natively, but *Editable Views* can be leveraged to support numerical towers at the syntactic layer.
 
 ## Embedded Texts
 
@@ -122,10 +123,6 @@ For variants, consider that basic sum type `(A+B)` has a Church encoding `∀r.(
 This model of labeled data adds no expressiveness to Awelon. In general, a record can be encoded as a trie, a label as a path. It is something we could model explicitly by leveraging accelerators and editable views. Doing so was my original intention. However, making labels primitive and records abstract better preserves the several benefits of labeled data. For example, we don't need to decode partial labels when reporting type or partial evaluation errors. We don't need to worry about dynamic construction of labels or ad-hoc composition of records. We essentially can reason about commutativity at a syntactic layer, without non-local knowledge of how labels are implemented. 
 
 That said, I'm reluctant to introduce new language primitives. Before I remove "experimental" status, I'll need to see how well this feature works in practice, whether an alternative model would be more appropriate (perhaps lens-based), and also how nicely this labeled data model works in context of accelerators, especially accelerated evaluation for Kahn process networks involving labeled ports and processes.
-
-### Awelon Modules
-
-Words are the unit for user definition and mutability in an Awelon codebase. The definition of a word is essentially a function. Awelon does not support the common module system and import/export models from many other languages. However, it is feasible to use records to model first-class modules, especially if leveraged together with annotations for staged programming.
 
 ## Secure Hash Resources
 
@@ -216,15 +213,35 @@ What "large value" means is heuristic. But it should be simple to predict, under
 
 ## Dictionary
 
-Awelon words are defined in a codebase called a "dictionary". Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon is designed to use community curated dictionaries as a starting point for software projects. This replaces the more conventional approach of using "libraries" - packages of definitions. Libraries are troublesome because of dependencies, versioning, configuration management, and software ownership issues. A dictionary, however, can simply include all the words one is likely to need, tested and known to work together, every definition uniformly accessible by the programmer.
+Awelon words are defined in a codebase called a "dictionary". Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon is designed to use community curated dictionaries as a starting point for software projects. This replaces the more conventional approach of using "libraries" - interdependent packages of definitions. Libraries are troublesome because of dependencies, versioning, configuration management, poor automatic integration testing, and social software ownership issues. A dictionary, however, can simply include all the words and definitions and data one is likely to need, tested and known to work together, every definition uniformly accessible and updateable by the programmer.
 
-Awelon language does not specify how dictionaries are represented. However, my intention is that dictionaries should leverage *Secure Hash Resources* for structure sharing and lazy downloading. This would mitigate the issues that arise from shoving multiple gigabytes of libraries into one flat, community curated dictionary.
+Unlike conventional programming languages, Awelon encourages that a lot of *data* also be represented in the codebase. For example: maps, music, almanacs, articles, paintings, presentations, books, blogs, forums, fonts, etc.. The dictionary doubles as a database or filesystem. Integrated databases significantly simplify effective utilization for purely functional software, much like use of spreadsheets. A dictionary's data may be maintained in real-time by software agents - cf. Awelon's [application models](ApplicationModel.md).
 
-In practice, dictionaries will be edited through various services, leveraging *Editable Views* and perhaps *Session Views*.
+*Note:* Although it is discouraged in general, developers may still model and distribute "libraries" as patches updating word definitions. This may be suitable for experimental definitions.
 
-See also *Hierarchical Dictionaries*.
+### Dictionary Representation
 
-*Note:* Developers can still model "libraries" as packages of trusted definitions that we "install" into a dictionary - essentially, a patch on the codebase, perhaps using common prefixes. This is not encouraged, but may be suitable for experimental definitions that aren't yet accepted by a community.
+Awelon does not specify any particular representation for dictionaries. De-facto standards should eventually emerge. However, relevant desiderata include: structure sharing, lazy downloads, provider independence, working sets, compaction, and efficient diffs. 
+
+Structure sharing enables enormous dictionaries to be updated, versioned, and forked in a lightweight manner. Lazy downloads allows clients to avoid loading definitions that they don't require, which enables scaling without guilt. Provider independence means references can be verifiably downloaded from any server, which simplifies distribution, caching, and use of proxies or content-delivery networks. Working sets can support real-time updates and application models. Compaction allows us to eventually forget outdated definitions, garbage collect unnecessary words, and control codebase size. Efficient diffs are useful for maintaining a separate cache or index, merging and cherrypicking updates, and implementing UX features such as recent updates.
+
+To achieve these several properties in one data structure, variations of the log-structured merge-tree represented above secure hash resources seems most promising. 
+
+### Hierarchical Dictionary Structure
+
+Ultimately, dictionaries are maintained by multiple agents - of nature both human and software - managing, sharing, and synchronizing definitions. These definitions may represent documents, databases, or other application state. However, the ad-hoc interaction of multiple agents introduces significant concerns regarding information security and naming conflicts. To address these concerns, it is convenient if agents can manage and share an isolated dictionary, allowing clients to extract the relevant data. For this purpose, Awelon supports *hierarchical dictionaries*, allowing dictionaries to contain and reference other dictionaries.
+
+References are represented by an `@dict` suffix, naming a contained dictionary. 
+
+        bar@d       (has behavior of `bar` from dictionary `@d`)
+        42@d        => [41 succ]@d
+        [41 succ]@d => [41@d succ@d]
+        "hello"@d   => [104 "ello"]@d
+        (eq_z)@d    (behavior of (eq_z) in dictionary `@d`)
+
+Effectively, we add an implicit `@dictname` suffix to every word in a contained dictionary, preserving behavior and structure of the contained dictionary. The contained dictionary cannot reference or depend upon its host. Consequently, every contained dictionary will replicate definitions for shared dependencies such as natural numbers and arithmetic. Fortunately, we can leverage structure sharing to mitigate storage overheads.
+
+To mitigate aesthetic issues, improve caching, and encourage community standardization of word definitions, any evaluator is free to localize words with common meaning. For example, if `42@d` means the same as `42` then we may freely rewrite the former to the latter. Primitives, labels, and most annotations can automatically be localized. Localization theoretically should create weak social pressures for dictionaries to gradually standardize and share more definitions.
 
 ## Evaluation
 
@@ -515,24 +532,6 @@ For the more sophisticated types - such as GADTs, signatures, existential types,
 Awelon doesn't specify a type description language, but we're free to use strings or data structures. Static analysis tools should recognize de-facto standards by ad-hoc means, such as a version comment within the type description. 
 
 *Aside:* Type descriptions related to words can generally be moved outside of mainline code, into auxiliary definitions. But it's better to use annotations even within these auxiliary definitions, to avoid relying on naming conventions. E.g. `foo_type = [[foo][type description](type)]`. 
-
-## Hierarchical Dictionaries
-
-For several [application models](ApplicationModel.md), it is convenient if multiple agents can use their own definitions or operate in securely confined sandboxes without conflict. We might even wish to treat some "dictionaries" as documents, databases, or data resources that can be safely shared and synchronized. To support these models, I propose a concept of *hierarchical dictionaries*. A dictionary may contain other dictionaries and reference them.
-
-We'll use an `@dict` suffix to reference a component dictionary. 
-
-        bar@d       (has behavior of `bar` from dictionary `@d`)
-        42@d        => [41 succ]@d
-        [41 succ]@d => [41@d succ@d]
-        "hello"@d   => [104 "ello"]@d
-        (eq_z)@d    (behavior of (eq_z) in dictionary `@d`)
-
-Dictionaries are named using words prefixed by `@`. Hence, dictionary names do not conflict with normal words. The dictionary suffix is second class: it must directly modify an atom or block. Whitespace is not permitted before the `@dict` suffix.
-
-References are strictly hierarchical - i.e. a definition can reference a contained dictionary, but a contained dictionary cannot reference its host. Consequently, every dictionary must be fully self-contained. In practice, contained dictionaries will replicate a lot of common dependency code such as natural numbers and arithmetic. A representation of dictionaries with effective structure sharing will be essential for efficient storage.
-
-A localizing evaluator may remove the dictionary suffix when it doesn't affect behavior. For example, if `42@d` has the same behavior as `42` then we are free to rewrite the former to the latter. Common elements, such as the `a b c d` primitives, labels `:label` and `.label`, and most annotations can easily be localized.
 
 ## Editable Views
 
