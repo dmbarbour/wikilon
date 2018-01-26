@@ -425,21 +425,23 @@ module LSMTrie =
     let inline private fullChildrenAt ix (t:Tree<'V>) : Tree<'V> =
         flushUpd (updatesAt ix t) (childrenAt ix t)
 
-    let private hasDiffRefVal (vdiff:VDiff<'V>) : bool =
-        match vdiff with
-        | InB(va,vb) -> not (System.Object.ReferenceEquals(va,vb))
+    let private eqref a b = System.Object.ReferenceEquals(a,b)
+    let private eqOpt eq a b =
+        match a with
+        | Some va ->
+            match b with
+            | Some vb -> eq va vb
+            | None -> false
+        | None -> Option.isNone b
+    let inline private eqUpd eqVal ua ub = 
+        Trie.diffEq (eqOpt eqVal) ua ub |> Seq.isEmpty
+    let inline private trueDiff eq vd =
+        match vd with
+        | InB (l,r) -> not (eq l r)
         | _ -> true
 
-    // notes: currently I simply use splitPrefixAt to align nodes and
-    // retry when one key is fully matched. This means each key fragment
-    // might be compared twice.
-    // 
-    //
-    // Updates are simply flushed as we compare trees. This
-    // only works nicely if updates are focused on a few shared prefixes.
-    // If updates are widely distributed, this may result in many extra
-    // comparisons.
-    let rec diffRef' (p:ByteString) (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
+    // Differences in updates are filtered aggressively, if feasible.
+    let rec diffEq' (eq : 'V -> 'V -> bool) (p:ByteString) (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
         seq {
             let n = bytesShared (a.prefix) (b.prefix)
             if (n < (BS.length a.prefix)) then
@@ -450,9 +452,9 @@ module LSMTrie =
                     if (a.prefix.[n] < b.prefix.[n]) 
                         then yield! Seq.append (seqInL a') (seqInR b')
                         else yield! Seq.append (seqInR b') (seqInL a')
-                else yield! diffRef' p (splitPrefixAt n a) b 
+                else yield! diffEq' eq p (splitPrefixAt n a) b // realign a
             else if (n < (BS.length b.prefix)) then
-                yield! diffRef' p a (splitPrefixAt n b)
+                yield! diffEq' eq p a (splitPrefixAt n b) // realign b
             else // tree keys match at current node
                 let k = BS.append p (a.prefix) 
                 // potentially yield value at this node.
@@ -465,17 +467,19 @@ module LSMTrie =
                     match b.value with 
                     | None -> yield (k, InL va)
                     | Some vb ->
-                        // leveraging reference comparisons on Option types
-                        let eq = System.Object.ReferenceEquals(a.value, b.value)
-                        if eq then () else 
+                        // final memory reference comparison on Option type
+                        // final value comparison if required
+                        let skip = (eqref (a.value) (b.value)) || (eq va vb)
+                        if skip then () else
                         yield (k, InB (va,vb))
 
                 // prescan for potential differences in child nodes.
                 let diffAt : bool[] = Array.create 256 false
-                for ((ix,vdif)) in IntMap.diffRef (a.updates) (b.updates) do
-                    if hasDiffRefVal vdif then diffAt.[int ix] <- true
-                for ((ix,vdif)) in IntMap.diffRef (a.children) (b.children) do
-                    if hasDiffRefVal vdif then diffAt.[int ix] <- true
+                for ((ix,vd)) in IntMap.diffRef (a.children) (b.children) do
+                    diffAt.[int ix] <- (* diffAt.[int ix] || *) trueDiff eqref vd
+                for ((ix,vd)) in IntMap.diffRef (a.updates) (b.updates) do
+                    // don't compare updates if children are different
+                    diffAt.[int ix] <- diffAt.[int ix] || trueDiff (eqUpd eq) vd
 
                 // yield differences
                 for ix = 0UL to 255UL do
@@ -483,43 +487,27 @@ module LSMTrie =
                     let p' = BS.snoc k (byte ix)
                     let ca = fullChildrenAt ix a
                     let cb = fullChildrenAt ix b
-                    yield! diffRef' p' ca cb
+                    yield! diffEq' eq p' ca cb
                    
         } // end seq
-    
-    // possible improvements for diffRef
-    //   At moment, prescan means we can load several remote nodes
-    //   before we require them. That risks LVRef cache overflow,
-    //   and we might load nodes more than once. But it also hugely
-    //   simplifies the logic. We could try to do better here.
 
-                        
-    /// Conservative difference based on reference equality of nodes.
-    /// This does not compare values directly, but can filter subtrees
-    /// based on equivalent secure hashes or runtime memory references.
-    /// This can help for fast diffs given small persistent updates to
-    /// a tree structure. 
+    /// Difference of two LSM tries using both reference equality of
+    /// nodes and the given equality function for values.
     ///
-    /// For LSM trees this feature is somewhat hindered by processing
-    /// of pending updates, such that nodes are rarely equivalent. But
-    /// we still make a best effort to avoid unnecessary comparisons.
-    /// If the working set is relatively focused, this is a non-issue.
-    let diffRef a b = 
-        if System.Object.ReferenceEquals(a,b) then Seq.empty else
+    /// Due to how LSM trees are structured, values may be compared
+    /// more than once when processing pending update buffers.
+    let diffEq eq a b = 
+        if eqref a b then Seq.empty else
         if isEmpty a then seqInR b else
         if isEmpty b then seqInL a else
-        diffRef' (BS.empty) a b 
+        diffEq' eq (BS.empty) a b
 
-    let private trueDiff vd =
-        match vd with
-        | InB (l,r) -> (l <> r) 
-        | _ -> true
-
-    /// Precise value differences. Filters diffRef with value comparisons.
-    let diff a b = diffRef a b |> Seq.filter (snd >> trueDiff)
-
-
-
+    /// Difference of LSM trees based only on reference equality.
+    let diffRef a b = diffEq (fun _ _ -> true) a b
+    
+    /// Difference of LSM trees based on standard equality of values.
+    let diff a b = diffEq (=) a b 
+                        
     module Enc =
         // Encoding is concatenation of key, value, updates, and children.
         // Compaction will flush updates based on the given `buffer` argument.

@@ -560,18 +560,17 @@ module IntMap =
             match b with
             | Some nb -> Node.seqInR 0UL nb
             | None    -> Seq.empty
-        
 
-    let private trueDiff vd =
-        match vd with
-        | InB (l,r) -> (l <> r) 
-        | _ -> true
+    /// Diff with given equality function.
+    let inline diffEq eq a b =
+        let trueDiff ((ix,vdif)) =
+            match vdif with
+            | InB (l,r) -> not (eq l r)
+            | _ -> true
+        diffRef a b |> Seq.filter trueDiff
 
-    /// Precise value differences. Filters diffRef with value comparisons.
-    let diff a b = diffRef a b |> Seq.filter (snd >> trueDiff)
-
-    /// Deep structural equality for Trees. Basically tests for diff.
-    let deepEq a b = Seq.isEmpty (diff a b)
+    /// Diff with value equality comparisons.
+    let diff a b = diffEq (=) a b
 
     // TODO: effective support for union-merge. Ideally something better
     // than just folding over a diff.

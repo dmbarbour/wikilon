@@ -374,8 +374,6 @@ module Trie =
                         yield! diffRef' p' ca cb
         } // end seq
                         
-
-
     /// Conservative difference based on reference equality of nodes.
     /// This does not compare values directly, but will filter subtrees
     /// based on equivalent secure hashes or memory references.
@@ -388,18 +386,19 @@ module Trie =
         if isEmpty b then seqInL a else
         diffRef' (BS.empty) a b 
 
-    let private trueDiff vd =
-        match vd with
-        | InB (l,r) -> (l <> r) 
-        | _ -> true
+    /// Diff with given equality function.
+    let inline diffEq eq a b = 
+        let trueDiff ((ix,vdif)) =
+            match vdif with
+            | InB (l,r) -> not (eq l r)
+            | _ -> true
+        diffRef a b |> Seq.filter trueDiff
 
-    /// Precise value differences. Filters diffRef with value comparisons.
-    let diff a b = diffRef a b |> Seq.filter (snd >> trueDiff)
-
-
+    /// Diff with value equality comparisons.
+    let diff a b = diffEq (=) a b
 
     // TODO:
-    // - efficient tree merges 
+    // - efficient tree merges
 
     module Enc =
         // encoding is trivial concatenation of key, value, and children.
