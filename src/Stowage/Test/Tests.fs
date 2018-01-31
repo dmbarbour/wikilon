@@ -621,7 +621,7 @@ type DBTests =
         let tc = LSMTrie.codec' 800 300 (EncVarInt32.codec)
         let toKey k = string k |> BS.fromString
         let add k t = LSMTrie.add (toKey k) k t
-        let a = [| for i = 1 to 30000 do yield i |]
+        let a = [| for i = 1 to 20000 do yield i |]
         let asum = Array.fold (+) 0 a
         let sw = new System.Diagnostics.Stopwatch()
 
@@ -647,7 +647,7 @@ type DBTests =
         let usec_per_read = (tm_read * 1000.0) / (double (Array.length a))
 
         printfn "LSMTrie single compaction write op: %A" usec_per_write // ~11 on my machine
-        printfn "LSMTrie single compaction read op: %A" usec_per_read // ~2.4 on my machine
+        printfn "LSMTrie single compaction read op: %A" usec_per_read // ~2.5 on my machine
 
             // this performance isn't too bad
         
@@ -723,13 +723,15 @@ type DBTests =
         let read_usec = 1000.0 * sw_read.Elapsed.TotalMilliseconds
         let usec_per_write = write_usec / (double (write_ops_per_loop * loopct))
         let usec_per_read = read_usec / (double (read_ops_per_loop * loopct))
-        printfn "LSMTrie mixed op write cost: %A" usec_per_write // ~24 on my machine
-        printfn "LSMTrie mixed op read cost: %A" usec_per_read   // ~3.3 on my machine
+        printfn "LSMTrie mixed op write cost: %A" usec_per_write // ~23 on my machine
+        printfn "LSMTrie mixed op read cost: %A" usec_per_read   // ~3.1 on my machine
 
-            // Note: Even accounting for serialization and parsing overheads,
-            // I think this performance is not impressive. I'll need to find
-            // the bottlenecks to improve performance. I could also try to use
-            // RocksDB instead of LMDB.
+            // Note: I think this performance is not impressive. I want to find
+            // the bottlenecks to improve performance. I could try RocksDB for
+            // faster write than LMDB, perhaps, to limit write amplification.
+            
+            // However, the performance seems to be within acceptable tolerances.
+            // The main benefit is persistent databases as first class values.
 
         // resist performance regression
         Assert.True(usec_per_write < 60.0)
