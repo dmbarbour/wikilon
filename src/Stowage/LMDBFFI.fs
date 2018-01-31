@@ -38,10 +38,12 @@ module internal LMDB_FFI =
     let defaultMode : mdb_mode_t = 0o660
 
     // Environment Flags
-    let MDB_NOSYNC   =  0x10000u    // writer handles sync explicitly
-    let MDB_WRITEMAP =  0x80000u    // avoid extra malloc/copy on write
-    let MDB_NOTLS    = 0x200000u    // using lightweight threads
-    let MDB_NOLOCK   = 0x400000u    // specialized locking model
+    let MDB_NOSYNC      =  0x10000u     // writer handles sync explicitly
+    let MDB_WRITEMAP    =  0x80000u     // avoid extra malloc/copy on write
+    let MDB_NOTLS       = 0x200000u     // using lightweight threads
+    let MDB_NOLOCK      = 0x400000u     // specialized locking model
+    let MDB_NORDAHEAD   = 0x800000u     // assume mostly random reads
+
     
     // Database Flags
     let MDB_CREATE  = 0x40000u  // create DB if it doesn't exist

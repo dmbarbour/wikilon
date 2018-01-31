@@ -87,4 +87,16 @@ module Codec =
     let inline boxed (cV : Codec<'V>) : Codec<System.Object> =
         view cV (box<'V>) (unbox<'V>)
 
+    /// Invalid Codec - raises `invalidOp` for every operation.
+    ///
+    /// This is intended as a temporary placeholder for construction of
+    /// recursively structured codecs (for example, the Trie codec).
+    let invalid : Codec<'Val> =
+        { new Codec<'Val> with
+            member __.Write _ _ = invalidOp "invalid Codec cannot write"
+            member __.Read _ _ = invalidOp "invalid Codec cannot read"
+            member __.Compact _ _ = invalidOp "invalid Codec cannot compact"
+        }
+
+
 

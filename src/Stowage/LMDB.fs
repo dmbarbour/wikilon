@@ -173,7 +173,7 @@ module LMDB =
                 mdb_env_set_mapsize env maxSizeMB
                 mdb_env_set_maxdbs env 4
                 let envFlags = MDB_NOSYNC ||| MDB_WRITEMAP ||| 
-                               MDB_NOTLS ||| MDB_NOLOCK
+                               MDB_NOTLS ||| MDB_NOLOCK ||| MDB_NORDAHEAD
                 mdb_env_open env path envFlags
                 let tx = mdb_readwrite_txn_begin env
                 let dbi_data = mdb_dbi_open tx "/"

@@ -402,12 +402,11 @@ module Trie =
 
     module Enc =
         // encoding is trivial concatenation of key, value, and children.
-
         // to avoid dynamic construction of the IntMap codec I'm using
         // a recursive object constructor. Awkward, but safe in this case.
         type TreeCodec<'V> =
             val value    : Codec<'V>                  // value encoder
-            val children : Codec<IntMap<Tree<'V>>>    // for recursion
+            val mutable children : Codec<IntMap<Tree<'V>>>    // for recursion
             interface Codec<Tree<'V>> with
                 member c.Write t dst =
                     EncBytes.write (t.prefix) dst
@@ -424,9 +423,9 @@ module Trie =
                     let struct(cs',szCS) = Codec.compactSz (c.children) db (t.children)
                     let t' = { prefix = (t.prefix); value = v'; children = cs' }
                     struct(t', szP + szV + szCS)
-            new(cv,thresh) as tc =
-                let cc = IntMap.codec' thresh (tc :> Codec<Tree<'V>>)
-                { value = cv; children = cc }
+            new(cv,thresh) 
+                as tc = { value = cv; children = Codec.invalid } then
+                tc.children <- IntMap.codec' thresh (tc :> Codec<Tree<'V>>)
 
     /// Codec with specified heuristic compaction threshold.
     let inline codec' (thresh:SizeEst) (cV:Codec<'V>) =

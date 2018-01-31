@@ -20,7 +20,7 @@ module LSMTrie =
     /// node sizes.
     ///
     /// Updates to remote tree nodes are buffered locally until compaction.
-    /// A compaction operation will heuristically flush update buffers.
+    /// A compaction operation will heuristically flush updates to children.
     type Tree<'V> =
         { prefix    : ByteString
           value     : 'V option         // value, if any.
@@ -506,18 +506,23 @@ module LSMTrie =
     let diffRef a b = diffEq (fun _ _ -> true) a b
     
     /// Difference of LSM trees based on standard equality of values.
-    let diff a b = diffEq (=) a b 
+    let diff a b = diffEq (=) a b
+
+    // TODO:
+    //  Consider support for prefix-level conservative diffs, limited
+    //  to local nodes, such that we can perform partial diffs while
+    //  ignoring prefixes that we do not care about. Same for Trie!
+    //
+    // Priority: low, until a use case arises.
                         
     module Enc =
         // Encoding is concatenation of key, value, updates, and children.
-        // Compaction will flush updates based on the given `buffer` argument.
-        // And nodes are compacted based on `thresh`. In general, we'll want
-        // buffer to be somewhat smaller than threshold.
+        // Compaction will flush updates based on a given `buffer` size. 
         type TreeCodec<'V> =
             val value    : Codec<'V>                  // value encoder
-            val children : Codec<IntMap<Tree<'V>>>    // for recursion
             val updates  : Codec<IntMap<Trie<'V option>>>  // for updates
             val buffer   : SizeEst                    // update buffer threshold
+            val mutable children : Codec<IntMap<Tree<'V>>>    // for recursion
             interface Codec<Tree<'V>> with
                 member c.Write t dst =
                     EncBytes.write (t.prefix) dst
@@ -544,19 +549,29 @@ module LSMTrie =
                         let struct(cs',szCS) = Codec.compactSz (c.children) db (t.children)
                         let t' = { prefix = t.prefix; value = v'; children = cs'; updates = us' }
                         struct(t',szP + szV + szCS + szUpd)
-            new(cv,thresh,buffer) as tc =
-                let cc = IntMap.codec' thresh (tc :> Codec<Tree<'V>>)
-                let cu = Trie.Enc.TreeCodec(EncOpt.codec cv, System.Int32.MaxValue).children
-                { value = cv; children = cc; updates = cu; buffer = buffer }
+            new(cv,page,buffer) 
+                as tc = { value = cv 
+                          updates = Trie.Enc.TreeCodec(EncOpt.codec cv, System.Int32.MaxValue).children
+                          buffer = buffer
+                          children = Codec.invalid
+                        } then
+                tc.children <- IntMap.codec' page (tc :> Codec<Tree<'V>>) 
 
     /// Codec with specified heuristic compaction thresholds.
     /// 
-    /// We have two thresholds: a buffer size for flushing updates, and a
-    /// stowage threshold for remote storage.
-    let inline codec' (thresh:SizeEst) (buffer:SizeEst) (cV:Codec<'V>) =
-        Enc.TreeCodec<'V>(cV,thresh,buffer) :> Codec<Tree<'V>>
+    /// We have two thresholds: a page size threshold for creation
+    /// of new stowage nodes, and a buffer before flushing updates 
+    /// to child pages. Each stowage node will contain at least two
+    /// child indices. 
+    ///
+    /// The buffer should sufficient to represent multiple key-value
+    /// pairs, lest a single large update force a flush all the way
+    /// to the leaf stowage nodes. Use CVRef if necessary to control
+    /// value sizes relative to page size.
+    let inline codec' (page:SizeEst) (buffer:SizeEst) (cV:Codec<'V>) =
+        Enc.TreeCodec<'V>(cV,page,buffer) :> Codec<Tree<'V>>
 
-    /// Codec with default compaction thresholds.
+    /// Codec with default compaction thresholds. 
     let inline codec cV = 
         let thresh = IntMap.EncNode.defaultThreshold
         codec' thresh thresh cV

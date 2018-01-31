@@ -246,7 +246,7 @@ let ``efficient trie diff`` () =
     let t1 = t0 |> add 0 |> add 11 |> add 112 |> add 1100 
                 |> rem 999 |> rem 92
     let diff a b = Trie.diffRef a b |> Seq.map (fun (k,v) -> (BS.toString k, v))
-    printfn "t1-t0=%A" (Array.ofSeq (diff t1 t0))
+    //printfn "t1-t0=%A" (Array.ofSeq (diff t1 t0))
     Assert.True(Seq.length (diff t1 t0) < 18)
     Assert.Equal(Seq.length (diff t1 t0), Seq.length (diff t0 t1))
 
@@ -463,7 +463,7 @@ type DBTests =
         t.FullGC()
 
         // guard against performance regressions!
-        Assert.True(usecPerStow < 200.0) // ~55 on my machine
+        Assert.True(usecPerStow < 200.0) // ~60 on my machine
         Assert.True(usecPerLookup < 50.0) // ~13 on my machine
         Assert.True(usecPerRep < 5.0)    // ~1.3 on my machine
 
@@ -610,10 +610,135 @@ type DBTests =
         Assert.Equal(2000, Seq.length (IntMap.toSeq m))
         Assert.Equal<(uint64 * int) seq>(IntMap.toSeq m, IntMap.toSeq m')
 
+    [<Fact>] 
+    member tf.``LSM Trie single compaction performance`` () =
+
+        // For performance comparison, build a big tree in memory then
+        // compact and serialize all at once. Then also read it once to
+        // ensure it's intact and get performance when update buffers
+        // are all empty.
+
+        let tc = LSMTrie.codec' 800 300 (EncVarInt32.codec)
+        let toKey k = string k |> BS.fromString
+        let add k t = LSMTrie.add (toKey k) k t
+        let a = [| for i = 1 to 30000 do yield i |]
+        let asum = Array.fold (+) 0 a
+        let sw = new System.Diagnostics.Stopwatch()
+
+        shuffle' (new System.Random(87)) a
+        sw.Restart()
+        let tref = 
+            LSMTrie.empty 
+                |> Array.foldBack add a 
+                |> Codec.compact tc (tf.Stowage)
+                |> VRef.stow tc (tf.Stowage)
+        tf.Flush()
+        sw.Stop()
+        let tm_write = sw.Elapsed.TotalMilliseconds
+        tf.FullGC()
+
+
+        sw.Restart()
+        let tsum = LSMTrie.fold (fun s k v -> (s + v)) 0 (VRef.load tref)
+        sw.Stop()
+        let tm_read = sw.Elapsed.TotalMilliseconds
+
+        let usec_per_write = (tm_write * 1000.0) / (double (Array.length a))
+        let usec_per_read = (tm_read * 1000.0) / (double (Array.length a))
+
+        printfn "LSMTrie single compaction write op: %A" usec_per_write // ~11 on my machine
+        printfn "LSMTrie single compaction read op: %A" usec_per_read // ~2.4 on my machine
+
+            // this performance isn't too bad
+        
+        Assert.Equal(asum, tsum)
+        Assert.True(usec_per_write < 30.0)
+        Assert.True(usec_per_read < 8.0)
+
+    [<Fact>]
+    member tf.``LSM Trie mixed operations`` () =
+        // Testing an LSM tree properly requires compaction. The final
+        // tree structure depends on update order up to compaction. For
+        // simplicity and variability, I'll compact based on the key.
+        let tc = LSMTrie.codec' 800 300 (EncVarInt32.codec)
+        let frac = 30
+        let compactK k t = 
+            if (0 <> (k % frac)) then t else  
+            Codec.compact tc (tf.Stowage) t        
+        let toKey i = string i |> BS.fromString
+        let add i t = compactK i (LSMTrie.add (toKey i) i t)
+        let rem i t = compactK i (LSMTrie.remove (toKey i) t)
+
+        // simple add-remove sequence 
+        let a = [| for i = 1 to 30000 do yield i |]
+        let r = [| for i = 1001 to 3000 do yield i
+                   for i = 7001 to 9000 do yield i
+                   for i = 13001 to 15000 do yield i
+                   for i = 19001 to 21000 do yield i
+                   for i = 25001 to 27000 do yield i
+                |]
+        let inline arraySum a = Array.fold (+) 0 a
+        let fsum = arraySum a - arraySum r
+        let rng = new System.Random(3)
+
+
+        let sw_write = new System.Diagnostics.Stopwatch()
+        let sw_read = new System.Diagnostics.Stopwatch()
+
+        // big tree tests, with stowage!
+        let loopct = 3
+        for testIndex = 1 to loopct do
+            shuffle' rng a
+            shuffle' rng r
+            tf.Flush()
+
+            sw_write.Start()
+            let struct(t,sz) =
+                LSMTrie.empty 
+                    |> Array.foldBack add a
+                    |> Array.foldBack rem r
+                    |> Codec.compactSz tc (tf.Stowage)
+            Assert.True(sz < 1000) // node size limit
+            let bytes = Codec.writeBytes tc t
+            Assert.Equal(sz, BS.length bytes) // precise size estimate
+            let h = tf.Stowage.Stow bytes
+            System.GC.KeepAlive(t)
+            tf.Flush() // ensure full write
+            sw_write.Stop()
+
+            //printfn "LSMTrie: %s" (BS.toString h)
+
+            tf.FullGC()
+
+            sw_read.Start()
+            let t' = Codec.load tc (tf.Stowage) h
+            tf.Stowage.Decref h
+            let tsum = LSMTrie.fold (fun s k v -> (s+v)) 0 t' 
+            Assert.Equal(tsum, fsum)
+            sw_read.Stop()
+
+        let write_ops_per_loop = Array.length a + Array.length r
+        let read_ops_per_loop = Array.length a - Array.length r
+        let write_usec = 1000.0 * sw_write.Elapsed.TotalMilliseconds
+        let read_usec = 1000.0 * sw_read.Elapsed.TotalMilliseconds
+        let usec_per_write = write_usec / (double (write_ops_per_loop * loopct))
+        let usec_per_read = read_usec / (double (read_ops_per_loop * loopct))
+        printfn "LSMTrie mixed op write cost: %A" usec_per_write // ~24 on my machine
+        printfn "LSMTrie mixed op read cost: %A" usec_per_read   // ~3.3 on my machine
+
+            // Note: Even accounting for serialization and parsing overheads,
+            // I think this performance is not impressive. I'll need to find
+            // the bottlenecks to improve performance. I could also try to use
+            // RocksDB instead of LMDB.
+
+        // resist performance regression
+        Assert.True(usec_per_write < 60.0)
+        Assert.True(usec_per_read < 10.0)
+
+        
+
     // TODO:
     //  - Trie compaction
     //  - diffRef for compact IntMap and Trie
-
-    // TODO: Test data structures.
 
 
