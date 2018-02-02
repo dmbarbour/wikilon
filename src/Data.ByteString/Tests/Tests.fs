@@ -144,48 +144,48 @@ let ``trivial byte reader`` () =
 [<Fact>] 
 let ``test critbit basics`` () =
     let x = BS.unsafeCreateA [| 0xFFuy; 0x00uy; 0xC1uy |]
-    Assert.True(BTree.testCritbit 0 x)
-    Assert.True(BTree.testCritbit 8 x)
-    Assert.True(BTree.testCritbit 9 x)
-    Assert.False(BTree.testCritbit 10 x)
-    Assert.False(BTree.testCritbit 17 x)
-    Assert.True(BTree.testCritbit 18 x)
-    Assert.True(BTree.testCritbit 19 x)
-    Assert.True(BTree.testCritbit 20 x)
-    Assert.False(BTree.testCritbit 21 x)
-    Assert.False(BTree.testCritbit 25 x)
-    Assert.True(BTree.testCritbit 26 x)
-    Assert.False(BTree.testCritbit 27 x)
+    Assert.True(CritbitTree.testCritbit 0 x)
+    Assert.True(CritbitTree.testCritbit 8 x)
+    Assert.True(CritbitTree.testCritbit 9 x)
+    Assert.False(CritbitTree.testCritbit 10 x)
+    Assert.False(CritbitTree.testCritbit 17 x)
+    Assert.True(CritbitTree.testCritbit 18 x)
+    Assert.True(CritbitTree.testCritbit 19 x)
+    Assert.True(CritbitTree.testCritbit 20 x)
+    Assert.False(CritbitTree.testCritbit 21 x)
+    Assert.False(CritbitTree.testCritbit 25 x)
+    Assert.True(CritbitTree.testCritbit 26 x)
+    Assert.False(CritbitTree.testCritbit 27 x)
 
 [<Fact>]
 let ``find critbit basics`` () =
     let x = BS.unsafeCreateA [| 0xFFuy; 0x00uy; 0x00uy |]
     let y = BS.unsafeCreateA [| 0xCCuy; 0x00uy |]
-    Assert.Equal(Some 3, BTree.findCritbit 0 x y)
-    Assert.Equal(Some 3, BTree.findCritbit 1 x y)
-    Assert.Equal(Some 3, BTree.findCritbit 2 x y)
-    Assert.Equal(Some 3, BTree.findCritbit 3 x y)
-    Assert.Equal(Some 4, BTree.findCritbit 4 x y)
-    Assert.Equal(Some 7, BTree.findCritbit 5 x y)
-    Assert.Equal(Some 7, BTree.findCritbit 7 x y)
-    Assert.Equal(Some 8, BTree.findCritbit 8 x y)
-    Assert.Equal(Some 18, BTree.findCritbit 9 x y)
+    Assert.Equal(Some 3, CritbitTree.findCritbit 0 x y)
+    Assert.Equal(Some 3, CritbitTree.findCritbit 1 x y)
+    Assert.Equal(Some 3, CritbitTree.findCritbit 2 x y)
+    Assert.Equal(Some 3, CritbitTree.findCritbit 3 x y)
+    Assert.Equal(Some 4, CritbitTree.findCritbit 4 x y)
+    Assert.Equal(Some 7, CritbitTree.findCritbit 5 x y)
+    Assert.Equal(Some 7, CritbitTree.findCritbit 7 x y)
+    Assert.Equal(Some 8, CritbitTree.findCritbit 8 x y)
+    Assert.Equal(Some 18, CritbitTree.findCritbit 9 x y)
 
 [<Fact>]
 let ``tree basics`` () =
-    let add s t = BTree.add (BS.fromString s) s t
+    let add s t = CritbitTree.add (BS.fromString s) s t
     let d1 : string list = ["bar"; "band"; "bald"; "bandit"; "bald eagle"; "bard"; "barrister"]
-    let t1 = List.fold (fun t s -> add s t) BTree.empty d1
-    Assert.True(BTree.validate t1)
-    Assert.Equal(d1.Length, BTree.size t1)
+    let t1 = List.fold (fun t s -> add s t) CritbitTree.empty d1
+    Assert.True(CritbitTree.validate t1)
+    Assert.Equal(d1.Length, CritbitTree.size t1)
 
-    Assert.True(BTree.exists (fun k _ -> (byte 'r' = k.[2])) t1)
-    Assert.False(BTree.exists (fun k _ -> (byte 'z' = k.[1])) t1)
-    Assert.True(BTree.forall (fun k _ -> (byte 'b' = k.[0])) t1)
+    Assert.True(CritbitTree.exists (fun k _ -> (byte 'r' = k.[2])) t1)
+    Assert.False(CritbitTree.exists (fun k _ -> (byte 'z' = k.[1])) t1)
+    Assert.True(CritbitTree.forall (fun k _ -> (byte 'b' = k.[0])) t1)
 
-    //BTree.iter (fun k v -> printfn "%s" v) t1
+    //CritbitTree.iter (fun k v -> printfn "%s" v) t1
 
-    let has t s = BTree.containsKey (BS.fromString s) t
+    let has t s = CritbitTree.containsKey (BS.fromString s) t
     Assert.True(has t1 "band")
     Assert.True(has t1 "bard")
     Assert.True(has t1 "bald")
@@ -196,14 +196,14 @@ let ``tree basics`` () =
     Assert.False(has t1 "barrier")
     Assert.False(has t1 "bardiche")
 
-    Assert.Equal(Some "bard", BTree.tryFind (BS.fromString "bard") t1)
-    Assert.Equal(Some "bar", BTree.tryFind (BS.fromString "bar") t1)
-    Assert.Equal(Some "bald", BTree.tryFind (BS.fromString "bald") t1)
+    Assert.Equal(Some "bard", CritbitTree.tryFind (BS.fromString "bard") t1)
+    Assert.Equal(Some "bar", CritbitTree.tryFind (BS.fromString "bar") t1)
+    Assert.Equal(Some "bald", CritbitTree.tryFind (BS.fromString "bald") t1)
 
-    let rem s t = BTree.remove (BS.fromString s) t
+    let rem s t = CritbitTree.remove (BS.fromString s) t
     let t2 = t1 |> rem "apple" |> rem "bard" |> rem "band" |> rem "bald"
-    Assert.True(BTree.validate t2)
-    Assert.Equal(d1.Length, 3 + BTree.size t2)
+    Assert.True(CritbitTree.validate t2)
+    Assert.Equal(d1.Length, 3 + CritbitTree.size t2)
     Assert.False(has t2 "apple")
     Assert.False(has t2 "bard")
     Assert.False(has t2 "band")
@@ -211,15 +211,17 @@ let ``tree basics`` () =
     Assert.True(has t2 "barrister")
 
     Assert.Equal(t1,t1)
-    Assert.Equal(t1, BTree.selectPrefix (BS.fromString "ba") t1)
-    Assert.Equal(3, BTree.size (BTree.selectPrefix (BS.fromString "bar") t1))
-    Assert.Equal(2, BTree.size (BTree.selectPrefix (BS.fromString "ban") t1))
+    Assert.Equal(t1, CritbitTree.selectPrefix (BS.fromString "ba") t1)
+    Assert.Equal(3, CritbitTree.size (CritbitTree.selectPrefix (BS.fromString "bar") t1))
+    Assert.Equal(2, CritbitTree.size (CritbitTree.selectPrefix (BS.fromString "ban") t1))
+    Assert.Equal(4, CritbitTree.size (CritbitTree.dropPrefix (BS.fromString "bar") t1))
+    Assert.Equal(5, CritbitTree.size (CritbitTree.dropPrefix (BS.fromString "ban") t1))
 
-    let p t s = BTree.partitionK (BS.fromString s) t
+    let p t s = CritbitTree.partitionK (BS.fromString s) t
     Assert.Equal(t1, snd (p t1 "bald")) // "bald" is least key
-    Assert.Equal(2, BTree.size (fst (p t1 "ban"))) // bald and bald eagle to left 
+    Assert.Equal(2, CritbitTree.size (fst (p t1 "ban"))) // bald and bald eagle to left 
     
-    let d1' = List.map snd (BTree.toList t1)
+    let d1' = List.map snd (CritbitTree.toList t1)
     Assert.Equal<String list>(d1', List.sort d1)
 
 

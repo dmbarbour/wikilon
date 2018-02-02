@@ -8,7 +8,7 @@ namespace Data.ByteString
 /// they must compare those prefixes redundantly. A critbit tree
 /// avoids this, and only looks at the necessary points in a key
 /// to distinguish them plus a final full-key comparison.
-module BTree =
+module CritbitTree =
 
     /// Keys in the Tree are short, simple ByteStrings.
     ///
@@ -226,6 +226,25 @@ module BTree =
         | Root(kl,n) -> selectPrefixN p kl n
         | Empty -> Empty
 
+    let rec dropPrefixN (p:ByteString) (kl:Key) (node:Node<'V>) : Tree<'V> =
+        match node with
+        | Inner(cb, l, kr, r) when (cb < (9 * p.Length)) ->
+            if testCritbit cb p then
+                match dropPrefixN p kr r with
+                | Root(kr',r') -> Root(kl, Inner(cb, l, kr', r'))
+                | Empty -> Root(kl,l)
+            else
+                match dropPrefixN p kl l with
+                | Root(kl',l') -> Root(kl', Inner(cb, l', kr, r))
+                | Empty -> Root(kr,r)
+        | _ -> if (p = (BS.take p.Length kl)) then Empty else Root(kl,node)
+
+    /// Remove all keys matching the given prefix. 
+    let dropPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
+        match t with
+        | Root(kl,n) -> dropPrefixN p kl n
+        | Empty -> Empty
+
     // pKR assumes k > least-key starting at mb
     let rec private pKR (mb:Critbit) (k:Key) (node:Node<'V>) : struct(Node<'V> * Tree<'V>) =
         match node with
@@ -258,6 +277,10 @@ module BTree =
                 (Root(kl,l),r)
             | _ -> (Empty, t)
         | Empty -> (Empty, Empty)
+
+    // Potential Functions: 
+    // - Select all keys that are a prefix of the input.
+    // - 
 
     module private EnumNode =
         type Stack<'V> = (Key * Node<'V>) list
@@ -381,5 +404,5 @@ module BTree =
 
     // TODO: view disassembly and improve performance!
 
-type BTree<'V> = BTree.Tree<'V>
+type CritbitTree<'V> = CritbitTree.Tree<'V>
 
