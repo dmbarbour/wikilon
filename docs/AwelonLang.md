@@ -120,9 +120,9 @@ For variants, consider that basic sum type `(A+B)` has a Church encoding `∀r.(
         [[OnA] :a [OnB] :b] .a [ValA] case == [ValA] OnA
         case = w d w i
 
-This model of labeled data adds no expressiveness to Awelon. In general, a record can be encoded as a trie, a label as a path. It is something we could model explicitly by leveraging accelerators and editable views. Doing so was my original intention. However, making labels primitive and records abstract better preserves the several benefits of labeled data. For example, we don't need to decode partial labels when reporting type or partial evaluation errors. We don't need to worry about dynamic construction of labels or ad-hoc composition of records. We essentially can reason about commutativity at a syntactic layer, without non-local knowledge of how labels are implemented. 
+This model of labeled data adds no expressiveness to Awelon. A record could be encoded as a trie, a label as a path. This feature could be implemented via careful use of accelerators and editable views. Doing so was my original intention! However, making the labels primitive and records abstract better enforces structure and preserves benefits for labeled data, and simplifies static error analysis and reporting.
 
-That said, I'm reluctant to introduce new language primitives. Before I remove "experimental" status, I'll need to see how well this feature works in practice, whether an alternative model would be more appropriate (perhaps lens-based), and also how nicely this labeled data model works in context of accelerators, especially accelerated evaluation for Kahn process networks involving labeled ports and processes.
+That said, I'm reluctant to introduce labels as language primitives. I want to see how well the feature works in practice, and how nicely this data model works in context of accelerators and optimizations, before accepting it as a built-in feature of Awelon. For now, it should be considered an experimental extension.
 
 ## Secure Hash Resources
 
@@ -215,17 +215,9 @@ What "large value" means is heuristic. But it should be simple to predict, under
 
 Awelon words are defined in a codebase called a "dictionary". Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon is designed to use community curated dictionaries as a starting point for software projects. This replaces the more conventional approach of using "libraries" - interdependent packages of definitions. Libraries are troublesome because of dependencies, versioning, configuration management, poor automatic integration testing, and social software ownership issues. A dictionary, however, can simply include all the words and definitions and data one is likely to need, tested and known to work together, every definition uniformly accessible and updateable by the programmer.
 
-Unlike conventional programming languages, Awelon encourages that a lot of *data* also be represented in the codebase. For example: maps, music, almanacs, articles, paintings, presentations, books, blogs, forums, fonts, etc.. The dictionary doubles as a database or filesystem. Integrated databases significantly simplify effective utilization for purely functional software, much like use of spreadsheets. A dictionary's data may be maintained in real-time by software agents - cf. Awelon's [application models](ApplicationModel.md).
+Unlike conventional programming languages, Awelon encourages that a lot of *data* also be represented in the codebase. For example: maps, music, almanacs, articles, paintings, presentations, books, blogs, forums, fonts, etc.. The dictionary doubles as a database or filesystem. Integrated databases significantly simplify effective utilization for purely functional languages, much like use of spreadsheets. A dictionary's data may be maintained in real-time by software agents - cf. Awelon's [application models](ApplicationModel.md).
 
 *Note:* Although it is discouraged in general, developers may still model and distribute "libraries" as patches updating word definitions. This may be suitable for experimental definitions.
-
-### Dictionary Representation
-
-Awelon does not specify any particular representation for dictionaries. De-facto standards should eventually emerge. However, relevant desiderata include: structure sharing, lazy downloads, provider independence, working sets, compaction, and efficient diffs. 
-
-Structure sharing enables enormous dictionaries to be updated, versioned, and forked in a lightweight manner. Lazy downloads allows clients to avoid loading definitions that they don't require, which enables scaling without guilt. Provider independence means references can be verifiably downloaded from any server, which simplifies distribution, caching, and use of proxies or content-delivery networks. Working sets can support real-time updates and application models. Compaction allows us to eventually forget outdated definitions, garbage collect unnecessary words, and control codebase size. Efficient diffs are useful for maintaining a separate cache or index, merging and cherrypicking updates, and implementing UX features such as recent updates.
-
-To achieve these several properties in one data structure, variations of the log-structured merge-tree represented above secure hash resources seems most promising. 
 
 ### Hierarchical Dictionary Structure
 
@@ -242,6 +234,28 @@ References are represented by an `@dict` suffix, naming a contained dictionary.
 Effectively, we add an implicit `@dictname` suffix to every word in a contained dictionary, preserving behavior and structure of the contained dictionary. The contained dictionary cannot reference or depend upon its host. Consequently, every contained dictionary will replicate definitions for shared dependencies such as natural numbers and arithmetic. Fortunately, we can leverage structure sharing to mitigate storage overheads.
 
 To mitigate aesthetic issues, improve caching, and encourage community standardization of word definitions, any evaluator is free to localize words with common meaning. For example, if `42@d` means the same as `42` then we may freely rewrite the former to the latter. Primitives, labels, and most annotations can automatically be localized. Localization theoretically should create weak social pressures for dictionaries to gradually standardize and share more definitions.
+
+### Dictionary Representation
+
+The Awelon dictionary must support soft real-time streaming updates, scales of multiple terabytes, distributed storage with lazy downloads, structure sharing with similar dictionaries, lightweight branching and versioning, and efficient diffs. Further it ideally should be legible in a text editor and simple enough for humans to infer the structure. 
+
+The proposed representation:
+
+        /prefix1 secureHash1
+        /prefix2 secureHash2
+        :symbol1 definition1
+        :symbol2 definition2
+        ~symbol3
+
+A dictionary is represented by a root node for a log-structured merge radix tree. The node encoding is legible, line-oriented ASCII. Each line is an update - a prefix with internal tree node, a symbol with definition, or deletion of a symbol. Internal nodes in the tree are identified by their secure hash (or empty string for empty tree). To find the definition for a symbol, it is sufficient to observe only the last relevant update. For example, an update to `/p` will mask prior updates to `:poke` and `/prod`. Those symbols should be moved into the node under `/p` if we intend to preserve them. The matched prefix is stripped from internal nodes, so under `/p` those symbols become `:oke` and `/rod`.
+
+Updates may appear in any order. However, nodes have a normal form easily constructed by eliminating masked updates then sorting the remaining updates. To maximize structure sharing, it's best for internal nodes to always use this normal form.
+
+An Awelon dictionary defines symbols for words and hierarchical dictionaries. A word's definition should be valid Awelon code, represented inline. Oversized definitions can cause inefficiencies due to repeated copying and node processing costs, but this can be mitigated by use of a `$secureHash` redirect. Hierarchical dictionaries have form `:@myDict secureHash`, i.e. simply use symbols starting with `@` and a secure hash identifying a root dictionary node.
+
+The empty prefix is permitted and useful. Within a stream, it masks all prior updates, representing an atomic update to a dictionary. And as the first update in a node, it represents a prototype inheritance for logical patching of another dictionary. Diffs can leverage this, seeking a common origin in case two dictionaries share lineage.
+
+*Note:* This dictionary representation does not enforce that definitions are acyclic, well typed, and so on. Such observations must be memoized and cached externally. However, efficient diffs can at least help with maintaining cached observations. 
 
 ## Evaluation
 

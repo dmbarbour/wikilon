@@ -11,13 +11,21 @@ I'll need to implement ByteStrings, since CLR's UTF-16 strings aren't very appro
 
 ## Stowage
 
-To support a large-scale runtime supporting massive filesystem-sized dictionaries, I must implement *Stowage* and several data structures such as tries. Stowage will use secure hashes to reference binary resources, and reference-counting GC. LMDB shall be leveraged for Stowage.
+To support a large-scale runtime supporting massive filesystem-sized dictionaries, I must implement *Stowage* and several data structures such as tries. Stowage will use secure hashes to reference binary resources, and reference-counting GC. 
+
+My current implementation uses an LMDB backend. This is pretty good, but assumes a read-heavy load that might not be optimal for frequent real-time inputs (like time series), and also doesn't support compression. However, it's implemented and tested, and LMDB is much simpler than most other databases - e.g. avoiding background threads and caching, minimal cleanup requirements on power failure, etc.. I'll stick to LMDB for now.
 
 ## Dictionary Representation
 
-A basic dictionary can be represented by a trie or variant in Stowage. I'm leaning towards an log-structured merge trie, i.e. a tree with byte-level branching and internally buffered updates. The update buffering allows for O(1) writes and effective support for "working sets". 
+I've now spent a lot of time on this. I eventually developed a specialized LSM trie variant for dictionaries - mostly to ensure legibility and simplicity for export/import and tooling. Format:
 
-Unfortunately, I suspect I'll need fast diffs on a regular basis. In that context, it may be necessary to explicitly track recent updates or 'patches' of some form, such that global diffs are not required - instead, agents would remember how much of each dictionary's "history" they've recently processed.
+        /prefix1 secureHash1
+        /prefix2 secureHash2
+        :symbol1 definition1
+        :symbol2 definition2
+        ~symbol3
+
+We have directories, definitions, and deletions. Basically an LSM radix tree. Empty prefix is useful for prototype inheritance.
 
 ## Cache Management
 
