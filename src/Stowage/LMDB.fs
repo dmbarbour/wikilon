@@ -54,7 +54,7 @@ module LMDB =
         }
 
     module private I =
-        type WriteBatch = BTree<Val>
+        type WriteBatch = CritbitTree<Val>
         
         // to guard Stowage hashes against timing attacks, we'll not
         // use the full RscHash for lookups. Instead, I use just the
@@ -189,8 +189,8 @@ module LMDB =
                   flock    = flock
                   ephtbl   = new Ephemerons()
                   rdlock   = new ReadLock()
-                  write    = BTree.empty
-                  writing  = BTree.empty
+                  write    = CritbitTree.empty
+                  writing  = CritbitTree.empty
                   stow     = Map.empty
                   stowing  = Map.empty
                   sync     = List.empty
@@ -263,17 +263,17 @@ module LMDB =
         let readKey (db : Database) (k : Key) : Val =
             let struct(wb0,wb1) = lock db (fun () -> 
                 struct(db.write, db.writing))
-            match BTree.tryFind k wb0 with
+            match CritbitTree.tryFind k wb0 with
             | Some v -> v
             | None ->
-                match BTree.tryFind k wb1 with
+                match CritbitTree.tryFind k wb1 with
                 | Some v -> v
                 | None -> withRTX db (fun rtx -> dbReadKey db rtx k)
 
 
-        let inline leftBiasedUnion (a:BTree<'x>) (b:BTree<'x>) : BTree<'x> =
-            if BTree.isEmpty b then a else
-            BTree.foldBack (BTree.add) a b
+        let inline leftBiasedUnion (a:CritbitTree<'x>) (b:CritbitTree<'x>) : CritbitTree<'x> =
+            if CritbitTree.isEmpty b then a else
+            CritbitTree.foldBack (CritbitTree.add) a b
 
         let validWrite (k:Key) (vOpt:Val) =
             // testing key against LMDB limits here
@@ -286,7 +286,7 @@ module LMDB =
 
         // Write batch of updates. Always causes a backround flush.
         let writeBatch (db : Database) (wb : KVMap) : DB.Sync =
-            if not (BTree.forall validWrite wb)
+            if not (CritbitTree.forall validWrite wb)
                 then invalidArg "wb" "invalid write batch"
             let tcs = new TCS()
             lock db (fun () ->
@@ -297,7 +297,7 @@ module LMDB =
 
         // signal DB to write, return immediately
         let signal (db:Database) : unit =
-            writeBatch db (BTree.empty) |> ignore<DB.Sync>
+            writeBatch db (CritbitTree.empty) |> ignore<DB.Sync>
 
         // reference counts are natural numbers, encoded using EncVarNat.
         // Zero counts are represented instead by keeping the reference in
@@ -497,7 +497,7 @@ module LMDB =
                 db.writing <- db.write
                 db.stowing <- db.stow
                 let syncing = db.sync
-                db.write <- BTree.empty
+                db.write <- CritbitTree.empty
                 db.stow <- Map.empty
                 db.sync <- List.empty
                 db.sbsize <- 0
@@ -506,8 +506,8 @@ module LMDB =
             let wtx = mdb_readwrite_txn_begin (db.mdb_env)
 
             // Write our new roots. Remember old roots for GC purposes.
-            let overwriting = BTree.map (fun k _ -> dbReadKey db wtx k) (db.writing)
-            BTree.iter (dbWriteKeyVal db wtx) (db.writing)
+            let overwriting = CritbitTree.map (fun k _ -> dbReadKey db wtx k) (db.writing)
+            CritbitTree.iter (dbWriteKeyVal db wtx) (db.writing)
 
             // For stowage, filter known resources. Write the remainder.
             let isNewRsc sk _ = not (mdb_contains wtx (db.dbi_stow) sk) 
@@ -516,9 +516,9 @@ module LMDB =
 
             // update reference counts and perform GC.
             let gc = new GC(db,wtx)
-            BTree.iter (fun _ v -> gc.AddVal v) (db.writing)
+            CritbitTree.iter (fun _ v -> gc.AddVal v) (db.writing)
             Map.iter (fun _ (struct(_,v)) -> gc.AddVal (Some v)) (db.stowing)
-            BTree.iter (fun _ v -> gc.RemVal v) (overwriting)
+            CritbitTree.iter (fun _ v -> gc.RemVal v) (overwriting)
             Map.iter (fun sk _ -> gc.NewRsc sk) (db.stowing)
             gc.Perform()
             db.ephtbl.PassDecrefs() // allow decrefs after GC
@@ -534,13 +534,13 @@ module LMDB =
             List.iter reportSync syncing
             oldReaders.Wait() // wait on readers of old frame
             lock db (fun () -> // clear old read buffers
-                db.writing <- BTree.empty
+                db.writing <- CritbitTree.empty
                 db.stowing <- Map.empty)
             halting 
 
         let inline dbHasWork (db:Database) : bool =
             let noWork = (List.isEmpty (db.sync))
-                      && (BTree.isEmpty (db.write))
+                      && (CritbitTree.isEmpty (db.write))
                       && (db.sbsize < db.sbthresh)
             not noWork
 

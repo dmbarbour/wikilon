@@ -336,8 +336,10 @@ module LSMTrie =
         else empty // incomplete match
 
     /// Filter a tree to just keys matching given prefix.
-    let inline filterPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
+    let inline selectPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
         t |> remPrefix p |> addPrefix p
+
+    // TODO: dropPrefix - remove all keys matching a given prefix
 
     let private updTrie (us:IntMap<Trie<'V option>>) : Trie<'V option> =
         { prefix = BS.empty; value = None; children = us }

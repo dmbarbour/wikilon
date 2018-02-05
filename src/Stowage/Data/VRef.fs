@@ -58,7 +58,7 @@ module VRef =
     let inline stow (c:Codec<'V>) (db:Stowage) (v:'V) : VRef<'V> =
         wrap' c db (Codec.stow c db v)
 
-    /// load a VRef's data from Stowage, bypassing cache entirely.
+    /// load a VRef's data from Stowage
     let inline load (ref:VRef<'V>) : 'V =
         let result = Codec.load (ref.Codec) (ref.DB) (ref.ID)
         System.GC.KeepAlive ref

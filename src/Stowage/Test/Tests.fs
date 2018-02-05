@@ -191,7 +191,7 @@ let ``trie access and removal`` () =
     Assert.Equal(None, lu 1 (rm 1 t))
     Assert.Equal(Some 100, lu 100 (t |> rm 1 |> rm 10 |> rm 11))
 
-    let t2 = Trie.filterPrefix (BS.fromString "10") t
+    let t2 = Trie.selectPrefix (BS.fromString "10") t
     Assert.Equal(None, lu 1 t2)
     Assert.Equal(None, lu 2 t2)
     Assert.Equal(Some 10, lu 10 t2)
@@ -349,7 +349,7 @@ type DBTests =
     member t.``read and write keys`` () = 
         let kvs = List.map (t.KVP) [("a","a-val"); ("b","b-value"); ("c","cccc")]
         let vs = List.map snd kvs
-        let sync = t.Storage.WriteBatch (BTree.ofList kvs)
+        let sync = t.Storage.WriteBatch (CritbitTree.ofList kvs)
         let rd1 = List.map (fst >> t.Storage.Read) kvs
         Assert.Equal<DB.Val list>(rd1,vs)
         sync.Force() 
@@ -375,7 +375,7 @@ type DBTests =
 
         let writeAsync ks v = 
             let k = BS.fromString ks
-            t.Storage.WriteBatch (BTree.singleton k (Some v)) 
+            t.Storage.WriteBatch (CritbitTree.singleton k (Some v)) 
                 |> ignore<DB.Sync>
         writeAsync "a" a_ref
         writeAsync "b" b_ref

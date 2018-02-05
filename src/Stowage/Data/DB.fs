@@ -91,7 +91,7 @@ module DB =
 
     type Key = ByteString
     type Val = ByteString option
-    type KVMap = BTree<Val>
+    type KVMap = CritbitTree<Val>
     type Sync = Lazy<unit>
 
     /// Storage represents a simple key-value database with Stowage,
@@ -116,7 +116,7 @@ module DB =
 
     /// Flush storage (via writing empty batch). 
     let flushStorage (s:Storage) : unit =
-        let sync = s.WriteBatch (BTree.empty)
+        let sync = s.WriteBatch (CritbitTree.empty)
         sync.Force()
 
     module private StorageDB =
@@ -195,10 +195,10 @@ module DB =
 
         // For cached keys, I'll use weak references to avoid interfering
         // with GC. This slightly complicates lookups, but not too badly.
-        type RootsCache = BTree<System.WeakReference>
+        type RootsCache = CritbitTree<System.WeakReference>
 
         let tryFindObj<'O when 'O :not struct> (k:ByteString) (cache:RootsCache) : 'O option =
-            match BTree.tryFind k cache with
+            match CritbitTree.tryFind k cache with
             | None -> None
             | Some wref ->
                 match wref.Target with
@@ -216,7 +216,7 @@ module DB =
 
         // remove dead refs from cache 
         let clearCache (cache:RootsCache) : RootsCache = 
-            BTree.filter (fun _ v -> v.IsAlive) cache
+            CritbitTree.filter (fun _ v -> v.IsAlive) cache
 
         let castTVar (tv:TVar<'V>) : DBVar<'V> =
             match tv with
@@ -231,9 +231,9 @@ module DB =
         let serializeWrites (ws:Writes) : KVMap =
             let add wb (dbv:DBVar) v =
                 match dbv.Durability with
-                | Durable (k,s) -> BTree.add k (s v) wb
+                | Durable (k,s) -> CritbitTree.add k (s v) wb
                 | Ephemeral -> wb
-            Map.fold add (BTree.empty) ws
+            Map.fold add (CritbitTree.empty) ws
 
         // quickly merge two maps, favoring values from `a` on conflict.
         let inline leftBiasedUnion (a:Map<'K,'V>) (b:Map<'K,'V>) : Map<'K,'V> =
@@ -293,7 +293,7 @@ module DB =
                 { store = s
                   mutex = new System.Object()
                   ss = new Snapshot()
-                  roots = BTree.empty
+                  roots = CritbitTree.empty
                   buffer = Map.empty
                   flushing = lazy(lazy())
                   tm_clean = 0
@@ -364,7 +364,7 @@ module DB =
                         | Some dbvRaceWinner -> dbvRaceWinner
                         | None -> 
                             let wref = new System.WeakReference(dbv)
-                            db.roots <- BTree.add k wref (db.roots)
+                            db.roots <- CritbitTree.add k wref (db.roots)
                             dbv
                     )
 

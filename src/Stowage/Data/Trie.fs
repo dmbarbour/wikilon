@@ -276,8 +276,10 @@ module Trie =
         else empty // incomplete match
 
     /// Filter a tree to just keys matching given prefix.
-    let inline filterPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
+    let inline selectPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
         t |> remPrefix p |> addPrefix p
+
+    // TODO: dropPrefix
 
     /// Partition a tree at a specified key. Keys strictly less than
     /// the specified key will be in the left tree, while keys greater

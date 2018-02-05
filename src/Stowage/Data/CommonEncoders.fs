@@ -332,10 +332,10 @@ module EncMap =
         Codec.view (EncArray.codec' cKV) (Map.ofArray) (Map.toArray)
 
 /// Encode a BTree via array.
-module EncBTree =
+module EncCritbitTree =
     let codec (cV:Codec<'V>) =
         let cKV = EncPair.codec (EncBytes.codec) cV
-        Codec.view (EncArray.codec' cKV) (BTree.ofArray) (BTree.toArray)
+        Codec.view (EncArray.codec' cKV) (CritbitTree.ofArray) (CritbitTree.toArray)
 
 /// Encode a String via array.
 module EncString =

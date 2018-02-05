@@ -6,6 +6,7 @@
     <Compile Include="RscHash.fs" />
     <Compile Include="Stowage.fs" />
     <Compile Include="Codec.fs" />
+    <Compile Include="Cache.fs" />
     <Compile Include="CommonEncoders.fs" />
     <Compile Include="VRef.fs" />
     <Compile Include="LVRef.fs" />
