@@ -223,17 +223,17 @@ Unlike conventional programming languages, Awelon encourages that a lot of *data
 
 Ultimately, dictionaries are maintained by multiple agents - of nature both human and software - managing, sharing, and synchronizing definitions. These definitions may represent documents, databases, or other application state. However, the ad-hoc interaction of multiple agents introduces significant concerns regarding information security and naming conflicts. To address these concerns, it is convenient if agents can manage and share an isolated dictionary, allowing clients to extract the relevant data. For this purpose, Awelon supports *hierarchical dictionaries*, allowing dictionaries to contain and reference other dictionaries.
 
-References are represented by an `@dict` suffix, naming a contained dictionary. 
+Access is represented by an `dict/` prefix, naming the contained dictionary. 
 
-        bar@d       (has behavior of `bar` from dictionary `@d`)
-        42@d        => [41 succ]@d
-        [41 succ]@d => [41@d succ@d]
-        "hello"@d   => [104 "ello"]@d
-        (eq_z)@d    (behavior of (eq_z) in dictionary `@d`)
+        d/bar       (has behavior of `bar` from dictionary `d`)
+        d/42        => d/[41 succ]
+        d/[41 succ] => [d/41 d/succ]
+        d/"hello"   => d/[104 "ello"]
+        d/(eq_z)    (behavior of (eq_z) in dictionary `d`)
 
-Effectively, we add an implicit `@dictname` suffix to every word in a contained dictionary, preserving behavior and structure of the contained dictionary. The contained dictionary cannot reference or depend upon its host. Consequently, every contained dictionary will replicate definitions for shared dependencies such as natural numbers and arithmetic. Fortunately, we can leverage structure sharing to mitigate storage overheads.
+Effectively, we add an implicit `dictname/` prefix to every word in the contained dictionary. A dictionary cannot reference its context or host, thus hierarchical dictionaries must replicate common dependencies such as definitions for arithmetic and list processing. To mitigate replication overheads, our dictionary representation must support structure sharing, logical copies.
 
-To mitigate aesthetic issues, improve caching, and encourage community standardization of word definitions, any evaluator is free to localize words with common meaning. For example, if `42@d` means the same as `42` then we may freely rewrite the former to the latter. Primitives, labels, and most annotations can automatically be localized. Localization theoretically should create weak social pressures for dictionaries to gradually standardize and share more definitions.
+To mitigate aesthetic issues, improve caching, and hopefully encourage community standardization of word definitions, an evaluator is free to localize words with common meaning. For example, if `d/42` has the same meaning as `42` then we may freely rewrite between the two. Primitives, labels, and dictionary-independent annotations can automatically be localized.
 
 ### Dictionary Representation
 
@@ -249,9 +249,9 @@ A dictionary is represented by the root tree node in line-oriented ASCII text. E
 
 Prefixes mask all prior updates with a matching prefix. For example, an update to `/p` will mask prior updates to `:poke` and `/prod`. We assume the updated prefix will include those definitions if we intend to preserve them. The matched prefix is stripped from internal nodes, so under `/p` those become `:oke` and `/rod`. The empty prefix in `/ secureHash` is especially useful: it masks all prior updates, effectively representing a reset or checkpoint (in stream) or prototype inheritance (as first line).
 
-An Awelon dictionary defines both words and hierarchical dictionaries. A word's definition must be valid Awelon code, represented inline. Oversized definitions (for example, of multiple kilobytes) can cause inefficiencies due to copying, but this can be mitigated by leveraging `$secureHash` redirects. Hierarchical dictionaries have form `:@myDict secureHash`, referencing the root node for the contained dictionary.
+An Awelon dictionary has words and hierarchical dictionaries. Words are directly represented as symbols and defined inline. Oversized definitions, of more than a few kilobytes, should heuristically be redirected to a separate `$secureHash` reference. Hierarchical dictionaries are represented by defining the extended symbol `dict/word` for every word in a dictionary. This way, we can easily define and share entire dictionaries using `/dict/ secureHash` or deeply update specific words.
 
-There is no support for comments. Any metadata we wish to preserve - authorship, update logs, modify timestamps, etc. - must be encoded in the dictionary. Metadata is thus accessible for computation, analysis, abstraction, or interaction like everything else. We can use simple naming conventions and eventually standardize.
+There is no support for comments. Any metadata we wish to preserve - authorship, update logs, modify timestamps, etc. - must be encoded in the dictionary. Metadata is thus accessible for computation, analysis, abstraction, and manipulation like any other data.
 
 *Note:* This dictionary representation does not ensure that definitions are acyclic or well-typed, and does not record evaluations or optimizations. Fortunately, structure sharing and efficient diffs should help with caching these observations.
 

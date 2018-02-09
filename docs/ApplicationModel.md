@@ -37,13 +37,9 @@ The main advantage of monotonic dictionaries is that they may be continuously ev
 
 The only formal meaning of a word is to lazily inline its definition.
 
-However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo_doc`, `foo_talk`, `foo_type`, `foo_author`, and so on. Informally, `foo_doc` may be understood as a field within an informal, second-class dictionary object `foo`. Numbered fields can represent informal sequences or collections - commands in the command pattern, lines in a REPL or notebook application, rows in a spreadsheet, etc.. Fields can serve as metadata 'tags' on an object, to support efficient search or extra rendering hints.
+However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo_doc`. Besides documentation, we might record type, modify times, update logs, discussions and todos, and so on. Informally, `foo_doc` could be understood as a field or property within the informal, second-class dictionary object `foo`. Numbered fields can represent informal sequences or collections - commands in the command pattern, lines in a REPL or notebook application, rows in a spreadsheet, etc.. Fields can serve as metadata 'tags' on an object, to support efficient search or extra rendering hints.
 
-Code manipulation utilities can be designed to work with these informal objects. For example, if we copy `foo` to `bar`, we may simultaneously copy words prefixed `foo_*` into the appropriate `bar_*` and re-link internal structure as needed. When we rename `foo` to `blub`, we could be given a checkbox option to automatically rename `foo_*` to `blub_*`. 
-
-Dictionary objects should be relatively flat. While we can represent words like `foo_bar_baz_qux`, we would quickly hit the limitations of word size in Awelon. Also, in some contexts, it might be better to use *Hierarchical Dictionaries* as a basis for dictionary objects, e.g. `doc@foo` (word `doc` in dictionary `foo`) instead of `foo_doc`. 
-
-*Note:* It is also feasible to use mounted dictionaries to model dictionary objects, i.e. so we have `doc@foo` instead of `foo_doc`. This restricts connectivity because a mount cannot reference its parent. But that restriction isn't necessarily a bad one, and would be mitigated by use of localization. 
+Code manipulation utilities can be designed to work with these informal objects. For example, if we copy `foo` to `bar`, we may simultaneously copy words prefixed `foo_*` into the appropriate `bar_*` and re-link internal structure as needed. When we rename `foo` to `blub`, we could be given a checkbox option to automatically rename `foo_*` to `blub_*`.
 
 ## Hypermedia Applications
 
