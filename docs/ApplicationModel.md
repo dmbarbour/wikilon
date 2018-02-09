@@ -5,18 +5,24 @@ In general, I hope for Awelon project to focus on RESTful systems. Applications 
 
 This document is a brainstorm and exploration of potential patterns for modeling applications. [Awelon](AwelonLang.md) represents an alternative to the mainstream `void main()` programming model. We will need to explore ideas in practice to see what works.
 
+## Monotonic Dictionaries
+
+It is feasible to operate on a dictionary monotonically - such that we never redefine a word. In some cases, this requires leaving undefined words in the dictionary as placeholders for the undefined "future". Awelon can easily evaluate in context of undefined words, although one must also arrange computation such that we can extract useful results from partial evaluations.
+
+The main advantage of monotonic dictionaries is that they may be continuously evaluated in-place. There is never any need to recompute, only to continue computations. By leveraging stowage and secure hash resources, state may scale freely. Hence, a word may correspond to an application whose state is updated based on filling gaps in a definition. See also *Managed Dictionaries*, below - monotonic dictionaries are essentially *frozen* by default, and we might need to gradually GC the dictionary to limit size.
+
 ## Command Pattern
 
 A command pattern might be represented as:
 
-        foo_v0 = initial state constructor
-        foo_v1 = foo0 command1
-        foo_v2 = foo1 command2
+        :foo_v0 initial state constructor
+        :foo_v1 foo0 command1
+        :foo_v2 foo1 command2
         ...
-        foo_v99 = foo_v98 command99
-        foo = foo_v99
+        :foo_v99 foo_v98 command99
+        :foo foo_v99
 
-Use of command pattern enables many small updates to construct and modify a large object. This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
+In this case, we mutate the "head" word for definition of an object `foo`, but the command stream could be monotonic. Use of command pattern enables a stream of small updates to construct and modify a large object. This particular design records every command as a distinct set of words, simplifying views of historical values, forking, undo, etc.. We could try to automatically compact and simplify the command stream, within the limitation of stable dependencies.
 
 Command pattern can be used for such things as:
 
@@ -27,49 +33,27 @@ Command pattern can be used for such things as:
 
 Effectively, command pattern models a mutable object within a dictionary, albeit only mutable by external agents. A disadvantage of the command pattern is its non-monotonic structure, the destructive update of `foo`
 
-## Monotonic Dictionaries
+## Expressive Spreadsheets
 
-It is feasible to operate on a dictionary monotonically - such that we never redefine a word. In some cases, this requires leaving undefined words in the dictionary as placeholders for the undefined "future". Awelon can easily evaluate in context of undefined words, although one must also arrange computation such that we can extract useful results from partial evaluations.
+It would not be difficult to view part of a dictionary as a spreadsheet. For example:
 
-The main advantage of monotonic dictionaries is that they may be continuously evaluated in-place. There is no need to recompute, only to continue computations. By leveraging stowage and secure hash resources, state may scale freely. Hence, a word may correspond to an application whose state is updated based on filling gaps in a definition. See also *Managed Dictionaries*, below - monotonic dictionaries are essentially *frozen* by default, and we might need to gradually GC the dictionary to limit size.
+        :foo_a_2 "world"
+        :foo_a_3 "hello"
+        :foo_b_2 foo_a_3 foo_a_2 concat
 
-## Dictionary Objects
-
-The only formal meaning of a word is to lazily inline its definition.
-
-However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo_doc`. Besides documentation, we might record type, modify times, update logs, discussions and todos, and so on. Informally, `foo_doc` could be understood as a field or property within the informal, second-class dictionary object `foo`. Numbered fields can represent informal sequences or collections - commands in the command pattern, lines in a REPL or notebook application, rows in a spreadsheet, etc.. Fields can serve as metadata 'tags' on an object, to support efficient search or extra rendering hints.
-
-Code manipulation utilities can be designed to work with these informal objects. For example, if we copy `foo` to `bar`, we may simultaneously copy words prefixed `foo_*` into the appropriate `bar_*` and re-link internal structure as needed. When we rename `foo` to `blub`, we could be given a checkbox option to automatically rename `foo_*` to `blub_*`.
+This essentially becomes a view and display problem. That is, when we choose to view `foo` as a spreadsheet, we must automatically evaluate and render the appropriate definitions in the correct cells. Conversely, when we edit a cell, the modified definition should be written into our dictionary. What cells we can render is limited only by editable views, so could include hypermedia.
 
 ## Hypermedia Applications
 
-Awelon has a deep link structure and supports rich editable views. Further, Awelon has implicit structure in form of dictionary objects, a reverse link index, and static type analysis. Awelon forbids cyclic dependencies between definitions, but no such constraint exists on the implicit relationships. We can view Awelon dictionary objects as hypermedia resources.
-
-Intriguingly, *Awelon evaluates to Awelon*, preserving its link structure and meaning. Hence, we can view this as *hypermedia evaluates to hypermedia*. We could model texts that evaluate to canvases and tables, and vice versa. Editable views can also support drop-down lists and radio buttons, blank forms representing templated commands for a user to fill, stateful forms representing control interfaces subject to repeated edits.
-
-If URLs are used in work orders, those might provide a simple means to integrate the wider world with Awelon applications.
-
-## Compositional Views
-
-Evaluating and caching words can support spreadsheet-like propagation of updates, but that alone is insufficient to efficiently work with words that contain large objects. In context of command pattern, for example, we'll have small changes to large objects. 
-
-To fully leverage cache, favor compositional views on persistent objects:
-
-        ∃f. ∀x,*,y. view(x * y) = f(view(x),'*',view(y))
-
-That is, the view of a composition is a composition of views. With this, we may explicitly memoize `view(x)` and `view(y)`. Our assumption of persistence (i.e. a lot of structure sharing) means it is unlikely both `x` and `y` have changed, so we can reuse at least part of the cache. In ABC, we would express this memoization as something like `[[X]view](memo)`. 
-
-Fortunately, a lot of views and data fit these constraints or at least can be adapted by keeping metadata with the view. Thus, we can support spreadsheet-like propagation even in contexts like time-series data and massive key-value databases.
-
-*Aside:* Memoization does have overhead for serialization and storage. To mitigate this overhead, we should memoize only at coarse, stable boundaries. This isn't difficult. For an LSM tree, with natural batching, we might simply cache everything but the root node. For time-series data, we might batch sample counts into frames, and cache only on the first frame.
+Awelon words provide a flexible link structure, and projectional editors can provide a flexible rendering and interaction model. Intriguingly, *Awelon code evaluates to Awelon code*, preserving link structure and meaning. Hence, we can view this as *hypermedia evaluates to hypermedia*. We could model texts that evaluate to canvases and tables, and vice versa. 
 
 ## Publish Subscribe
 
 Publish subscribe is a model for continuous, live programming of real world systems.
 
-With ad-hoc conventions a dictionary might describe subscriptions to external data resources. An agent can fulfill these subscriptions, copying external data into the dictionary. If this agent is built into a runtime system for well-understood resources, it is feasible to leverage lazy and logical copies (depending on durability requirements). Conversely, external agents might subscribe to words or expressions in the dictionary and observe changes in their evaluation due to changes in the underlying data. 
+With ad-hoc conventions a dictionary might describe subscriptions to external data resources. An agent can fulfill these subscriptions, pushing data into the dictionary. Conversely, external agents might subscribe to words or expressions on a dictionary and observe changes in their evaluation due to changes in the underlying data. 
 
-I believe that Awelon dictionaries could make an excellent basis for flexible publish-subscribe systems.
+By leveraging hierarchical dictionaries, it's also feasible to publish-subscribe entire dictionaries rather than individual words. This would be more convenient from a security and modularity perspective: we can synchronize an independent, externally maintained dictionary into our dictionary then access the relevant data.
 
 ## Effectful Work Orders
 
@@ -108,14 +92,6 @@ This would admit a corresponding set of rewrites:
 Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. However, when a secure hash resource is referenced from an opaque definition, we could rewrite the secure hash to a simplified or evaluated form.
 
 Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo_meta_gc` for elements under `foo`, or we could represent our policies under a global word like `meta_gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
-
-## Dictionary Passing or Synchronization
-
-An Awelon dictionary can easily represent documents or databases, and it is convenient if we can pass these around in a first-class manner, referencing dictionaries by secure hash or URL. We can communicate a message together with a dictionary, such that our message is fully defined. It's easy to cache, compile, and reuse a referenced dictionary for many messages. Leveraging persistent data structures and secure hash resources, we can feasibly reuse most of our cached dictionary even for slight variations. Awelon supports application patterns relying on whole dictionary passing via the *Hierarchical Dictionaries* feature.
-
-## Application Security
-
-In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't provide much help here, beyond support for *Hierarchical Dictionaries*, which provide a natural barrier for communication that must be explicitly bridged, and a narrow interface for synchronization. Between that and internal purity, we can push most security concerns to the RESTful application models and effects layers. 
 
 # Programs as Processes
 

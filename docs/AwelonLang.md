@@ -272,9 +272,9 @@ Awelon's basic evaluation strategy is simple:
 * evaluate before copy 
 * evaluate final values
 
-Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. (However, techniques to introduce and extract hidden variables can work nicely with laziness or parallelism. See *Named Local Variables*.) Final values are reduced because we assume the program as a whole might be copied for use in many locations.
+Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-Annotations can greatly affect evaluation strategy. As two examples, `[A](eval)` could enforce evaluation of the value `[A]` before erasing `(eval)`, while `[A](lazy)` could replace "evaluate before copy" with a call-by-need strategy for a specific value.
+Annotations can greatly affect evaluation strategy. As two examples, `[A](eval)` could enforce evaluation of the value `[A]` before erasing `(eval)`, while `[A](lazy)` could replace "evaluate before copy" with a call-by-need strategy for a specific value, potentially using a hidden variable for logical copies (in which case we could apply the *Named Local Variables* extraction technique before rendering).
 
 ## Value Words
 
@@ -321,7 +321,7 @@ The primary basis for incremental computing in Awelon is [memoization](https://e
 
 Effectively, memoization involves seeking a representation of the computation in a separate table then replacing it by the result from that table. The exact mechanism might be different, perhaps recording traces of instrumented computations such that traces can be partially reused. There are no strong guarantees: memoization may be probabilistic, table entries may be concurrently expired, and so on. Fortunately, even if memoization works only part of the time, it can result in significant savings for recursive computations on persistent data structures.
 
-To support incremental computing, memoization must be combined with cache-friendly computing patterns. Persistent data structures leveraging stowage - such as finger trees and tries - are especially useful. For example, if we compute a monoidal value for each node in a persistent tree, computing a slightly different tree could easily reuse most of the memoization effort while use of stowage would reduce costs for comparing data.
+To support incremental computing, memoization must be combined with cache-friendly data structures and update patterns. Persistent data structures leveraging stowage - such as finger trees and tries - are especially useful. For example, if we compute a monoidal result for each node in a persistent tree, computing a slightly different tree could reuse most of the memoization effort while use of stowage would reduce costs for comparing data.
 
 ## Static Linking
 
