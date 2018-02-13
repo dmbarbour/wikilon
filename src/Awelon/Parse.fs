@@ -1,50 +1,75 @@
 namespace Awelon
 open Data.ByteString
-open System.Numerics
+open System.Collections.Generic
+open System.Collections.ObjectModel
 open Stowage
 
-// Awelon is syntactically relatively simple, like Forth. But it has
-// some complexity due to annotations and various extensions.
-//
-// The basic concept is just this:
-//
-//  Program = Action*
-//  Action = Atom | Block 
-//  Block = '[' Program ']'
-//  Atom = Word | Wordlike
-//  Word = [a-z][a-z0-9_]*
-//
-// The `Wordlike` atoms exist for performance or convenience. 
-//  
-//  Wordlike = Anno | Label | Txt | Nat | Rsc
-//  Anno = '(' Word ')'
-//  Label = [:.]Word
-//  Txt = '"' [\32\33\35-\126]* '"'
-//  Nat = '0' | [1-9][0-9]*
-//  Rsc = [$%]Hash
-//  Hash = cf. module Stowage.RscHash
-//
-// Labeled data is still experimental in Awelon, but supports basic
-// row-polymorphic records and variants.
-//
-// For hierarchical dictionaries, we modify Action slightly:
-//
-//  Action = Atom | Block | Action '@' Word
-//  
-// Secure hash resources should bind to Stowage, while Words
-// bind to a Dictionary. However, this module does not deal
-// with bindings due to various issues of efficient caching.
-//
-// The parser's intermediate representation is not suitable
-// for efficient evaluation. 
-//
-// A secondary goal is to provide reasonable feedback when we cannot
-// parse a program completely.
 
-module AST =
+// Awelon is encoded in ASCII (minus C0 and DEL), and is syntactically
+// simple, similar to Forth. A program is a sequence of named operations
+// with first-class blocks (which contain programs) and namespaces. The
+// operations are mostly user-defined words, but we'll also support some
+// syntactic sugars (for embedded texts, natural numbers), annotations,
+// and external binary or code resources.
+//
+//   Program = Action*
+//   Action = Block | NS '/' Action | Atom
+//   Block = '[' Program ']'
+//   NS = Word
+//   Atom = Word | Annotation | Nat | Text | Resource | Label 
+//
+//   Word = [a-z][a-z0-9_]*
+//   Annotation = '(' Word ')'
+//   Nat = '0' | [1-9][0-9]*
+//   Text = '"' (not '"')* '"'
+//   Resource = BinRef | CodeRef
+//   BinRef = '%' RscHash
+//   CodeRef = '$' RscHash
+//   RscHash = (see Stowage.RscHash)
+//   Label = LabelPut | LabelGet
+//   LabelPut = ':' Word
+//   LabelGet = '.' Word
+// 
+// This module implements a hand-written parser for Awelon code. 
+module Parse =
 
     /// A Word is a ByteString with regex `[a-z][a-z0-9_]*`
     type Word = ByteString
+
+    /// A Natural number is `0 | [1-9][0-9]*`. 
+    /// Not processed into a number type by this module.
+    type NatTok = ByteString
+
+    /// Embedded Text in Awelon code.
+    type Text = ByteString
+
+    /// A RscHash is from Stowage
+    type RscHash = Stowage.RscHash
+
+    type TokenType =
+        | TokWord       // word
+        | TokAnno       // (anno)
+        | TokNat        // 0 42 128
+        | TokText       // "text"
+        | TokLblPut     // :label
+        | TokLblGet     // .label
+        | TokBinRef     // %secureHash
+        | TokCodeRef    // $secureHash
+
+    /// A token is a labeled bytestring.
+    type Token = struct(TokenType * ByteString)
+
+    type Action =
+        | Block of Program      // [Program]
+        | NS of Word * Action   // ns/Action
+        | Atom of Token         // simple action
+    and Program = Action list   // Action*
+
+
+    /// Awelon uses characters in ASCII minus C0 and DEL. Most
+    /// of these are permitted only within embedded texts. For
+    /// embedding Unicode, you might try binary resoures.
+    let inline isAwelonChar c = (126uy >= c) && (c >= 32uy)
 
     let inline isWordStart c = (byte 'z' >= c) && (c >= byte 'a')
     let inline isNumChar c = (byte '9' >= c) && (c >= byte '0')
@@ -62,93 +87,96 @@ module AST =
             then Some (BS.span isWordChar r)
             else None
 
-    /// A Natural number is currently represented via BigInteger.
-    /// Naturally, only non-negative values are valid.
-    type Nat = BigInteger
+    let private hasWordSep r = not (startsWith isWordChar r)
 
-    /// Assumes valid input string, regex `0 | [1-9][0-9]*`. 
-    let parseNat (s : ByteString) : Nat =
-        if (BS.length s > 18) then BigInteger.Parse(BS.toString s) else
-        let accum a b = (10L * a) + int64 b - int64 '0'
-        let i64 = BS.fold accum 0L s
-        new BigInteger(i64)
+    /// Test match for regex `0 | [1-9][0-9]*`.
+    let isValidNatTok s =
+        if BS.isEmpty s then false 
+        else if (byte '0' = (BS.unsafeHead s)) then (1 = BS.length s) 
+        else BS.forall isNumChar s
 
-    let inline hasNatStart r =
-        not (BS.isEmpty r) && (isNumChar (BS.unsafeHead r))
+    // Accept '0' | [1-9][0-9]* if followed by a word separator
+    let tryParseNatTok (r:ByteString) : (struct(ByteString * ByteString)) option =
+        let struct(n,r') = BS.span isNumChar r
+        let ok = (not (BS.isEmpty n)) // empty token not permitted 
+              && ((1 = BS.length n) || (byte '0' <> (BS.unsafeHead n))) // only 0 starts with 0
+              && (hasWordSep r')
+        if not ok then None else
+        Some (struct(n,r'))
 
-    /// This accepts `0 | [1-9][0-9]*`
-    let tryParseNat (r : ByteString) : (struct(Nat * ByteString)) option =
-        let struct(ns,r') = BS.span isNumChar r
-        let accept = not (BS.isEmpty ns) 
-                  && ((byte '0' <> BS.unsafeHead ns) || (1 = BS.length ns))
-        if accept then Some (struct(parseNat ns, r')) else None
+    let inline isTextChar c = (c <> 34uy) && (isAwelonChar c)
+    let isValidText s = BS.forall isTextChar s
 
-    /// Texts embedded in Awelon code are constrained rather severely.
-    /// They may only contain ASCII characters minus C0, DEL, and `"`.
-    type Text = ByteString
-    let inline isTextChar c = (126uy >= c) && (c >= 32uy) && (c <> 34uy)
+    let isValidToken (struct(tt,s) : Token) : bool =
+        match tt with
+        | TokWord | TokAnno | TokLblPut | TokLblGet -> isValidWord s
+        | TokText -> isValidText s
+        | TokNat -> isValidNatTok s
+        | TokBinRef | TokCodeRef -> RscHash.isValidHash s
 
-    type Action =
-        | B of Program      // [subprogram]
-        | W of Word         // hello_world
-        | N of Nat          // 0, 1, 42
-        | T of Text         // "text"
-        | Anno of Word      // (word)
-        | LPut of Word      // :word
-        | LGet of Word      // .word
-        | Bin of RscHash    // %secureHash
-        | Ext of RscHash    // $secureHash
-        | Hier of Action * Word // Action @ Word
-    and Program = Action list
+    let isValidProgram (p0:Program) : bool =
+        let rec loop ps p =
+            match p with
+            | (a::p') ->
+                match a with
+                | Block b -> loop (p'::ps) b
+                | NS (w,a') -> isValidWord w && loop ps (a'::p')
+                | Atom t -> isValidToken t
+            | [] ->
+                match ps with
+                | (p'::ps') -> loop ps' p'
+                | [] -> true
+        loop [] p0
 
-    /// An incomplete program may have several open blocks. I record
-    /// this information in a reverse-ordered list for fast addend.
-    ///
-    ///   foo [bar baz [qux   =>    [qux; baz bar; foo]
-    ///
-    /// Additionally, parse may fail before it reaches the end of the
-    /// input, so we may need to return the unparsed input. Looking at
-    /// the first character of the input can provide some hints about
-    /// the error.
-    type IncompleteProg = (struct(Program list * ByteString))
+    /// On Parse Error, we'll return the parser state.
+    /// The lists in this case represent stacks.
+    type ParseState =
+        { cx    : (struct(Word list * Action list)) list // block context and NS
+          ns    : Word list     // next operation's namespace
+          p     : Action list   // current open block
+          s     : ByteString    // remaining bytes
+        }
 
-    /// Parse result is either a valid program or an incomplete program
-    /// with remaining bytes. 
     type ParseResult =
         | ParseOK of Program
-        | ParseErr of IncompleteProg
+        | ParseFail of ParseState
+    
+    let private finiParse cx ns p s =
+        let ok = BS.isEmpty s && List.isEmpty cx && List.isEmpty ns
+        if ok then ParseOK (List.rev p) else
+        let st = { cx = cx; ns = ns; p = p; s = s }
+        ParseFail st
+
+    let rec private wrapNS (ns : Word list) (a:Action) : Action =
+        match ns with
+        | [] -> a
+        | (w::ns') -> wrapNS ns' (NS(w,a))
 
     let inline private matchChar c s = 
         startsWith ((=) (byte c)) s
 
-    let rec parseHier a s =
-        if not (matchChar '@' s) then struct(a,s) else
-        match tryParseWord (BS.unsafeTail s) with
-        | Some (struct(w,s')) -> parseHier (Hier(a,w)) s'
-        | None -> struct(a,s)
+    let inline tok t w = struct(t,w)
 
-    let inline private tryParseHash (s:ByteString) : (struct(RscHash * ByteString)) option =
+    let private tryParseHash (s:ByteString) : (struct(RscHash * ByteString)) option =
         let struct(h,s') = BS.span (RscHash.isHashByte) s
-        if(RscHash.size <> BS.length h) then None else
-        Some (struct(h,s')) 
+        let ok = (RscHash.size = BS.length h) && (hasWordSep s')
+        if not ok then None else Some (struct(h,s'))
 
-    let tryParseAction (s:ByteString) : (struct(Action * ByteString)) option =
+    // Parse a single token. (Does not parse namespaces or blocks.)
+    let tryParseToken (s:ByteString) : (struct(Token * ByteString)) option =
         if BS.isEmpty s then None else
-        let c0 = BS.unsafeHead s // looking at one character is sufficient
-        if isWordStart c0 then // common words
-            match tryParseWord s with
-            | Some (struct(w,s')) -> Some (struct(W w,s'))
-            | _ -> None
-        else if(isNumChar c0) then // natural numbers
-            match tryParseNat s with
-            | Some (struct(n,s')) when not (startsWith isWordChar s') ->
-                // filtering out stuff like `42zed`. Require separation.
-                Some (struct(N n, s'))
+        let c0 = BS.unsafeHead s
+        if isWordStart c0 then
+            let struct(w,s') = BS.span isWordChar s
+            Some (struct(tok TokWord w, s'))
+        else if isNumChar c0 then
+            match tryParseNatTok s with
+            | Some (struct(n,s')) -> Some (struct(tok TokNat n, s'))
             | _ -> None
         else if(byte '"' = c0) then // embedded texts
             let struct(txt,s') = BS.span isTextChar (BS.unsafeTail s)
             if (matchChar '"' s') 
-                then Some (struct(T txt, BS.unsafeTail s'))
+                then Some (struct(tok TokText txt, BS.unsafeTail s'))
                 else None
         else if(byte '(' = c0) then // annotation
             match tryParseWord (BS.unsafeTail s) with
@@ -157,57 +185,59 @@ module AST =
             | _ -> None
         else if(byte ':' = c0) then // record label 
             match tryParseWord (BS.unsafeTail s) with
-            | Some (struct(w,s')) -> Some (struct(LPut w, s'))
+            | Some (struct(w,s')) -> Some (struct(tok TokLblPut w, s'))
             | _ -> None
         else if(byte '.' = c0) then // record label access
             match tryParseWord (BS.unsafeTail s) with
-            | Some (struct(w,s')) -> Some (struct(LGet w, s'))
+            | Some (struct(w,s')) -> Some (struct(tok TokLblGet w, s'))
             | _ -> None
         else if(byte '%' = c0) then // binary resource
             match tryParseHash (BS.unsafeTail s) with
-            | Some (struct(h,s')) -> Some (struct(Bin h, s'))
+            | Some (struct(h,s')) -> Some (struct(tok TokBinRef h, s'))
             | _ -> None
         else if(byte '$' = c0) then // stowage resource
             match tryParseHash (BS.unsafeTail s) with
-            | Some (struct(h,s')) -> Some (struct(Ext h, s'))
+            | Some (struct(h,s')) -> Some (struct(tok TokCodeRef h, s'))
             | _ -> None
         else None
 
-    let private parseHalt cx p s =
-        if (BS.isEmpty s) && (List.isEmpty cx) 
-           then ParseOK (List.rev p)
-           else ParseErr (struct(p::cx, s))
-
-    let rec parse' cx p s = 
-        if (BS.isEmpty s) then parseHalt cx p s else
+    let rec parse' cx ns p s =
+        if BS.isEmpty s then finiParse cx ns p s else
         let c0 = BS.unsafeHead s
-        if (byte ' ' = c0) then
-            parse' cx p (BS.unsafeTail s)
-        else if (byte '[' = c0) then
-            parse' (p :: cx) (List.empty) (BS.unsafeTail s)
-        else if (byte ']' = c0) then
+        if ((byte ' ' = c0) && (List.isEmpty ns)) then
+            // forbid whitespace within namespace!
+            parse' cx [] p (BS.unsafeTail s)
+        else if(byte '[' = c0) then
+            parse' (struct(ns,p)::cx) [] (BS.unsafeTail s)
+        else if((byte ']' = c0) && (List.isEmpty ns)) then
             match cx with
-            | (pp :: cx') ->
-                let a = B (List.rev p)
-                let struct(a',s') = parseHier a (BS.unsafeTail s)
-                parse' cx' (a' :: pp) s'
-            | [] -> parseHalt cx p s
+            | (struct(ns',p')::cx') ->
+                let a = wrapNS ns' (Block(List.rev p))
+                parse' cx' [] (a :: p') (BS.unsafeTail s)
+            | [] -> finiParse cx ns p s
+        else if isWordStart c0 then
+            let struct(w,s') = BS.span isWordChar s
+            if matchChar '/' s' then
+                // word is namespace prefix
+                parse' cx (w :: ns) p (BS.unsafeTail s')
+            else
+                // word is normal action
+                let a = wrapNS ns (Atom (tok TokWord w))
+                parse' cx [] (a :: p) s'
         else 
-            match tryParseAction s with
-            | Some (struct(a,sa)) ->
-                let struct(a',s') = parseHier a sa
-                parse' cx (a' :: p) s'
-            | None -> parseHalt cx p s
+            match tryParseToken s with
+            | Some (struct(a,s')) ->
+                parse' cx [] ((wrapNS ns (Atom a)) :: p) s'
+            | _ -> parseFini cx ns p s
 
     /// Parse from a ByteString.
     ///
-    /// I assume Awelon programs are relatively small, up to a few
-    /// dozen kilobytes (given editable views), so stream processing
-    /// isn't essential. Larger programs should be broken into small
-    /// programs as needed.
-    let inline parse (s:ByteString) : ParseResult = 
-        parse' (List.empty) (List.empty) s
-
+    /// I assume Awelon programs are relatively small, up to a few dozen
+    /// kilobytes due to editable views. If we want to model streaming
+    /// code, do so at the dictionary layer to simplify caching, forking,
+    /// versioning, review, undo, and editing of the stream. Individual
+    /// definitions should still be small.
+    let inline parse (s:ByteString) : ParseResult = parse' [] [] [] s
 
     // Write program to byte string. Currently this will perform
     // a naive recursive write, so there may be stack issues if

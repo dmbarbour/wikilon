@@ -2,70 +2,85 @@ namespace Awelon
 open Stowage
 open Data.ByteString
 
-// Awelon language does not specify a dictionary representation.
-// However, there are many relevant desiderata:
+// Awelon language has a simple standard language definition, based
+// on a log-structured merge-tree with radix indexing. Example:
 //
-// * lightweight structure sharing
-// * lazy downloading over networks
-// * efficient working set operations
-// * caching for evaluation, optimization
-// * support background computations
-// * support real-time publish-subscribe
+//      /prefix1 secureHash1
+//      /prefix2 secureHash2
+//      :symbol1 definition1
+//      :symbol2 definition2
+//      ~symbol3
 //
-// For now, I'm going to treat cached computations and pubsub as a
-// separate issue and hope it remains that way. However, 
+// We have subtrees and symbol definitions in line-oriented ASCII text.
+// Each line is gives us an "update" - a prefix and subtree, a symbol
+// and definition, or a symbol deletion. Only the last relevant update
+// applies, e.g. prefix `/p` masks prior `:poke` and `/prod`. We'll
+// want to normalize a node before saving it by erasing masked updates
+// and sorting whatever remains.
 //
-// I'm leaning towards use of an LSM-trie to record definitions. This
-// gives me structure sharing across versions and forks (and a lesser
-// degree across similar dictionaries). And an LSM-trie over Stowage
-// should permit lazy import/export.
+// This module will focus on the dictionary representation - access,
+// update, compaction. Efficient access may also require caching to
+// avoid repeatedly loading and indexing the data, but I need to see
+// whether this is a significant concern in practice. Observations on
+// a dictionary, such as detecting cycles or computing types, must be
+// handled separately.
 //
-// Minimally, we must have an association from words to definitions.
+// Garbage collection is a potential concern: we must prevent premature
+// collection of Stowage-layer dependencies, especially for newer defs.
+// Since I don't want to parse definitions at this layer, I'll just give
+// each definition an ad-hoc dependencies object.
 //
-// For effective cache lookups, one option is to associate with each
-// word a secure hash based on definition and transitive dependencies.
-// This version string must be invalidated, but cache associations to
-// the string are expired. This supports sharing cache among similar
-// dictionaries. 
-// 
-// To manage version cache, we do need to perform a reverse lookup
-// for a word's clients. We might also want to search for: labels,
-// secure hash resources, natural numbers, embedded texts, etc.. and
-// perhaps even a full-text search.
+// Cached observations over the dictionary (types, evaluations, 
+// fuzzy find, reverse lookup, etc.) are not supported here. But
+// efficient diffs are essential to easily maintain cache.
 //
-// Also, dictionaries may be hierarchical (via `@dict` suffixes).
-// Thus, any of this structure can be repeated recursively.
-//
-// A proposed model:
-//
-//  trie from each defined word to its definition
-//  trie from symbol to set of clients (another trie)
-//  trie from symbol to version string
-//  trie from @dict name to more dictionaries
-// 
-// We can transitively invalidate any version strings upon update,
-// but it's a hassle to do so if we change any root definitions.
-//
-// It might be worthwhile to model a dictionary as "mid update" to
-// support buffering and asynchronous processing of recent updates.
-// This means we might have some set of symbols to be invalidated,
-// and a set of definition updates still to be processed. However,
-// this should be a non-issue in the short term.
-//
-// Aside: Awelon code can also compress pretty well, e.g. a list
-// might have long runs of `cons] cons] cons] cons]`. For editable
-// views, which could have large definitions, it is tempting to
-// try compression (however, we must be careful with secure hash
-// resources). 
 module Dict =
 
-    /// An Awelon definition will be recorded as a ByteString. But
-    /// large definitions should be separated from the trie nodes to
-    /// improve structure sharing.
-    type Def = CByteString
+    /// Opaque GC constraint - an Object with finalizer, or null.
+    ///
+    /// Each definition is accompanied by a GCDeps. The intention
+    /// is to use this with Stowage Decref finalizers, to prevent
+    /// premature GC of resources referenced only from memory.
+    type GCDeps = System.Object
 
-    /// How large a definition before we use a remote reference?
-    let shortDefThreshold = 360
+    /// A symbol fragment. Prefixes are stripped from inner nodes.
+    /// The empty prefix is not uncommon.
+    type Prefix = ByteString
+
+    /// A full symbol should be a valid word or dictionary name.
+    /// However, we'll often work with partial symbols because
+    /// we strip the prefix.
+    type Symbol = ByteString
+
+    /// We don't parse dictionary definitions at this layer, so
+    /// we just use bytestrings. Definitions must be inline, so
+    /// the character LF is illegal, but this isn't checked. In
+    /// valid dictionaries, definitions exclusively use ASCII
+    /// without C0 or DEL. 
+    ///
+    /// Definitions are copied into each node, and very large
+    /// definitions may be problematic. But we may indirect to
+    /// a `$secureHash` resource as needed. Compaction of the
+    /// dictionary might do so automatically.
+    type Def = struct(ByteString * GCDeps)
+    let inline defBytes (struct(b,_)) = b
+
+    /// Dictionary Tree Structure
+    ///
+    /// This is an "open" dictionary structure, in the sense that all
+    /// definitions 
+    /// We can compute the normalized dictionary from an update stream.
+    /// It's usually not essential to remember the history of updates.
+    type Dict =
+        { dirs : CritbitTree<Dict>           // all the prefixes
+        , defs : CritbitTree<Option<Def>>    // None for deletion.
+        }
+
+    type Upd =
+        | Direct of Prefix * Def    // /prefix secureHash
+        | Define of Symbol * Def    // :symbol definition
+        | Delete of Symbol          // ~symbol
+
 
     /// A mapping from words to definitions.
     type Defs = Trie<Def>

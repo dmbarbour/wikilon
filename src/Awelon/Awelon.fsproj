@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Cache.fs" />
     <Compile Include="Parse.fs" />
     <Compile Include="Dictionary.fs" />
   </ItemGroup>
