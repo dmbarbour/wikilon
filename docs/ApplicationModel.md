@@ -1,9 +1,30 @@
 
-# Application Model for Awelon Project
+# Application Models for Awelon Project
 
-In general, I hope for Awelon project to focus on RESTful systems. Applications are modeled in terms of creating, sharing, reading, updating, and deleting definitions of words or entire hierarchical dictionaries. Effects are carried out in context of a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
+The conventional, mainstream "application model" is a detached process that will effectfully access and manipulate external data and services, perhaps registering itself with a network service to listen for external requests. We observe this process only indirectly through its effects on shared stateful resources. Awelon could easily follow convention, e.g. by modeling monadic IO or a message-passing process. But my ultimate goal for Awelon project is to unify programming and user experiences. To that end, the "detached" process seems a poor fit. Application state should be visible and accessible. 
 
-This document is a brainstorm and exploration of potential patterns for modeling applications. [Awelon](AwelonLang.md) represents an alternative to the mainstream `void main()` programming model. We will need to explore ideas in practice to see what works.
+An intriguing feature of [Awelon language](AwelonLang.md) is that, due to rewrite semantics, we can always "save" process state as an Awelon program to simplify debugging or distribution. We could save process state into a dictionary, for example, to provide sufficient context to interpret it.
+
+        /myDict/ secureHash
+        :job_1123 myDict/[process state is recorded here]
+
+An external agent could then "run" the jobs in our dictionary, continuously executing requested effects, providing inputs, and saving the updated state. This does provide a fair level of visibility and access. For example, we can easily checkpoint or share the process, or kill it by deleting the `job_1123` word, or directly inject messages or modify states, or change some of the code it's running against. We can feasibly support useful real-time views like, "how would the process reply to this message?" without risk of influencing that process's state:
+
+        :view_example job_1123 [example_message] send
+
+However, I believe we could do better than this by more broadly embracing the use of dictionaries for representing application state. Instead of centralized process state, we could feasibly model structured application state in our dictionaries. For example, REPLs and iPython-inspired "notebook" applications could feasibly be directly encoded in a dictionary.
+
+        :repl_1473_0 initial_state
+        :repl_1473_1 repl_1473_0 command2
+        :repl_1473_2 repl_1473_1 command2
+        :repl_1473_3 repl_1473_2 command2
+        :repl_1473   repl_1473_3
+
+Actually, this corresponds to the more general *command pattern* from OOP (see below). This document is mostly a brainstorm and exploration of patterns and structures that may be suitable for Awelon application models. It shouldn't be a problem for a dictionary to simultaneously support several "kinds" of applications. But we will need to explore ideas to see what actually works in practice.
+
+## Functional Relational Programming
+
+Functional-relational programming involves storing all user inputs in a table and computing the current application state. Operations presented to users (e.g. a button on a form) must come with associated instructions for adding new inputs. This sort of approach fits very naturally with RESTful programs.
 
 ## Monotonic Dictionaries
 
