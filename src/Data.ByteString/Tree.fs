@@ -268,15 +268,15 @@ module CritbitTree =
 
     /// Partition a tree on a key. All keys less than the target are in
     /// the left, and all other keys are in the right.
-    let partitionK (k:Key) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
+    let splitAtKey (k:Key) (t:Tree<'V>) : struct(Tree<'V> * Tree<'V>) =
         match t with
         | Root(kl,n) ->
             match findCritbit 0 k kl with
             | Some cb when testCritbit cb k ->
                 let struct(l,r) = pKR cb k n
-                (Root(kl,l),r)
-            | _ -> (Empty, t)
-        | Empty -> (Empty, Empty)
+                struct(Root(kl,l),r)
+            | _ -> struct(Empty, t)
+        | Empty -> struct(Empty, Empty)
 
     // Potential Functions: 
     // - Select all keys that are a prefix of the input.

@@ -217,9 +217,12 @@ let ``tree basics`` () =
     Assert.Equal(4, CritbitTree.size (CritbitTree.dropPrefix (BS.fromString "bar") t1))
     Assert.Equal(5, CritbitTree.size (CritbitTree.dropPrefix (BS.fromString "ban") t1))
 
-    let p t s = CritbitTree.partitionK (BS.fromString s) t
+    let p t s = 
+        let struct(a,b) = CritbitTree.splitAtKey (BS.fromString s) t
+        (a,b)
     Assert.Equal(t1, snd (p t1 "bald")) // "bald" is least key
     Assert.Equal(2, CritbitTree.size (fst (p t1 "ban"))) // bald and bald eagle to left 
+    Assert.Equal(4, CritbitTree.size (fst (p t1 "bar")))
     
     let d1' = List.map snd (CritbitTree.toList t1)
     Assert.Equal<String list>(d1', List.sort d1)
