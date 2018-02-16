@@ -284,21 +284,21 @@ module Trie =
     /// Partition a tree at a specified key. Keys strictly less than
     /// the specified key will be in the left tree, while keys greater
     /// or equal will be placed in the right tree. 
-    let rec splitAtKey (k:Key) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
+    let rec splitAtKey (k:Key) (t:Tree<'V>) : struct(Tree<'V> * Tree<'V>) =
         let n = bytesShared k (t.prefix)
-        if (n = k.Length) then (empty,t)
+        if (n = k.Length) then struct(empty,t)
         else if (n = t.prefix.Length) then 
             let ix = uint64 (k.[n])
             let struct(csl,csr) = 
-                let (csl0,csr0) = IntMap.splitAtKey ix (t.children)
+                let struct(csl0,csr0) = IntMap.splitAtKey ix (t.children)
                 match IntMap.tryFind ix csr0 with
                 | Some c ->
-                    let (tl,tr) = splitAtKey (BS.drop (n+1) k) c
+                    let struct(tl,tr) = splitAtKey (BS.drop (n+1) k) c
                     struct(setChildAt ix tl csl0, setChildAt ix tr csr0)
                 | None -> struct(csl0,csr0)
-            (mkNode (t.prefix) (t.value) csl, mkNode (t.prefix) None csr)
-        else if(k.[n] < t.prefix.[n]) then (empty,t)
-        else (t,empty)
+            struct(mkNode (t.prefix) (t.value) csl, mkNode (t.prefix) None csr)
+        else if(k.[n] < t.prefix.[n]) then struct(empty,t)
+        else struct(t,empty)
 
     /// Test whether a key access requires dereferencing stowage.
     let rec isKeyRemote (k:Key) (t:Tree<'V>) : bool =

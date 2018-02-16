@@ -158,6 +158,37 @@ let ``intmap removal`` () =
         Assert.Equal(mr,mx)
 
 [<Fact>]
+let ``intmap split`` () =
+    let inline add i m = IntMap.add (uint64 i) i m
+    let klt i m = 
+        let struct(a,_) = IntMap.splitAtKey (uint64 i) m
+        a
+    let kge i m =
+        let struct(_,b) = IntMap.splitAtKey (uint64 i) m
+        b
+    let m0 = IntMap.empty
+    let m4 = m0 |> add 0 |> add 1 |> add 2 |> add 3
+
+    Assert.Equal(klt 4 m4, m4)
+    Assert.Equal(klt 3 m4, m0 |> add 0 |> add 1 |> add 2)
+    Assert.Equal(klt 2 m4, m0 |> add 0 |> add 1)
+    Assert.Equal(klt 1 m4, m0 |> add 0)
+    Assert.Equal(klt 0 m4, m0)
+    Assert.Equal(kge 0 m4, m4)
+    Assert.Equal(kge 1 m4, m0 |> add 1 |> add 2 |> add 3)
+    Assert.Equal(kge 2 m4, m0 |> add 2 |> add 3)
+    Assert.Equal(kge 3 m4, m0 |> add 3)
+    Assert.Equal(kge 4 m4, m0)
+
+    let inline sz m = Seq.length (IntMap.toSeq m)
+    let m = Array.foldBack add [|0..99|] (IntMap.empty)
+    Assert.Equal(100, sz m)
+    Assert.Equal(99, sz (klt 99 m))
+    Assert.Equal(30, sz (klt 30 m))
+    Assert.Equal(30, sz (kge 70 m))
+    Assert.Equal(99, sz (kge 1 m))
+
+[<Fact>]
 let ``history independent trie construction`` () =
     let a = Array.init 1000 id
     let fromI i = (BS.fromString (string i), i)

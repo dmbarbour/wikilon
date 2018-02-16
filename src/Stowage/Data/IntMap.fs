@@ -163,29 +163,37 @@ module IntMap =
             match node with
             | Inner (p, b, np) ->
                 let kp = prefix k b
-                if (kp < p) then (Some node, None) else
-                if (kp > p) then (None, Some node) else
-                let k' = suffix k b
-                let inR = testCritbit k b
+                if (p > kp) then struct(None, Some node) else // node keys > k
+                if (p < kp) then struct(Some node, None) else // node keys < k
+                // need to split children
                 let struct(l,r) = load' np
+                let inR = testCritbit k b
                 if inR then
-                    let (rl,rr) = splitAtKey k' r
+                    let struct(rl,rr) = splitAtKey (suffix k b) r
                     let l' = 
                         match rl with
                         | Some n -> Inner(p,b,local l n)
                         | None -> mergeL p b l
-                    (Some l', rr)
+                    let rr' = 
+                        match rr with
+                        | Some n -> Some (mergeR p b n)
+                        | None -> None
+                    struct(Some l', rr')
                 else
-                    let (ll,lr) = splitAtKey k' l
+                    let struct(ll,lr) = splitAtKey (suffix k b) l
+                    let ll' = 
+                        match ll with
+                        | Some n -> Some (mergeL p b n)
+                        | None -> None
                     let r' = 
                         match lr with
                         | Some n -> Inner(p,b,local n r)
                         | None -> mergeR p b r
-                    (ll, Some r')
+                    struct(ll', Some r')
             | Leaf (kl,_) ->
                 if (kl >= k) 
-                    then (None, Some node) 
-                    else (Some node, None)
+                    then struct(None, Some node) 
+                    else struct(Some node, None)
 
         let inline keyPrefixes kp p b =
             let kl = kp ||| (keyPrefixL p b)
@@ -458,23 +466,10 @@ module IntMap =
     /// Partition a tree at a specified key. Keys strictly less than
     /// the specified key will be in the left tree, while keys greater
     /// or equal will be placed in the right tree.
-    let splitAtKey (k:Key) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
+    let splitAtKey (k:Key) (t:Tree<'V>) : struct(Tree<'V> * Tree<'V>) =
         match t with
         | Some n -> Node.splitAtKey k n
-        | None -> (None,None)
-
-    /// Select a range of keys.
-    let slice (kMin:Key option) (kMax:Key option) (t0:Tree<'V>) : Tree<'V> =
-        let inline sliceLB kOpt t = 
-            match kOpt with
-            | Some k when (0UL <> k) -> snd (splitAtKey k t)
-            | _ -> t
-        let inline sliceUB kOpt t = 
-            match kOpt with
-            | Some k when (System.UInt64.MaxValue <> k) -> 
-                fst (splitAtKey (k + 1UL) t)
-            | _ -> t
-        t0 |> sliceLB kMin |> sliceUB kMax 
+        | None -> struct(None,None)
 
     /// Map a function to every value in a tree. (see compactingMap.)
     let map fn t =
