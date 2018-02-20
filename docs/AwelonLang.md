@@ -421,7 +421,7 @@ To control output, we can generally use annotations to make assertions about com
         [[B][A]](t2) == [[B][A]]
         ...
 
-Between blocks and tuple annotations, we scope both inputs and outputs to a computation.
+Between blocks and tuple annotations, we scope both inputs and outputs to a computation. But it might be more convenient to also have annotations or types to simply assert how many arguments a block function may observe.
 
 ### Temporal Scope
 
@@ -446,17 +446,15 @@ A sealed value could be expressed as `[[value](seal_foo)]`. An accessor could th
 
 ### Substructural Scope
 
-[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about protocols and life cycles, whether a value is used and how many times. Especially in combination with abstract data types or effects models. As usual, we can introduce a few annotations to help out:
+[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about protocols and life cycles, whether a value is used or shared. This can work nicely in combination with abstract data types or effects models, enabling high level control over behaviors (e.g. to model handshakes and protocols, exchange of tokens that represent tasks, etc..)
 
-* `(nc)` - mark a value non-copyable, aka 'affine'
-* `(nd)` - mark a value non-droppable, aka 'relevant'
-* inherit substructure of bound values (op `b`).
+I'm still contemplating how to best express. If we aren't concerned about concision, we could use annotations like:
 
-        [A](nc) [B] b == [[A](nc) B](nc)
+        [F](nd1)(nc1)(nd2)(nc4)
 
-An affine value models a limited resource while a relevant value models a responsibility. If we're responsible for explicitly disposing of a resource, then it should be both affine and relevant, which corresponds to the 'linear' type.
+This could be understood as saying that `F` must not drop its first or second arguments, and should not copy its first or fourth arguments. We could perhaps more compactly write this using a flag-like approach, or we could buck this entire issue to a rich type declaration layer (see *Sophisticated Types*, below). I'm leaning towards the latter option.
 
-Because copy and drop are explicit in Awelon, it isn't difficult to check substructural properties dynamically. However, it's still undesirable overhead. Ideally we should validate substructural types statically.
+*Note:* Originally, I used annotations to mark *values* with substructural attributes. This is easy to express. Unfortunately, this composes awkwardly and hinders use cases where we want to control copying only within scope of another computation (e.g. to permit copying and backtracking outside of this scope). So I now propose to mark *arguments* with substructural properties.
 
 ### Quota Control
 
