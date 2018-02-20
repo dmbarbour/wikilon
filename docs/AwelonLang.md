@@ -160,7 +160,6 @@ Annotations help developers control, optimize, view, and debug computations. Unl
 * `(a2)..(a9)` - arity annotations to defer computations
 * `(t1)..(t9)` - tuple assertions for output scope control
 * `(unit)` - assert empty block
-* `(nc) (nd)` - support substructural type safety
 * `(seal_foo) (open_foo)` - lightweight symbolic types
 * `(par)` - request parallel evaluation of computation
 * `(eval)` - request immediate evaluation of computation
@@ -444,18 +443,6 @@ We may need to partially evaluate `A` to eliminate exposed `(now)` annotations b
 
 A sealed value could be expressed as `[[value](seal_foo)]`. An accessor could then use `i(open_foo)`. These annotations would do a lot to resist accidental access to data, and we could simply search a codebase for the annotations to determine which functions access certain data structures. Further, a linter could raise an error when `(seal_foo)` or `(unseal_foo)` appears in source code outside of words with prefix `foo_`. This would allow us to treat `foo_` or any `prefix_` as an implicit module or package that can hide some implementation details from other parts of the codebase.
 
-### Substructural Scope
-
-[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about protocols and life cycles, whether a value is used or shared. This can work nicely in combination with abstract data types or effects models, enabling high level control over behaviors (e.g. to model handshakes and protocols, exchange of tokens that represent tasks, etc..)
-
-I'm still contemplating how to best express. If we aren't concerned about concision, we could use annotations like:
-
-        [F](nd1)(nc1)(nd2)(nc4)
-
-This could be understood as saying that `F` must not drop its first or second arguments, and should not copy its first or fourth arguments. We could perhaps more compactly write this using a flag-like approach, or we could buck this entire issue to a rich type declaration layer (see *Sophisticated Types*, below). I'm leaning towards the latter option.
-
-*Note:* Originally, I used annotations to mark *values* with substructural attributes. This is easy to express. Unfortunately, this composes awkwardly and hinders use cases where we want to control copying only within scope of another computation (e.g. to permit copying and backtracking outside of this scope). So I now propose to mark *arguments* with substructural properties.
-
 ### Quota Control
 
 Evaluation of programs requires resources, notably memory and CPU time. Normally, these resources aren't specific to evaluation for any subprogram. However, in practice it is convenient to control evaluation efforts for specific subprograms or at least quickly discover and debug resource errors. For Awelon, it is feasible to annotate a subprogram - a block - with quotas for its evaluation. For example, consider: 
@@ -542,6 +529,14 @@ For the more sophisticated types - such as GADTs, signatures, existential types,
 Awelon doesn't specify a type description language, but we're free to use strings or data structures. Static analysis tools should recognize de-facto standards by ad-hoc means, such as a version comment within the type description. 
 
 *Aside:* Type descriptions related to words can generally be moved outside of mainline code, into auxiliary definitions. But it's better to use annotations even within these auxiliary definitions, to avoid relying on naming conventions. E.g. `foo_type = [[foo][type description](type)]`. 
+
+### Substructural Types
+
+[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about protocols and life cycles, and also help enforce optimizations such as in-place updates. Unfortunately, expressing substructural types (e.g. recursive types) is non-trivial, so shall rely on rich *Sophisticated Types* declarations. 
+
+Potential use of substructural types will have a significant impact on algorithms, especially regarding generic code surrounding data structures such as lists and trees. For example, instead of taking the "head" of a list and dropping the rest, we're more likely to split the head and tail and return both. The [Huet zipper](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) data structure is useful for processing lists and trees. It's better to consider substructural types early on to develop a linearity-friendly codebase. 
+
+*Note:* Initially, I proposed annotations `(nc)` and `(nd)` to mark values with substructural attributes. This is easy to express and enforce. Unfortunately, it composes awkwardly and hinders various use cases where we want to control copying only within scope of another computation. So I now would propose to mark parameters with substructural attributes.
 
 ## Editable Views
 
