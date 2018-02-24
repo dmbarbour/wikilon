@@ -17,6 +17,8 @@
     <Compile Include="Trie.fs" />
     <Compile Include="LSMTrie.fs" />
     <Compile Include="DB.fs" />
+    <Compile Include="MemoryCache.fs" />
+    <Compile Include="DurableCache.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Data.ByteString\Data.ByteString.fsproj" />
