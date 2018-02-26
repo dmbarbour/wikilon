@@ -77,7 +77,7 @@ module LVRef =
     /// or hash) will prematurely force stowage. So try to avoid that.
     let stow (c:Codec<'V>) (db:Stowage) (v:'V) (sz:SizeEst) : LVRef<'V> =
         let ref = new LVRef<'V>(lazy (VRef.stow c db v), Some v)
-        Cache.receive (ref :> Cached) sz true
+        Cache.receive (ref :> Cached) sz
         ref
 
     let private loadAndCache (ref:LVRef<'V>) : 'V =
@@ -88,7 +88,7 @@ module LVRef =
                 let bytes = vref.DB.Load (vref.ID)
                 let v = Codec.readBytes (vref.Codec) (vref.DB) bytes
                 ref.cache <- Some v
-                Cache.receive (ref :> Cached) (40 + bytes.Length) false
+                Cache.receive (ref :> Cached) (40 + bytes.Length) 
                 v
             | Some v -> v
         )
