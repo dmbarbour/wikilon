@@ -17,7 +17,7 @@ type VRef<'V> =
 
     // Object overrides
     override v.Finalize() = v.DB.Decref (v.ID)
-    override v.ToString() = v.ID.ToString()
+    override v.ToString() = sprintf "{%s}" (BS.toString v.ID)
     override v.GetHashCode() = v.ID.GetHashCode()
     override x.Equals yobj =
         match yobj with
@@ -67,7 +67,7 @@ module VRef =
 module EncRscHash =
     let cPrefix = byte '{'
     let cSuffix = byte '}'
-    let size = 2 + RscHash.size
+    let size = uint64 (2 + RscHash.size)
     let write (h:RscHash) (dst:ByteDst) =
         assert(h.Length = RscHash.size)
         ByteStream.writeByte cPrefix dst

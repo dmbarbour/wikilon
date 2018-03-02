@@ -604,16 +604,15 @@ module IntMap =
             match node with
             | Leaf (k,v) ->
                 let struct(v',szV) = Codec.compactSz cV db v
-                struct(Leaf(k,v'), 1 + EncVarNat.size k + szV)
+                struct(Leaf(k,v'), 1UL + EncVarNat.size k + szV)
             | Inner (p,b,np) ->
-                let szPrefix = 2 + EncVarNat.size p // cInner, b, p
-                let threshNP = thresh - szPrefix
-                let struct(np',szNP) = EncCVRef.compact threshNP cNP db np
+                let szPrefix = 2UL + EncVarNat.size p // cInner, b, p
+                let struct(np',szNP) = EncCVRef.compact thresh cNP db np
                 struct(Inner(p,b,np'), szPrefix + szNP)
 
         // codec for pair of nodes is primary recursion point,
         // given we only compact at split points (pair of nodes).
-        let codecNP (thresh:int) (cV:Codec<'V>) = 
+        let codecNP (thresh:SizeEst) (cV:Codec<'V>) = 
             { new Codec<struct(Node<'V> * Node<'V>)> with
                 member cNP.Write (struct(l,r)) dst = 
                     write cV cNP l dst
@@ -637,7 +636,7 @@ module IntMap =
             }
 
         // Using a large threshold for compaction of nodes.
-        let defaultThreshold : SizeEst = 30000
+        let defaultThreshold : SizeEst = 30000UL
 
         let inline codec (cV:Codec<'V>) = codec' defaultThreshold cV
 

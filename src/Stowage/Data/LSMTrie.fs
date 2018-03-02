@@ -518,6 +518,7 @@ module LSMTrie =
     // Priority: low, until a use case arises.
                         
     module Enc =
+
         // Encoding is concatenation of key, value, updates, and children.
         // Compaction will flush updates based on a given `buffer` size. 
         type TreeCodec<'V> =
@@ -545,7 +546,7 @@ module LSMTrie =
                         // flush the update buffer during compaction
                         let struct(cs',szCS) = Codec.compactSz (c.children) db (flush us' (t.children))
                         let t' = { prefix = t.prefix; value = v'; children = cs'; updates = IntMap.empty }
-                        struct(t',szP + szV + szCS + 1)
+                        struct(t',szP + szV + szCS + 1UL)
                     else 
                         // reuse children then write update buffer
                         let struct(cs',szCS) = Codec.compactSz (c.children) db (t.children)
@@ -553,13 +554,17 @@ module LSMTrie =
                         struct(t',szP + szV + szCS + szUpd)
             new(cv,page,buffer) 
                 as tc = { value = cv 
-                          updates = Trie.Enc.TreeCodec(EncOpt.codec cv, System.Int32.MaxValue).children
+                          updates = Trie.Enc.TreeCodec(EncOpt.codec cv, System.UInt64.MaxValue).children
                           buffer = buffer
                           children = Codec.invalid
                         } then
-                tc.children <- IntMap.codec' page (tc :> Codec<Tree<'V>>) 
+                tc.children <- IntMap.codec' page (tc :> Codec<Tree<'V>>)
+            new(cv,thresh) = new TreeCodec<'V>(cv,thresh,thresh/2UL) 
 
-    /// Codec with specified heuristic compaction thresholds.
+    /// Codec with specified heuristic compaction threshold.
+    ///
+    /// The threshold is a subtree size above which we'll try to
+    /// stow a node remotely. 
     /// 
     /// We have two thresholds: a page size threshold for creation
     /// of new stowage nodes, and a buffer before flushing updates 
@@ -570,13 +575,11 @@ module LSMTrie =
     /// pairs, lest a single large update force a flush all the way
     /// to the leaf stowage nodes. Use CVRef if necessary to control
     /// value sizes relative to page size.
-    let inline codec' (page:SizeEst) (buffer:SizeEst) (cV:Codec<'V>) =
-        Enc.TreeCodec<'V>(cV,page,buffer) :> Codec<Tree<'V>>
+    let inline codec' (thresh:SizeEst) (cV:Codec<'V>) =
+        Enc.TreeCodec<'V>(cV,thresh) :> Codec<Tree<'V>>
 
-    /// Codec with default compaction thresholds. 
-    let inline codec cV = 
-        let thresh = IntMap.EncNode.defaultThreshold
-        codec' thresh thresh cV
+    /// Codec with default compaction threshold. 
+    let inline codec cV = codec' (IntMap.EncNode.defaultThreshold) cV
 
     /// Map and filter while compacting each trie node. 
     ///

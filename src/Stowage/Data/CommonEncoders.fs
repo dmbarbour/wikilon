@@ -12,7 +12,7 @@ module EncVarNat =
         sizeLoop (1+ct) (n>>>7)
 
     /// Size of a VarNat encoding.
-    let size (n : uint64) : int = sizeLoop 1 (n>>>7)
+    let size (n : uint64) : SizeEst = uint64 (sizeLoop 1 (n>>>7))
 
     let rec private whb (n:uint64) (dst:ByteDst) : unit =
         if (0UL = n) then () else
@@ -64,7 +64,7 @@ module EncVarInt =
     // manipulations instead of a conditional expression. But
     // it isn't very worthwhile.
 
-    let inline size (i:int64) : int = EncVarNat.size (zzEncode i)
+    let inline size (i:int64) : SizeEst = EncVarNat.size (zzEncode i)
     let inline write (i:int64) (dst:ByteDst) = EncVarNat.write (zzEncode i) dst
     let inline read (src:ByteSrc) : int64 = zzDecode (EncVarNat.read src)
 
@@ -76,7 +76,7 @@ module EncVarInt =
         }
 
 module EncByte =
-    let size : int = 1
+    let size : SizeEst = 1UL
     let inline write (b:byte) (dst:ByteDst) : unit = ByteStream.writeByte b dst
     let inline read (src:ByteSrc) : byte = ByteStream.readByte src
     let expect (b:byte) (src:ByteSrc) : unit =
@@ -100,8 +100,9 @@ module EncByte =
 /// those references should be protected from adjacency issues (e.g.
 /// like how EncRscHash uses `{hash}`. 
 module EncBytes =
-    let size (b:ByteString) : int =
-        EncVarNat.size (uint64 b.Length) + b.Length 
+    let size (b:ByteString) : SizeEst =
+        let len = uint64 b.Length
+        (EncVarNat.size len) + len
 
     let write (b:ByteString) (dst:ByteDst) : unit =
         EncVarNat.write (uint64 b.Length) dst
@@ -124,7 +125,7 @@ module EncBytes =
 /// is not mixed with any other data. On read, it trivially consumes all 
 /// the data from the input stream.
 module EncBytesRaw =
-    let inline size (b:ByteString) : int = b.Length
+    let inline size (b:ByteString) : SizeEst = uint64 b.Length
     let inline write b dst = ByteStream.writeBytes b dst
     let inline read src = ByteStream.readRem src
     let codec = 
@@ -260,8 +261,8 @@ module EncOpt =
         match vOpt with
         | Some v ->
             let struct(v',szV) = Codec.compactSz cV db v
-            struct(Some v', 1+szV)
-        | None -> struct(None,1)
+            struct(Some v', 1UL+szV)
+        | None -> struct(None,1UL)
 
     /// Codec combinator for a simple option type.
     let codec (cV:Codec<'V>) =

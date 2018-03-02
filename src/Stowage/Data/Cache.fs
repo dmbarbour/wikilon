@@ -27,23 +27,23 @@ type Cached =
 /// consider MCache or DCache.  
 module Cache =
 
-    type private Rsc = (struct(int * int * System.WeakReference))
+    type private Rsc = (struct(SizeEst * int * System.WeakReference))
     type private Frame = ResizeArray<Rsc>
 
     // Our simple algorithm for releasing memory.
-    let private scrubFrame (rng:System.Random) (pdecay:int) (f:Frame) : struct(Frame * uint64) =
+    let private scrubFrame (rng:System.Random) (pdecay:int) (f:Frame) : struct(Frame * SizeEst) =
         let mutable erased = 0UL
         let newFrame = new Frame()
-        for (struct(tc,sz,wref)) in f do
+        for (struct(sz,tc,wref)) in f do
             match wref.Target with
             | null -> 
-                erased <- (erased + uint64 sz)
+                erased <- (erased + sz)
             | :? Cached as c ->
                 let tc' = c.Usage
                 let doScrub = (tc = tc') && (rng.Next(100) < pdecay)
                 if doScrub 
-                    then c.Clear(); erased <- (erased + uint64 sz)
-                    else newFrame.Add(struct(tc',sz,wref))
+                    then c.Clear(); erased <- (erased + sz)
+                    else newFrame.Add(struct(sz,tc',wref))
             | _ -> failwith "invalid state"
         struct(newFrame,erased)
 
@@ -60,8 +60,8 @@ module Cache =
     /// remove items independently from the cache manager clearing
     /// them. Due to GC, there is no guarantee Clear is called.
     type Manager =
-        val mutable private szMax : uint64
-        val mutable private szCur : uint64
+        val mutable private szMax : SizeEst
+        val mutable private szCur : SizeEst
         val mutable private ixHd  : int
         val private frames : Frame[]
         val private rngSrc : System.Random
@@ -79,20 +79,20 @@ module Cache =
         new(quota) = new Manager(12,60,quota)
 
         /// Adjust the managed quota.
-        member m.Resize (quota:uint64) : unit =
+        member m.Resize (quota:SizeEst) : unit =
             lock m (fun () ->
                 m.szMax <- quota
                 m.ConsiderBGScrub())
 
         /// Add object for management. When added, a size estimate must
         /// also be provided to count against the quota. 
-        member m.Receive (c:Cached) (sz:SizeEst) : unit =
-            assert(sz >= 0)
+        member m.Receive (c:Cached) (sz0:SizeEst) : unit =
             lock m (fun () ->
                 let f = m.frames.[m.ixHd]
+                let sz = 80UL + sz0 // add per-item overhead
                 let tc = c.Usage + System.Int32.MinValue // logical touch
-                f.Add(struct(tc,sz,System.WeakReference(c)))
-                m.szCur <- (m.szCur + uint64 sz)
+                f.Add(struct(sz,tc,System.WeakReference(c)))
+                m.szCur <- (m.szCur + sz)
                 m.ConsiderBGScrub())
 
         member private m.ConsiderBGScrub() : unit =

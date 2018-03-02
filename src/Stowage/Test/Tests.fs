@@ -594,7 +594,7 @@ type DBTests =
 
     [<Fact>]
     member t.``cvref basics`` () =
-        let stow s = CVRef.stow 10 (EncStringRaw.codec) (t.Stowage) s
+        let stow s = CVRef.stow 10UL (EncStringRaw.codec) (t.Stowage) s
         let a = stow "hello"
         let b = stow "hello, world!"
         //printfn "a=%A; b=%A" a b
@@ -611,10 +611,10 @@ type DBTests =
         for i = 1 to 50 do
             let k = uint64 ((2 * i) - 1)
             m <- IntMap.add k k m
-        let cm = IntMap.codec' (System.Int32.MaxValue) (EncVarNat.codec) 
+        let cm = IntMap.codec' (System.UInt64.MaxValue) (EncVarNat.codec) 
         let struct(mCompact,szM) = Codec.compactSz cm (t.Stowage) m
         let mbytes = Codec.writeBytes cm mCompact
-        Assert.Equal(BS.length mbytes, szM) // require exact size estimate
+        Assert.Equal(BS.length mbytes, int szM) // require exact size estimate
         t.FullGC()
         let m' = Codec.readBytes cm (t.Stowage) mbytes
         Assert.Equal(100, Seq.length (IntMap.toSeq m))
@@ -626,16 +626,16 @@ type DBTests =
         let fromI i = (uint64 i, i)
         let ss = Seq.map fromI s
         let m = IntMap.ofSeq ss
-        let cm = IntMap.codec' 400 (EncVarInt32.codec) 
+        let cm = IntMap.codec' 400UL (EncVarInt32.codec) 
         let struct(mCompact,szM) = Codec.compactSz cm (t.Stowage) m
         //printfn "compacted to: %d" szM
-        Assert.True(szM < 500)
+        Assert.True(szM < 500UL)
         Assert.Equal(Some 7, IntMap.tryFind 7UL mCompact)
         Assert.Equal(Some 201, IntMap.tryFind 201UL mCompact)
         Assert.Equal(Some 999, IntMap.tryFind 999UL mCompact)
         Assert.Equal(None, IntMap.tryFind 3000UL mCompact)
         let mbytes = Codec.writeBytes cm mCompact
-        Assert.Equal(szM, BS.length mbytes)
+        Assert.Equal(int szM, BS.length mbytes)
         t.FullGC()
         let m' = Codec.readBytes cm (t.Stowage) mbytes
         Assert.Equal(2000, Seq.length (IntMap.toSeq m))
@@ -649,7 +649,7 @@ type DBTests =
         // ensure it's intact and get performance when update buffers
         // are all empty.
 
-        let tc = LSMTrie.codec' 800 300 (EncVarInt32.codec)
+        let tc = LSMTrie.codec' 800UL (EncVarInt32.codec)
         let toKey k = string k |> BS.fromString
         let add k t = LSMTrie.add (toKey k) k t
         let a = [| for i = 1 to 20000 do yield i |]
@@ -691,7 +691,7 @@ type DBTests =
         // Testing an LSM tree properly requires compaction. The final
         // tree structure depends on update order up to compaction. For
         // simplicity and variability, I'll compact based on the key.
-        let tc = LSMTrie.codec' 800 300 (EncVarInt32.codec)
+        let tc = LSMTrie.codec' 800UL (EncVarInt32.codec)
         let frac = 30
         let compactK k t = 
             if (0 <> (k % frac)) then t else  
@@ -729,9 +729,9 @@ type DBTests =
                     |> Array.foldBack add a
                     |> Array.foldBack rem r
                     |> Codec.compactSz tc (tf.Stowage)
-            Assert.True(sz < 1000) // node size limit
+            Assert.True(sz < 1000UL) // node size limit
             let bytes = Codec.writeBytes tc t
-            Assert.Equal(sz, BS.length bytes) // precise size estimate
+            Assert.Equal(int sz, BS.length bytes) // precise size estimate
             let h = tf.Stowage.Stow bytes
             System.GC.KeepAlive(t)
             tf.Flush() // ensure full write

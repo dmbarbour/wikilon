@@ -2,10 +2,7 @@ namespace Stowage
 open Data.ByteString
 
 /// Estimated Serialization Size (in bytes).
-///
-/// Stowage is limited to objects of about 64MB or less, so a plain
-/// old 31-bit integer is plenty sufficient for size estimates.
-type SizeEst = int
+type SizeEst = uint64
 
 /// Abstract encoder-decoder type for data in Stowage.
 ///

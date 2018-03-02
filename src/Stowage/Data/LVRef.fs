@@ -88,7 +88,8 @@ module LVRef =
                 let bytes = vref.DB.Load (vref.ID)
                 let v = Codec.readBytes (vref.Codec) (vref.DB) bytes
                 ref.cache <- Some v
-                Cache.receive (ref :> Cached) (40 + bytes.Length) 
+                let szEst = 80UL + uint64 (BS.length bytes)
+                Cache.receive (ref :> Cached) (80UL + uint64 (BS.length bytes)) 
                 v
             | Some v -> v
         )

@@ -42,24 +42,24 @@ module EncCByteString =
         else // Local
             let bs = ByteStream.readBytes (int (len - 1UL)) src
             let sf = ByteStream.bytesRem src
-            Local (bs, (s0 - sf))
+            Local (bs, uint64 (s0 - sf))
 
-    let remoteSize = 2 + RscHash.size
+    let remoteSize = uint64 (2 + RscHash.size)
     let inline localSize s = 
-        let len = BS.length s
-        len + EncVarNat.size (1UL + uint64 len) 
+        let len = uint64 (BS.length s)
+        len + EncVarNat.size (1UL + len) 
 
-    let compact (thresh:int) (db:Stowage) (ref:CByteString) : struct(CByteString * int) =
+    let compact (thresh:SizeEst) (db:Stowage) (ref:CByteString) : struct(CByteString * SizeEst) =
         match ref with
         | Local (s,szEst) ->
             if (szEst < thresh) then struct(ref, szEst) else
             let sz = localSize s
             if (sz < thresh) then struct(Local(s,sz), sz) else
-            let vref = LVRef.stow (EncBytesRaw.codec) db s (s.Length)
+            let vref = LVRef.stow (EncBytesRaw.codec) db s sz
             struct(Remote vref, remoteSize)
         | Remote _ -> struct(ref, remoteSize)
 
-    let codec (thresh:int) =
+    let codec (thresh:SizeEst) =
         { new Codec<CByteString> with
             member __.Write ref dst = write ref dst
             member __.Read db src = read db src
@@ -87,7 +87,7 @@ module CByteString =
     /// Construct a compacted bytestring directly, compacting immediately
     /// if required according to the threshold. This function uses the 
     /// specialized encoder from EncCByteString.
-    let stow (thresh:int) (db:Stowage) (s:ByteString) : CByteString =
+    let stow (thresh:SizeEst) (db:Stowage) (s:ByteString) : CByteString =
         let struct(ref,_) = EncCByteString.compact thresh db (local s)
         ref
 

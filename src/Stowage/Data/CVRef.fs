@@ -12,6 +12,10 @@ open Data.ByteString
 type CVRef<'V> =
     | Local of 'V * SizeEst
     | Remote of LVRef<'V>
+    override cref.ToString() =
+        match cref with
+        | Local (v,_) -> sprintf "`%A" v
+        | Remote lvref -> lvref.ToString()
 
 /// Serialization for CVRef
 module EncCVRef =
@@ -34,25 +38,24 @@ module EncCVRef =
             let s0 = ByteStream.bytesRem src
             let v = Codec.read cV db src
             let sf = ByteStream.bytesRem src
-            Local (v, (s0 - sf))
-        else if (b0 <> EncRscHash.cPrefix) then
-            raise ByteStream.ReadError
-        else
+            Local (v, uint64 (s0 - sf))
+        else if (b0 = EncRscHash.cPrefix) then
             let h = ByteStream.readBytes (RscHash.size) src
             let bf = ByteStream.readByte src
             if (bf <> EncRscHash.cSuffix) then raise ByteStream.ReadError
             Remote (LVRef.wrap (VRef.wrap cV db h))
+        else raise ByteStream.ReadError
 
-    let compact (thresh:int) (cV:Codec<'V>) (db:Stowage) (ref:CVRef<'V>) : struct(CVRef<'V> * int) =
+    let compact (thresh:SizeEst) (cV:Codec<'V>) (db:Stowage) (ref:CVRef<'V>) : struct(CVRef<'V> * SizeEst) =
         match ref with
         | Local (v,szEst) ->
-            if (szEst < thresh) then struct(ref, 1 + szEst) else
+            if (szEst < thresh) then struct(ref, 1UL + szEst) else
             let struct(v',szV) = Codec.compactSz cV db v
-            if (szV < thresh) then struct(Local(v',szV), 1 + szV) else
+            if (szV < thresh) then struct(Local(v',szV), 1UL + szV) else
             struct(Remote (LVRef.stow cV db v' szV), EncRscHash.size)
         | Remote _ -> struct(ref, EncRscHash.size)
 
-    let codec (thresh:int) (cV:Codec<'V>) =
+    let codec (thresh:SizeEst) (cV:Codec<'V>) =
         { new Codec<CVRef<'V>> with
             member __.Write ref dst = write cV ref dst
             member __.Read db src = read cV db src
@@ -67,7 +70,7 @@ module CVRef =
     /// The first compaction will determine whether this remains local
     /// or is stowed remotely. Subsequent compactions of the same size
     /// will be short-circuited.
-    let inline local v = Local (v, System.Int32.MaxValue)
+    let inline local v = Local (v, System.UInt64.MaxValue)
 
     /// Remote value reference.
     let inline remote r = Remote r
@@ -96,7 +99,7 @@ module CVRef =
     /// whether to keep it local or stow it to the database based on
     /// the estimated size. Even if stowed, the value remains in cache
     /// at least briefly.
-    let inline stow (thresh:int) (cV:Codec<'V>) (db:Stowage) (v:'V) : CVRef<'V> =
+    let inline stow (thresh:SizeEst) (cV:Codec<'V>) (db:Stowage) (v:'V) : CVRef<'V> =
         let struct(ref,_) = EncCVRef.compact thresh cV db (local v)
         ref
 
