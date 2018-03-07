@@ -3,63 +3,24 @@
 
 Awelon is a purely functional language based on concatenative combinators.
 
-## Why Another Language?
+Specifically, we use four primitive combinators:
 
-Modern programming languages can produce useful artifacts - applications, games, and so on. But they do not support flexible composition and decomposition of these artifacts. There are a lot of complicating factors: hidden runtime structure, entanglement of effects and environment, separation of programmer and user interfaces, even how software is packaged and shared in a community.
+        [B][A]a == A[B]         (apply)
+        [B][A]b == [[B]A]       (bind)
+           [A]c == [A][A]       (copy)
+           [A]d ==              (drop)
 
-Awelon language aims to be simple and scalable, addressing many complications. It explores a new way of developing and sharing code and computational artifacts. Some design points:
+In Awelon, all first-class values are functions, and first-class functions may be represented by code enclosed in square brackets. But there is syntactic sugar for natural numbers and texts. Evaluation proceeds by rewriting, but an interpreter or compiler should further optimize representations and processing for common types, such as arithmetic on natural numbers. Besides these primitives, programmers may define words. Awelon language also supports annotations, which provide performance or debugging hints to a compiler or interpreter without affecting observable results within a computation.
 
-* Awelon evaluates by local confluent rewriting, much like expression `(6 * 7)` evaluates to `42` in arithmetic. Every evaluation step has representation within Awelon language and may thus be serialized or rendered - i.e. it's easy to "show the work". Rewrite based evaluation simplifies debugging, distribution, integration of the program with HCI, and further use of program results.
+Awelon is a very simplistic language. Arguably, it's simpler even than a pure lambda calculus: there is no need to manage scoped symbolic environments, copy and drop are explicit which simplifies reference counting, and we can easily abstract over multiple parameters or results. Arity offers a more convenient foundation than atomic value types for static type safety analysis.
 
-* Awelon has a simple, Forth-like syntax. This lowers barriers for [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). Editable views can support domain-specific notations or allow interactive editing of Awelon via forms or graphs. 
+The intention is to leverage Awelon together with [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) tools. In this context, Awelon language is a purely functional assembly. Programmers can observe and manipulate it directly, but we can also project rich textual or even graphical programming interfaces above it. Because we evaluate by rewriting, it is feasible to also render the outputs of evaluation in the same format. Hence, we can model projections that evaluate in-place. Further, words in the source or output can provide a rich, human-meaningful reference structure suitable for hypertext.
 
-* Awelon specifies 'lazy linking' of words by the evaluator. That is, a word is not rewritten to its definition unless doing so would result in further rewrites. This allows for results to contain human-meaningful references and code fragments. Importantly, editable views can be applied to results, which helps unify programmer and user interfaces.
-
-* Awelon has a simple, pure, deterministic, portable semantics. It is easy to share code with others. Programs are concatenative, which simplifies composition and decomposition of code fragments. Definitions are acyclic, so it's easy to extract only necessary fragments of a dictionary.
-
-* Awelon uses *Acceleration* as the performance alternative to built-in functions or FFI. This enables an interesting path of language growth that doesn't complicate semantics or security. Minimally, runtimes should accelerate natural numbers and arithmetic. But acceleration can potentially leverage GPGPUs (by accelerating linear algebra) or cloud computing (by accelerating Kahn process networks).
-
-Awelon experiments with alternative [application models](ApplicationModel.md). The most promising models are RESTful - documents, publish subscribe, tuple spaces, etc. - integrating application state with the codebase instead of an external filesystem or database. The codebase then becomes a 'smart' filesystem or database, with more deeply integrated linking and computational structure similar to a spreadsheet. The codebase is maintained by a community of human and software agents, exactly as we'd maintain a database or filesystem.
-
-Integration of Awelon systems with external systems will initially rely on web services or publish-subscribe systems. 
-
-## Primitives
-
-There are four primitive computing combinators:
-
-            [B][A]a == A[B]         (apply)
-            [B][A]b == [[B]A]       (bind)
-               [A]c == [A][A]       (copy)
-               [A]d ==              (drop)
-
-Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computation in Awelon. Awelon computations are semantically pure, and their formal behavior can be understood in terms of these few primitives. However, Awelon also provides a few lightweight features for numbers, texts, words, big data, and provisionally for labeled data (records and variants).
-
-This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, see a translation from lambda calculus at *Named Local Variables* or see this simple definition of the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic):
-
-            [B][A]w == [A][B]       (swap)           w = [] b a
-               [A]i == A            (inline)         i = [] w a d
-         [C][B][A]s == [[C]B][C]A   (S combinator)   s = [[c] a b w] a i
-            [B][A]k == A            (K combinator)   k = a d
-
-Awelon systems should ideally perform static analysis for termination and type safety. Compared to lambda calculus or SKI combinators, Awelon's semantics are simpler: 
-
-1. Local combinator rewriting is simpler than variable substitution. There is no need for environment models, lexical scopes, or variable capture hygiene for multi-stage metaprogramming.
-1. A stack-like environment enables uniform abstraction for multiple arguments or results, and supports *Static Typing* based on consistent arities instead of atomic value types.
-1. Explicit copy and drop operations simplify substructural type analysis, reference counting GC, and dynamic tracking of uniqueness to accelerate in-place updates for indexed data structures.
-
-To achieve performance, we additionally leverage *Acceleration*. This is Awelon's alternative to intrinsic functions, built-in data-types, and performance-motivated FFI. Acceleration is discussed below. We can also leverage *Annotations*, to improve performance and support other non-functional requirements like debugging.
-
-## Encoding
-
-Awelon is encoded using a subset of ASCII, bytes 32..126. 
-
-Newlines are among the rejected characters. However, line breaks may be transparently replaced by spaces where appropriate upon input of a program. Humans will usually manipulate Awelon code through *Editable Views* that may present a more sophisticated surface syntax, potentially including tables or graphical representations or *Named Local Variables* and infix notations. 
-
-Arbitrary texts and binaries cannot be directly embedded into Awelon, but may be referenced indirectly as *Secure Hash Resources*, which serve a similar role as external data files.
+Conventional application models introduce barriers that hinder composition, decomposition, sharing, and reuse of both computations and data. Awelon project aims to lower these barriers, make data and computations more accessible and sharable behind lightweight projections. This requires careful attention in both language and [application models](ApplicationModel.md).
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is no size limit, but words should be small in practice. 
+Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is no size limit, but words should be small in practice.
 
 Words are evaluated in context of a *Dictionary*. Each word is defined by an Awelon program, using other words. Valid definitions must form a directed acyclic graph and be block balanced (i.e. no unmatched `[` or `]` block characters). The formal semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
@@ -81,17 +42,16 @@ Awelon has native support for natural numbers. Syntactically, numbers are repres
         42 = [41 succ]
         (et cetera)
 
-Definitions for `zero` and `succ` are left to the dictionary. However, in practice the definitions will be standardized and runtime-approved to simplify *Acceleration* for natural numbers and arithmetic. Although Awelon does not support other number types, 
- Awelon does not support any other number types natively, but *Editable Views* can be leveraged to support numerical towers at the syntactic layer.
+Definitions for `zero` and `succ` are left to the dictionary. However, in practice, the definitions will be standardized and runtime-approved to simplify *Acceleration* for natural numbers and arithmetic. Awelon does not support other number types, but *Editable Views* can feasibly be leveraged to support numerical towers at the syntactic layer. 
 
 ## Embedded Texts
 
-Awelon has limited native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specifically the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters, and there is no Unicode support. Semantically, a text represents a binary list.
+Awelon has limited native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specifically the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters, and there is no Unicode support. Semantically, a text represents an ASCII binary list.
 
         ""      = [null]
         "hello" = [104 "ello" cons]
 
-This limited support for texts is intended for unit test data, lightweight DSLs (such as regular expressions), lookup keys, comments and rendering hints, and similar features. More general, sophisticated text should instead be represented using binary *Secure Hash Resources* (see below) or structured data models.
+This limited support for texts is intended for unit test data, lightweight DSLs (such as regular expressions), lookup keys, rendering hints, and similar features. More general, sophisticated text should instead be represented using binary *Secure Hash Resources* (see below) or structured data models.
 
 Definitions for `null` and `cons`, and hence the basic type for a list, are left to the dictionary. In practice, however, the dictionary definitions will be determined based on available runtime accelerations. In this case, acceleration may support lists using arrays under the hood.
 
@@ -155,7 +115,7 @@ Secure hash resources are generally subject to [garbage collection (GC)](https:/
 
 ## Annotations
 
-Annotations help developers control, optimize, view, and debug computations. Unlike words, which are mostly user-defined, annotations are given meaning by the runtime or compiler. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Potential useful annotations:
+Annotations help developers control, optimize, view, and debug computations. Unlike words, which are mostly user-defined, annotations are given meaning by the runtime system. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Potential useful annotations:
 
 * `(a2)..(a9)` - arity annotations to defer computations
 * `(t1)..(t9)` - tuple assertions for output scope control
@@ -185,18 +145,18 @@ Annotations are defined by the Awelon runtime system. But over enough time we sh
 
 Acceleration is a performance assumption for Awelon. 
 
-A runtime will recognize and accelerate common functions. The accelerated implementation may be hand optimized and built into the runtime to achieve performance similar to a primitive. As trivial examples, runtimes might accelerate the following functions:
+A runtime should optimize representations for common data types and functions. The accelerated implementation may be hand optimized and built into the runtime to achieve performance similar to a primitive. As a representative example, a runtime might optimize the representation for natural numbers and basic arithmetic functions, such that they're much more efficient than a naive implementation. A more sophisticated example might involve representations for matrices and functions for linear algebra, enabling use of the GPGPU. Even more sophisticated would be accelerating an "interpreter" for a safe subset of OpenCL, which would effectively embed that subset of OpenCL into the Awelon language.
+
+As trivial examples, runtimes might accelerate the following functions:
 
            [A]i == A            (inline)         i = [] w a d
         [B][A]w == [A][B]       (swap)           w = [] b a
 
 The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Whenever `i` appears at the end of a subprogram, we might leverage the tail-call optimization.
 
-In general, recognition of accelerators is fragile under refactoring and abstraction. For example, it may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names might break accelerators. Due to this fragility, developers need some means to gain confidence in accelerators. Performance mustn't silently rot due to independent development of the runtime. A simple convention is to support an `[code fragment](accel)` annotation that asserts the given fragment of code should be recognized and accelerated. Further, simple data plumbing accelerators like `i` and `w` or even fixpoint `z`, could be robustly recognized based on a static type analysis instead of specific definitions.
+Unfortunately, recognition of accelerators is fragile under refactoring and abstraction. For example, it may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. We might even tie recognition of accelerators to specific words. Performance should not silently rot due to independent developments of the runtime. A simple convention is to support an annotation like `[code fragment](accel)` that asserts the given fragment of code should be recognized and accelerated, enabling fast failure if the accelerator is ever deprecated.
 
-Acceleration naturally extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 succ]`. But with runtime acceleration, natural numbers may be compactly represented by machine words and arithmetic on math might be accelerated to add and multiply these words directly. Similarly, accelerated records could use hashtables or be compiled to structs. And lists could be accelerated to use arrays. And evaluation of Kahn Process Network descriptions could be accelerated to leverage distributed CPUs and memory.
-
-Accelerators are not trivial. An accelerator represents a significant compatibility investment, and dependency on accelerators will impact portability of code to other runtimes. It is best to develop a small set of accelerators that is useful for a wide variety of use cases. Development of carefully curated accelerators will be a long-term performance path for Awelon systems.
+Accelerators in Awelon replace the conventional use of built-in functions and some uses of FFI (where FFI is motivated for performance only). But development, maintenance, and standardization of accelerators is non-trivial. This is a long-term development path for Awelon systems.
 
 ## Stowage
 
@@ -212,31 +172,9 @@ What "large value" means is heuristic. But it should be simple to predict, under
 
 ## Dictionary
 
-Awelon words are defined in a codebase called a "dictionary". Evaluation of Awelon code occurs in context of an immutable dictionary. Awelon is designed to use community curated dictionaries as a starting point for software projects. This replaces the more conventional approach of using "libraries" - interdependent packages of definitions. Libraries are troublesome because of dependencies, versioning, configuration management, integration testing, and barriers raised by software ownership concerns. A dictionary, however, can simply include most words, definitions, and data one is likely to need, tested and known to work together, every definition uniformly accessible and updateable by the programmer.
+Awelon words are defined in a codebase called a "dictionary". 
 
-Unlike conventional programming languages, Awelon encourages that a lot of *data* also be represented in the codebase. For example: maps, music, almanacs, articles, paintings, presentations, books, blogs, forums, fonts, etc.. The dictionary thus doubles as a database or filesystem, albeit one with with flexible support for abstractions and spreadsheet-like properties. Integrated databases significantly simplify utilization for purely functional languages: we can directly query the embedded data for useable views or answers. Real-time input can feasibly be provided through software agents - see Awelon's proposed [application models](ApplicationModel.md).
-
-*Note:* Although it is discouraged in general, developers may still model and distribute "libraries" as patches updating word definitions. This may be suitable for experimental definitions.
-
-### Hierarchical Dictionary Structure
-
-Ultimately, dictionaries are maintained by multiple agents - of nature both human and software - managing, sharing, and synchronizing definitions. These definitions may represent documents, databases, or other application state. However, the ad-hoc interaction of multiple agents introduces significant concerns regarding information security and naming conflicts. To address these concerns, it is convenient if agents can manage and share an isolated dictionary, allowing clients to extract the relevant data. For this purpose, Awelon supports *hierarchical dictionaries*, allowing dictionaries to contain and reference other dictionaries.
-
-Access is represented by an `dict/` prefix, naming the contained dictionary. 
-
-        d/bar       (has behavior of `bar` from dictionary `d`)
-        d/42        => d/[41 succ]
-        d/[41 succ] => [d/41 d/succ]
-        d/"hello"   => d/[104 "ello"]
-        d/(eq_z)    (behavior of (eq_z) in dictionary `d`)
-
-Effectively, we add an implicit `dictname/` prefix to every word in the contained dictionary. (Dictionary names must also be valid words.) A dictionary cannot reference its context or host, thus hierarchical dictionaries will contain a copy for common dependencies such as definitions for arithmetic and list processing. To mitigate duplication overheads, the dictionary representation must support structure sharing, logical copies.
-
-To mitigate aesthetic issues, improve caching, and hopefully encourage community standardization of common word definitions, an evaluator is free to localize words with common meaning. For example, if `d/42` has the same meaning as `42` then we may freely rewrite between the two. Primitives, labels, and dictionary-independent annotations can automatically be localized.
-
-### Dictionary Representation
-
-The Awelon dictionary must support soft real-time streaming updates, scales of multiple terabytes, distributed storage with lazy downloads, structure sharing with similar dictionaries, lightweight branching and versioning, and efficient diffs. As an export representation, it should ideally be simple and legible such that humans can infer the format and develop appropriate tools. These features can be achieved using a log-structured merge radix tree and *Secure Hash Resources* as immutable references. Proposed representation:
+Proposed representation:
 
         /prefix1 secureHash1
         /prefix2 secureHash2
@@ -244,26 +182,37 @@ The Awelon dictionary must support soft real-time streaming updates, scales of m
         :symbol2 definition2
         ~symbol3
 
-A dictionary is represented by the root tree node in line-oriented ASCII text. Each line encodes an update to either a symbol (definition or deletion) or a directory node indexed on prefix. Internal directory nodes are referenced by secure hash, and the matched prefix is stripped from all symbols. Updates may appear in any order; this supports real-time streaming updates to an append-only log. To find the definition for a symbol, it is sufficient to examine the last relevant update. However, to save space and improve structure sharing outside of a stream, we'll usually want to normalize nodes by erasing masked updates then sorting whatever remains.
+A dictionary 'node' is a line-oriented ASCII text, representing an update log. Most lines will define or delete symbols (`:` or `~` respectively), but we may also index a matched prefix to a subtree. Tree nodes are named by secure hash, cf. *Secure Hash Resources*. We strip the matched prefix from symbols in the subtree, hence `:poke` under `/p` becomes `:oke`. For lookup, only the last update for a given symbol or prefix is used. Hence, `/p` will mask prior updates such as `/prod` and `:poke`. We can normalize our dictionary nodes by erasing masked updates and sorting whatever remains. The empty prefix or symbol is permitted.
 
-Prefixes mask all prior updates with a matching prefix. For example, an update to `/p` will mask prior updates to `:poke` and `/prod`. We assume the updated prefix will include those definitions if we intend to preserve them. The matched prefix is stripped from internal nodes, so under `/p` those become `:oke` and `/rod`. The empty prefix in `/ secureHash` is especially useful: it masks all prior updates, effectively representing a reset or checkpoint (in stream) or prototype inheritance (as first line). (Note: An empty string in place of the secure hash should alias the empty dictionary node.)
+This representation has characteristics of the LSM-tree, Merkle tree, and radix tree. It supports deeply immutable structure, structure sharing, lazy compaction, scaling beyond local memory or disk, efficient diffs, and lightweight real-time working set updates. The empty prefix `/ secureHash` can model prototype inheritance, stream checkpoints, or resets. By examining past definitions, we can heuristically estimate stability of definitions to optimize caching. 
 
-An Awelon dictionary contains words and hierarchical dictionaries. Words are directly represented as symbols and defined inline. There is no concern regarding multi-line definitions because Awelon simply doesn't have those. Large definitions may cause inefficiency in dictionary processing, but this can be mitigated by leveraging `$secureHash` redirects. Hierarchical dictionaries are represented trivially by direct inclusion: we define a fully expanded symbol `dict/word` for every word in the named dictionary. This enables us to use `/dict/ secureHash` to logically copy an entire dictionary under a prefix, or to update individual definitions for deeply hierarchical words without special processing.
+*Note:* We can represent conventional libraries as a subset of words with a common prefix, e.g. such that `/math_ secureHash` patches in a specific version of a math library. However, for Awelon, my intention is that we'll usually curate and share entire codebases - ensuring all words are versioned, managed, tested together. Instead of libraries, distribution could be modeled via DVCS-inspired mechanisms - pull requests, bug reports, etc..
 
-There is no support for comments. Any metadata we wish to preserve - authorship, update logs, modify timestamps, etc. - should be encoded in the dictionary or an associated dictionary (e.g. `/defs/` vs. `/meta/`). It can be convenient if metadata is accessible for computation, analysis, abstraction, and manipulation like any other data.
+## Hierarchical Dictionary Structure
 
-*Note:* This dictionary representation does not ensure that definitions are acyclic or well-typed, and does not record evaluations or optimizations. Fortunately, structure sharing and efficient diffs should help with caching these observations.
+Several of Awelon's proposed [application models](ApplicationModel.md) rely on storing data into the dictionary. In this context, the dictionary serves as a filesystem or database with spreadsheet-like characteristics. But with multiple humans and software agents maintaining the data, we introduce several concerns related to name conflicts and information security for data flows. To simplify these issues, Awelon permits hierarchically embedding one dictionary within another. The subordinate dictionary is sandboxed, unable to access its host. But the host can access its subordinates through extended words of form `dictname/foo`. We can also interpret other operations under a hierarchical context:
+
+        d/bar       (use `bar` from dictionary `d`)
+        d/42        => d/[41 succ]
+        d/[41 succ] => [d/41 d/succ]
+        d/"hello"   => d/[104 "ello"]
+
+In the dictionary representation, we simply define the extended symbols. For example, we can can write `:d/bar def` to update the definition for word `bar` in dictionary `d`. We can also use `/d/ secureHash` to logically embed or update an entire dictionary. Of course, writing out `d/42` is only ugly and inefficient if it has the same meaning as `42`. So we permit localizing: an evaluator may rewrite the hierarchical qualifier whenever it does not affect behavior.
 
 ## Evaluation
 
-Evaluation of an Awelon program results in an equivalent Awelon program, one from which it is hopefully easier to extract information or more efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by local rewriting. The four primitives rewrite by simple pattern matching:
+Evaluation of an Awelon program simply rewrites it to an equivalent program, in context of a dictionary. An external agent can presumably observe the result and extract data from the evaluated form, perhaps extend the program and continue. Awelon is a pure language, but any interaction with an external agent provides a potential basis for an effects model. 
+
+Primitives rewrite by simple pattern matching:
 
             [B][A]a => A[B]         (apply)
             [B][A]b => [[B]A]       (bind)
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads to a result other than a trivial inlining of the word's evaluated definition. This constraint is called lazy linking, and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further.
+Words will rewrite to their evaluated definitions. However, words should not rewrite unless doing so leads to further rewrites in the program. That is, if rewriting a word just results in the inlined definition, then we've lost some useful, human-meaningful structure but gained nothing. We'll only rewrite words if we stand to gain something. This constraint is called lazy linking, and it supports various performance and aesthetic goals.
+
+Evaluation can proceed with undefined words. Undefined word represent unknown computations and do not evaluate further. This can be leveraged for some application models, where we can use undefined words to represent future inputs.
 
 Awelon's basic evaluation strategy is simple:
 
@@ -271,9 +220,9 @@ Awelon's basic evaluation strategy is simple:
 * evaluate before copy 
 * evaluate final values
 
-Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
+Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for stateful memoization, and it covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-Annotations can greatly affect evaluation strategy. As two examples, `[A](eval)` could enforce evaluation of the value `[A]` before erasing `(eval)`, while `[A](lazy)` could replace "evaluate before copy" with a call-by-need strategy for a specific value, potentially using a hidden variable for logical copies (in which case we could apply the *Named Local Variables* extraction technique before rendering).
+Annotations can greatly affect evaluation strategy. As two examples, `[A](eval)` could enforce evaluation of the value `[A]` before erasing `(eval)`, while `[A](lazy)` could replace "evaluate before copy" with a call-by-need strategy for a specific value. In the latter case, we can extract logical copies using a technique similar to *Named Local Variables* upon render.
 
 ## Value Words
 
@@ -524,19 +473,27 @@ Using this, we can assert that two key-value structures share the same key compa
 
 For the more sophisticated types - such as GADTs, signatures, existential types, dependent types - we cannot rely on inference or simple annotations. We need a type description language with flexible abstraction and factoring. A viable option:
 
-        [type description of stack](type)d
+        [description of type assumptions for stack](type)d
 
 Awelon doesn't specify a type description language, but we're free to use strings or data structures. Static analysis tools should recognize de-facto standards by ad-hoc means, such as a version comment within the type description. 
 
-*Aside:* Type descriptions related to words can generally be moved outside of mainline code, into auxiliary definitions. But it's better to use annotations even within these auxiliary definitions, to avoid relying on naming conventions. E.g. `foo_type = [[foo][type description](type)]`. 
+*Aside:* Type descriptions related to words can generally be moved outside of mainline code, into auxiliary definitions. But it's useful to favor annotations even within type descriptions, to avoid relying entirely on naming conventions. E.g. `foo_type = [[foo][type description](type)]`. 
 
 ### Substructural Types
 
-[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about protocols and life cycles, and also help enforce optimizations such as in-place updates. Unfortunately, expressing substructural types (e.g. recursive types) is non-trivial, so shall rely on rich *Sophisticated Types* declarations. 
+[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) constrain against copy and drop operations. They can enable us to reason about protocols and life cycles, and also help enforce optimizations such as in-place updates. 
 
-Potential use of substructural types will have a significant impact on algorithms, especially regarding generic code surrounding data structures such as lists and trees. For example, instead of taking the "head" of a list and dropping the rest, we're more likely to split the head and tail and return both. The [Huet zipper](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) data structure is useful for processing lists and trees. It's better to consider substructural types early on to develop a linearity-friendly codebase. 
+Use of substructural types has a significant impact on how we express generic algorithms for data structures. For example, the conventional approach to a tree lookup is to logically copy the tree then drop various branches until we reach the desired element. But with linear types, we might instead approach this by [unzipping the tree](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) to access the target element, then zip it back together when done.
 
-*Note:* Initially, I proposed annotations `(nc)` and `(nd)` to mark values with substructural attributes. This is easy to express and enforce. Unfortunately, it composes awkwardly and hinders various use cases where we want to control copying only within scope of another computation. So I now would propose to mark parameters with substructural attributes.
+We can feasibly tag individual values with substructural constraints:
+
+* `[A](nc)` - mark value as non-copyable
+* `[A](nd)` - mark value as non-droppable
+* these attributes are inherited upon bind
+
+        [B](nc)[A]b == [[B](nc)A](nc)
+
+Unfortunately, use of `(nc)` and `(nd)` does not generalize nicely. These substructural constraints are not scoped to a subprogram. Scoping is essential for use-cases where we only wish to constrain a model internally. General use of substructural constraints should rely on sophisticated `(type)` declarations and static analysis.
 
 ## Editable Views
 

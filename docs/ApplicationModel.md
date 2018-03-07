@@ -56,17 +56,13 @@ Effectively, command pattern models a mutable object within a dictionary, albeit
 
 ## Expressive Spreadsheets
 
-It would not be difficult to view part of a dictionary as a spreadsheet. For example:
+It would not be difficult to view and project parts of a dictionary as spreadsheets. For example:
 
         :foo_a_2 "world"
         :foo_a_3 "hello"
         :foo_b_2 foo_a_3 foo_a_2 concat
 
-This essentially becomes a view and display problem. That is, when we choose to view `foo` as a spreadsheet, we must automatically evaluate and render the appropriate definitions in the correct cells. Conversely, when we edit a cell, the modified definition should be written into our dictionary. What cells we can render is limited only by editable views, so could include hypermedia.
-
-## Hypermedia Applications
-
-Awelon words provide a flexible link structure, and projectional editors can provide a flexible rendering and interaction model. Intriguingly, *Awelon code evaluates to Awelon code*, preserving link structure and meaning. Hence, we can view this as *hypermedia evaluates to hypermedia*. We could model texts that evaluate to canvases and tables, and vice versa. 
+We could choose to view `foo` as a spreadsheet, with automatic layout of columns `a b c ..` and rows `1 2 3 ..`. We could generalize to named columns and rows, so long as the resulting display is dense enough. Due to Awelon's evaluation by rewriting, it's possible for any cell to contain a subprogram that we can edit and evaluate in place, render (using other editable views), and reference as a function. Edited cells would simply be written into the dictionary.
 
 ## Publish Subscribe
 

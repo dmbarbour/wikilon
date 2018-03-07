@@ -3,11 +3,11 @@ open Data.ByteString
 
 /// Durable Resource Cache
 ///
-/// The motive with DCache is to support large-scale memoization,
-/// for incremental compilation or monotonic indices. The cached
-/// data is held on disk and accessed through ByteString keys. If
-/// the cache has reached its quota limits, we'll gradually erase
-/// entries using heuristic techniques.
+/// The motive with DCache is to support large-scale memoization
+/// for incremental compilation or monadic views. The cached data
+/// is held on disk (rather than in memory), and is accessed via
+/// ByteString keys. If the cache has reached its quota limits, 
+/// we'll gradually erase entries using heuristic techniques.
 module DCache =
 
     /// Keys must be ByteStrings. Typically, these represent names or
@@ -24,7 +24,7 @@ module DCache =
     // Each element will remember its given "memory" size estimate, 
     // which may be different from encoded size. Clients should use
     // use CVRef or other reference type explicitly for larger values.
-    type private E<'V> = (struct(uint64 * 'V))
+    type private E<'V> = (struct(SizeEst * 'V))
 
     // How should we represent the cache?
     //

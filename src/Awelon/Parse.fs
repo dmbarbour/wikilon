@@ -4,7 +4,6 @@ open System.Collections.Generic
 open System.Collections.ObjectModel
 open Stowage
 
-
 // Awelon is encoded in ASCII (minus C0 and DEL), and is syntactically
 // simple, similar to Forth. A program is a sequence of named operations
 // with first-class blocks (which contain programs) and namespaces. The
@@ -44,27 +43,72 @@ module Parse =
     type Text = ByteString
 
     /// A RscHash is from Stowage
+    ///
+    /// NOTE: We only keep weak references at this parser layer. The
+    /// client may need special actions to keep references alive.
     type RscHash = Stowage.RscHash
 
-    type TokenType =
-        | TokWord       // word
-        | TokAnno       // (anno)
-        | TokNat        // 0 42 128
-        | TokText       // "text"
-        | TokLblPut     // :label
-        | TokLblGet     // .label
-        | TokBinRef     // %secureHash
-        | TokCodeRef    // $secureHash
-
-    /// A token is a labeled bytestring.
-    type Token = struct(TokenType * ByteString)
+    /// Tokens are just typed ByteString fragments. We'll skip the 
+    /// annotation parentheses, text quotes, or prefix characters. 
+    type TT =
+        | Word=0    // word
+        | Anno=1    // (anno)
+        | Nat=2     // 0 42 128
+        | Text=3    // "text"
+        | LblPut=4  // :label
+        | LblGet=5  // .label
+        | BinRef=6  // %secureHash
+        | CodeRef=7 // $secureHash
+    type Token = (struct(TT * ByteString))
+    let inline tok tt s = struct(tt,s)
+    let inline tokWord w = tok TT.Word w
+    let inline tokAnno w = tok TT.Anno w
+    let inline tokNat  n = tok TT.Nat n
+    let inline tokText t = tok TT.Text t
+    let inline tokLblPut w = tok TT.LblPut w
+    let inline tokLblGet w = tok TT.LblGet w
+    let inline tokBinRef h = tok TT.BinRef h
+    let inline tokCodeRef h = tok TT.CodeRef h
 
     type Action =
         | Block of Program      // [Program]
         | NS of Word * Action   // ns/Action
         | Atom of Token         // simple action
     and Program = Action list   // Action*
+        // TODO: consider a vector (immutable array) type
 
+    /// view each token in the program
+    let rec seqTokens (p:Program) : seq<Token> =
+        seq {
+            match p with
+            | (a :: p') -> 
+                yield! seqActionTokens a
+                yield! seqTokens p'
+            | [] -> ()
+        }
+    and private seqActionTokens (a:Action) : seq<Token> =
+        match a with
+        | Block b -> seqTokens b
+        | NS (_,a') -> seqActionTokens a'
+        | Atom t -> Seq.singleton t
+
+    /// view each word in the program, in order of appearance.
+    let seqWords (p:Program) : seq<Word> =
+        seq {
+            for (struct(tt,w)) in seqTokens p do
+                match tt with
+                | TT.Word -> yield w
+                | _ -> ()
+        }
+
+    /// view each RscHash in the program, in order of appearance.
+    let seqRefs (p:Program) : seq<RscHash> =
+        seq {
+            for (struct(tt,h)) in seqTokens p do
+                match tt with
+                | TT.CodeRef | TT.BinRef -> yield h
+                | _ -> ()
+        }
 
     /// Awelon uses characters in ASCII minus C0 and DEL. Most
     /// of these are permitted only within embedded texts. For
@@ -109,10 +153,11 @@ module Parse =
 
     let isValidToken (struct(tt,s) : Token) : bool =
         match tt with
-        | TokWord | TokAnno | TokLblPut | TokLblGet -> isValidWord s
-        | TokText -> isValidText s
-        | TokNat -> isValidNatTok s
-        | TokBinRef | TokCodeRef -> RscHash.isValidHash s
+        | TT.Word | TT.Anno | TT.LblPut | TT.LblGet -> isValidWord s
+        | TT.Text -> isValidText s
+        | TT.Nat -> isValidNatTok s
+        | TT.BinRef | TT.CodeRef -> RscHash.isValidHash s
+        | _ -> false
 
     let isValidProgram (p0:Program) : bool =
         let rec loop ps p =
@@ -128,11 +173,12 @@ module Parse =
                 | [] -> true
         loop [] p0
 
-    /// On Parse Error, we'll return the parser state.
-    /// The lists in this case represent stacks.
+    /// On Parse Error, we'll return the parser's full state.
+    /// The lists in this case represent stacks, e.g. `p` is
+    /// reverse order relative to the program it represents.
     type ParseState =
-        { cx    : (struct(Word list * Action list)) list // block context and NS
-          ns    : Word list     // next operation's namespace
+        { cx    : (struct(Word list * Action list)) list // block context
+          ns    : Word list     // pending operation's namespace
           p     : Action list   // current open block
           s     : ByteString    // remaining bytes
         }
@@ -144,8 +190,7 @@ module Parse =
     let private finiParse cx ns p s =
         let ok = BS.isEmpty s && List.isEmpty cx && List.isEmpty ns
         if ok then ParseOK (List.rev p) else
-        let st = { cx = cx; ns = ns; p = p; s = s }
-        ParseFail st
+        ParseFail { cx = cx; ns = ns; p = p; s = s }
 
     let rec private wrapNS (ns : Word list) (a:Action) : Action =
         match ns with
@@ -154,8 +199,6 @@ module Parse =
 
     let inline private matchChar c s = 
         startsWith ((=) (byte c)) s
-
-    let inline tok t w = struct(t,w)
 
     let private tryParseHash (s:ByteString) : (struct(RscHash * ByteString)) option =
         let struct(h,s') = BS.span (RscHash.isHashByte) s
@@ -168,48 +211,52 @@ module Parse =
         let c0 = BS.unsafeHead s
         if isWordStart c0 then
             let struct(w,s') = BS.span isWordChar s
-            Some (struct(tok TokWord w, s'))
+            Some (struct(tokWord w, s'))
         else if isNumChar c0 then
             match tryParseNatTok s with
-            | Some (struct(n,s')) -> Some (struct(tok TokNat n, s'))
+            | Some (struct(n,s')) -> Some (struct(tokNat n, s'))
             | _ -> None
         else if(byte '"' = c0) then // embedded texts
             let struct(txt,s') = BS.span isTextChar (BS.unsafeTail s)
             if (matchChar '"' s') 
-                then Some (struct(tok TokText txt, BS.unsafeTail s'))
+                then Some (struct(tokText txt, BS.unsafeTail s'))
                 else None
         else if(byte '(' = c0) then // annotation
             match tryParseWord (BS.unsafeTail s) with
             | Some (struct(w,s')) when matchChar ')' s' ->
-                Some (struct(Anno w, BS.unsafeTail s'))
+                Some (struct(tokAnno w, BS.unsafeTail s'))
             | _ -> None
         else if(byte ':' = c0) then // record label 
             match tryParseWord (BS.unsafeTail s) with
-            | Some (struct(w,s')) -> Some (struct(tok TokLblPut w, s'))
+            | Some (struct(w,s')) -> Some (struct(tokLblPut w, s'))
             | _ -> None
         else if(byte '.' = c0) then // record label access
             match tryParseWord (BS.unsafeTail s) with
-            | Some (struct(w,s')) -> Some (struct(tok TokLblGet w, s'))
+            | Some (struct(w,s')) -> Some (struct(tokLblGet w, s'))
             | _ -> None
         else if(byte '%' = c0) then // binary resource
             match tryParseHash (BS.unsafeTail s) with
-            | Some (struct(h,s')) -> Some (struct(tok TokBinRef h, s'))
+            | Some (struct(h,s')) -> Some (struct(tokBinRef h, s'))
             | _ -> None
         else if(byte '$' = c0) then // stowage resource
             match tryParseHash (BS.unsafeTail s) with
-            | Some (struct(h,s')) -> Some (struct(tok TokCodeRef h, s'))
+            | Some (struct(h,s')) -> Some (struct(tokCodeRef h, s'))
             | _ -> None
         else None
 
+    // parse given full parse state 
     let rec parse' cx ns p s =
         if BS.isEmpty s then finiParse cx ns p s else
         let c0 = BS.unsafeHead s
         if ((byte ' ' = c0) && (List.isEmpty ns)) then
-            // forbid whitespace within namespace!
+            // whitespace is permitted between actions
+            // (but not between a namespace and action)
             parse' cx [] p (BS.unsafeTail s)
         else if(byte '[' = c0) then
-            parse' (struct(ns,p)::cx) [] (BS.unsafeTail s)
+            // save namespace for ']', save context to addend block
+            parse' (struct(ns,p)::cx) [] [] (BS.unsafeTail s)
         else if((byte ']' = c0) && (List.isEmpty ns)) then
+            // require empty ns to forbid `foo/bar/]` nonsense.
             match cx with
             | (struct(ns',p')::cx') ->
                 let a = wrapNS ns' (Block(List.rev p))
@@ -222,13 +269,13 @@ module Parse =
                 parse' cx (w :: ns) p (BS.unsafeTail s')
             else
                 // word is normal action
-                let a = wrapNS ns (Atom (tok TokWord w))
+                let a = wrapNS ns (Atom (tokWord w))
                 parse' cx [] (a :: p) s'
         else 
             match tryParseToken s with
             | Some (struct(a,s')) ->
                 parse' cx [] ((wrapNS ns (Atom a)) :: p) s'
-            | _ -> parseFini cx ns p s
+            | None -> finiParse cx ns p s
 
     /// Parse from a ByteString.
     ///
@@ -239,56 +286,78 @@ module Parse =
     /// definitions should still be small.
     let inline parse (s:ByteString) : ParseResult = parse' [] [] [] s
 
-    // Write program to byte string. Currently this will perform
-    // a naive recursive write, so there may be stack issues if
-    // the input program is very large or deep.
-    //
-    // This writer tries to minimize unnecessary whitespace. 
-    let rec writeProgram (ws:bool) (p:Program) (dst:ByteDst) : unit =
-        match p with
-        | (a :: p') -> writeAction ws p' a dst
-        | [] -> ()
-    and writeAction (ws:bool) (p:Program) (a:Action) (dst:ByteDst) : unit =
-        match a with
-        | B b ->
-            ByteStream.writeByte (byte '[') dst
-            writeProgram true b dst
-            ByteStream.writeByte (byte ']') dst
-        | W w ->
-            ByteStream.writeBytes w dst
-        | N n -> 
-            ByteStream.writeBytes (BS.fromString (string n)) dst
-        | T t ->
-            ByteStream.writeByte (byte '"') dst
-            ByteStream.writeBytes t dst
-            ByteStream.writeByte (byte '"') dst
-        | Anno w ->
+    /// Parse from modified parse state.
+    let inline parseST (st:ParseState) : ParseResult =
+        parse' (st.cx) (st.ns) (st.p) (st.s)
+
+
+    /// Write a single token. The token bytestring excludes the
+    /// surrounding punctuation, so we'll add that back in. This
+    /// assumes a valid token.
+    let writeToken (struct(tt,s)) dst =
+        match tt with
+        | TT.Word -> 
+            ByteStream.writeBytes s dst
+        | TT.Anno ->
             ByteStream.writeByte (byte '(') dst
-            ByteStream.writeBytes w dst
+            ByteStream.writeBytes s dst
             ByteStream.writeByte (byte ')') dst
-        | LPut lbl ->
+        | TT.Nat -> 
+            ByteStream.writeBytes s dst
+        | TT.Text ->
+            ByteStream.writeByte (byte '"') dst
+            ByteStream.writeBytes s dst
+            ByteStream.writeByte (byte '"') dst
+        | TT.LblPut ->
             ByteStream.writeByte (byte ':') dst
-            ByteStream.writeBytes lbl dst
-        | LGet lbl ->
+            ByteStream.writeBytes s dst
+        | TT.LblGet ->
             ByteStream.writeByte (byte '.') dst
-            ByteStream.writeBytes lbl dst
-        | Bin h ->
+            ByteStream.writeBytes s dst
+        | TT.BinRef ->
             ByteStream.writeByte (byte '%') dst
-            ByteStream.writeBytes h dst
-        | Ext h ->
+            ByteStream.writeBytes s dst
+        | TT.CodeRef ->
             ByteStream.writeByte (byte '$') dst
-            ByteStream.writeBytes h dst
-        | Hier (a,d) ->
-            writeAction a dst
-            ByteStream.writeByte (byte '@') dst
-            ByteStream.writeBytes d dst
+            ByteStream.writeBytes s dst
+        | _ -> invalidArg "tt" "unrecognized token type"
 
-    /// Write a Program to a ByteString.
+    let inline wsp p dst =
+        if not (List.isEmpty p)
+            then ByteStream.writeByte (byte ' ') dst
+
+    let rec private wloop cx p dst =
+        match p with
+        | (a :: p') ->
+            match a with
+            | Block b -> 
+                ByteStream.writeByte (byte '[') dst
+                wloop (p' :: cx) b dst
+            | NS (w,a') ->
+                ByteStream.writeBytes w dst
+                ByteStream.writeByte (byte '/') dst
+                wloop cx (a' :: p') dst
+            | Atom t ->
+                writeToken t dst
+                wsp p' dst
+                wloop cx p' dst
+        | [] ->
+            match cx with
+            | (p' :: cx') ->
+                ByteStream.writeByte (byte ']') dst
+                wsp p' dst
+                wloop cx' p' dst
+            | [] -> () // done!
+ 
+    /// Write a program to a byte stream.
+    ///
+    /// Note: This writer normalizes spaces, injecting SP between
+    /// adjacent actions. `1(nat)[4]b` becomes `1 (nat) [4] b`. I
+    /// believe this should have negligible impact on performance.
+    let write' p dst = wloop [] p dst
+
+    /// Write to byte string. (Trivially wraps write'.)
     let inline write (p:Program) : ByteString = 
-        ByteStream.write (writeProgram p)
-
-
-
-
+        ByteStream.write (write' p) 
 
 

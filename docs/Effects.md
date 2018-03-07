@@ -1,8 +1,8 @@
-# Awelon Effects Model?
+# Awelon Effects Model
 
-Awelon language is purely functional at the moment, and requires explicit modeling of effects via [KPNs](KPN_Effects.md) or monads or [application models](ApplicationModel.md), etc.. Effects are essentially just interactions between a program object and an external context.
+Awelon language is purely functional at the moment, and requires explicit modeling of effects, e.g. monadically or with [KPNs](KPN_Effects.md) or alternative [application models](ApplicationModel.md).
 
-I've several times contemplated integration with "impure" effects models. 
+A modern movement in FP is towards algebraic effects and user-defined handlers. The Frank language paper [Do Be Do Be Do](https://arxiv.org/pdf/1611.09259.pdf) seems especially relevant, with the support for *multihandlers* that could feasibly handle multiple effects concurrently. I'm still studying this possibility.
 
 Naturally, if an effects model can easily be modeled functionally and accelerated, I should simply do. This passes the buck to the runtime environment rather than complicating Awelon semantics. Imperative style effects, for example, can be modeled monadically. And when I examined [KPNs in Awelon](AwelonKPN.md) I ultimately decided that acceleration is the right path there, too.
 
