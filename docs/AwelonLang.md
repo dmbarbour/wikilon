@@ -194,13 +194,7 @@ Primitives rewrite by simple pattern matching:
 
 Words rewrite into their evaluated definitions. However, words will not rewrite unless doing so leads to further progress. There is no benefit in rewriting a word if it only leads to the inlined definition. This rule is called lazy linking. If a word is undefined, it will not rewrite further.
 
-Awelon does not strongly specify evaluation strategy. Order of evaluation may be a heuristic mix of lazy, eager, parallel. Awelon's rules are confluent. Modul
-
-If evaluation halts early, e.g. due to debug breakpoints or quota limitations, the rendered program state may even expose ad-hoc optimizations. However, 
-
-modulo use of annotations, the result of evaluation will not vary based on the o
-
-However, developers should be able to guide evaluation strategy by use of annotations.
+Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. However, all evaluation orders should lead to the same result. Only if evaluation is halted early (on breakpoint or quota) should we observe evidence of the orderings and optimizations used.
 
 ## Value Words
 
@@ -265,7 +259,7 @@ There are many behavior-preserving rewrites that Awelon does not normally perfor
         c w         => c            copies are equivalent
         [E] w d     => d [E]        why swap first?
 
-A runtime has discretion to perform rewrites that are invisible to the final evaluated result. These rewrites may be visible in case of an incomplete evaluation, e.g. when stopping on quota or debug breakpoints. Optimizations can feasibly save a lot of computation resources.
+A runtime has discretion to perform rewrites that don't affect the final evaluated program (i.e. same rendered result). Explicit annotations are required to permit visible optimizations.
 
 *Note:* It is feasible to perform high level optimizations, such as rewriting `[F] map [G] map` to `[F G] map` or reordering matrix multiplications to minimize number of operations. Unfortunately, it's generally unclear how to express these optimizations or prove their validity, and such optimizations are fragile to abstractions. I would recommend modeling such optimizations explicitly, constructing an intermediate program 'plan' then optimizing and compiling it into an Awelon function.
 
