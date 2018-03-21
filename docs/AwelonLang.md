@@ -1,16 +1,14 @@
 
 # Awelon Language
 
-Awelon is a purely functional language based on concatenative combinators.
-
-Specifically, Awelon has four primitive combinators:
+Awelon is a Turing complete, purely functional language based on concatenative combinators with confluent rewrite rules. Specifically, Awelon has four primitive combinators:
 
         [B][A]a == A[B]         (apply)
         [B][A]b == [[B]A]       (bind)
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
 
-Besides the four primitives, programmers develop a *Dictionary* within which each word is defined by an Awelon encoded function. For example, if we want `[A]i == A` then we can define `i = [[]] a a d`. Evaluation proceeds by rewriting according to the primitive combinators, or lazily substituting a word for its definition when doing so permits further progress. As a practical language, Awelon additionally has built-in support for encoding data: natural numbers, embedded texts, binary resources, and labeled structures. 
+Besides the four primitives, programmers develop a *Dictionary* within which each word is defined by an Awelon encoded function. For example, if we want an inline function `[A]i == A` then we could define `i = [[]] a a d`. Evaluation proceeds by rewriting according to the primitive combinators and lazily substituting words for definitions when doing so permits further progress. As a practical language, Awelon additionally has built-in support for encoding data: natural numbers, embedded texts, binary resources, and labeled structures. 
 
 Those `[]` square brackets contain Awelon code and represent first-class functions. Values in Awelon are always first-class functions, typically using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or [Scott encodings](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). However, effective Awelon compilers or interpreters will recognize and optimize common functions and value types. This is a concept of software *Accleration* to improve efficient use of CPU and memory. Acceleration for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
 
@@ -265,11 +263,7 @@ A runtime has discretion to perform rewrites that don't affect the final evaluat
 
 ## Compilation
 
-Direct interpretation of Awelon code can be reasonably efficient, using threaded interpreters. 
-
-But to make it faster we can potentially rewrite code to an intermediate language that uses an auxiliary data/return stack, call-return operations, location labels and jumps for tail-call optimized loops and so on. Even better, we can feasibly target a simple "register machine" model to eliminate data plumbing from the stack and avoid bindings on the heap if they're used statically, instead tracking a compile-time stack of logical register-objects.
-
-Of course, when compiling a register machine, you might need to keep an extra code map back from the program pointer to the logical register objects so we can serialize code. But that isn't a new idea.
+Direct interpretation of Awelon code can be reasonably efficient. But for optimal performance, we'll need to compile Awelon to an intermediate language that uses an auxiliary call/return stack and registers for local dataflow. Additionally, static fixpoint loops could be compiled into the more conventional labeled jumps. Every accelerator can become a primitive operator for a compiled intermediate language.
 
 ## Error Reporting
 
@@ -277,23 +271,23 @@ We can represent errors by simply introducing an `(error)` annotation that canno
 
 ## Static Typing
 
-Awelon doesn't depend on types. There is no type-driven dispatch or overloading. However, the language implies a simple static type model founded on arity with a stack-like environment. If we can discover types earlier by using static type analysis, that's a good thing. Types for our primitive operations:
+Awelon doesn't depend on types. There is no type-driven dispatch or overloading. However, the language implies a simple static type model. If we can discover errors earlier by using static type analysis, that's a good thing. The stack-like environment can be typed as a tuple, and values as functions. Types for our primitive operations:
 
-        a       ((s * b) * (s → s')) → (s' * b)
-        b       ((s * b) * ((e * b) → e')) → (s * (e → e'))
-        c       (s * a) → ((s * a) * a)
-        d       (s * a) → s
+        a       ((s * x) * (s → s')) → (s' * x)
+        b       ((s * x) * ((e * x) → e')) → (s * (e → e'))
+        c       (s * x) → ((s * x) * x)
+        d       (s * x) → s
         [F]     s → (s * type(F))
-        :label  ({R/label} * a) → {R, label:a}
-        .label  (s * ({} → {R, label:a})) → ((s * a) * ({} → {R}))
+        :label  ({R/label} * x) → {R, label:x}
+        .label  (s * ({} → {R, label:x})) → ((s * x) * ({} → {R}))
 
-Type annotations, naturally, should be expressed by Awelon annotations. We could use specific annotations like `(nat)` or `(bool)`, or try for more general annotations using `[Type Descriptor](type)d`. However, we have not yet standardized any particular representation for type descriptors. Ultimately, it depends on what our type analysis tools will accept.
+Type annotations can be expressed using Awelon annotations. We can use specific annotations such as `(nat)` or `(bool)` or `(t3)` for a 3-tuple. Or we can favor general annotations using `[Type Descriptor](type)d`. Suitable annotations will need to be standardized, eventually, based on what our type analysis tools will accept.
 
-Unfortunately, static types are sometimes too simplistic and restrictive. For example, the `pick` function from Forth isn't amenable to static typing without some variant on dependent types:
+Unfortunately, simple static types are sometimes too simplistic and restrictive. For example, the `pick` function from Forth isn't amenable to static typing without sophisticated dependent types:
 
         [Vk]..[V1][V0] k pick == [Vk]..[V1][V0][Vk]
 
-In this context, we might wish to defer static typing of `pick` until after the specific `k` argument is provided. This might be expressed by annotation as well, such as tagging a `(dyn)` annotation to a block until it is bound or applied.
+In this context, we could develop a series of functions like `pick2nd` and `pick3rd`, at cost of much boiler-plate. Or we could try to defer static typing until after we've specialized on the first parameter, treating `pick` as a macro. Intention to defer type checking can be indicated by annotation, e.g. adding a `(dyn)` comment to the subprogram with `[A](dyn) => [A]` behavior.
 
 *Note:* Besides static types, termination analysis is also useful. As a purely functional language, non-termination or divergence is always an error for Awelon programs.
 
@@ -319,22 +313,15 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
 
 In this view, Awelon's natural numbers are given a `#` prefix, hence the view is optimized for signed integers. This particular view takes the path of building one view upon another. If the view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`.
 
-Besides numeric towers, editable views could easily support lists, continuation-passing style, generators with yield, and other features. Line comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long_prefix_foo` can be abbreviated as `lp_foo`. It is feasible to leverage color such that `html_div` vs. `math_div` both render as `div` but in different colors with a small legend.
+Besides numeric towers, editable views could easily support lists, continuation-passing style, generators with yield, and other features. Line comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long_prefix_foo` can be abbreviated as `lp_foo`. It is also feasible for projections to leverage color, such that `html_div` vs. `math_div` both render as `div` but in different colors.
 
-We can also represent sessions to view and edit multiple words together.
+We can project edit sessions to view and edit multiple words together. In simplest form, we might have `my_session = [foo][bar][baz]` so we can 'open' the session then edit those three words together.
 
-        my_session = [foo][bar][baz]
-
-        #my_session
-        foo = def of foo
-        bar = def of bar
-        baz = def of baz
-
-Although initial emphasis is plain text views, it is feasible to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined/opened into the current view.
+Although initial emphasis is plain text views, the eventual goal is to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, spreadsheets, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined/opened into the current view.
 
 ### Named Local Variables
 
-We can use editable views to model named local variables, like lambdas or let expressions. For example, consider adapting Kitten programming language's syntax for local vars:
+We can leverage editable views to model named local variables, like lambdas or let expressions. For example, consider adapting Kitten programming language's syntax for local vars:
 
         7 -> X; EXPR            let-in equivalent
         [-> X; EXPR]            lambda equivalent
@@ -351,26 +338,29 @@ When writing this view to Awelon, we must extract `X` from our expression. We ca
             | only G contains X             => [F] a T(X,G)
             | F and G contain X             => c [T(X,F)] a T(X,G)
 
-We also need a simple comment to record the variable names. 
+For performance, we should optimize conditional branches to avoid copying.
 
-        -> X; EXPR  
-            is encoded as 
+        T(X, [L][R]if) => [T(X,L)][T(X,R)]if
+
+We can use a simple comment to record the variable names. 
+
+        -> X; EXPR
+            becomes
         "lambda X"(a2)d T(X,EXPR)
 
-It makes sense to record variable names as comments, given that's very often how we use them. In any case, to read it back out we'd need to propagate the variable back into our program whenever we see the lambda comment. This feature is easily extended to multiple arguments, and feasibly optimized for conditional behaviors.
+It makes sense to record variable names as comments, given that's very often how we use them. In any case, to read it back out we'd need to propagate the variable back into our program whenever we see the lambda comment. This feature is easily extended to multiple arguments.
 
 ## Arrays and In-place Updates
 
-We can support in-place updates for arrays assuming two conditions:
+Awelon doesn't have an array data type, but we can use annotations and accelerators to insist on array representation where beneficial for lists. In-place mutation of arrays is also valuable for efficiency, avoiding unnecessary intermediate copies. We can support these in-place updates assuming two conditions:
 
 * we hold the unique reference to the array
 * we accelerate indexed access to the array
 
-The benefit of in-place updates is efficiency - less copying, less garbage.
-
-Awelon's explicit copy and drop makes it relatively easy to track dynamically whether we hold the unique reference to an array. We can also use copy-on-write techniques to make it true, in case it was not. Then we can update the array in place. Instead of copying the array for every update, we copy a shared array once if necessary then edit in place until we explicitly copy the array value. Besides arrays, in-place updates might also be supported for records.
+Awelon's explicit copy and drop makes it relatively easy to track dynamically whether we hold a unique reference to an array. We can leverage copy-on-write techniques if necessary, to obtain a unique reference upon the first update. Then further updates (until we copy the array to share it again) could update in place. This feature would enable Awelon systems to effectively work with arrays for many algorithms.
 
 ## Generic Programming in Awelon
 
-Awelon does not have built-in support for generic programming. For example, we cannot add two numbers without either knowing their type or being handed the appropriate `add` function as an argument. But it might be worth exploring staged programming models that can propagate the necessary `add` function into an algorithm and specialize the code. 
+A typical example of generic programming is that `add` should add two numbers of the same type, without local knowledge of the type involved. This might be achieved by Haskell type classes or Rust traits. Unfortunately, Awelon does not provide any built-in features for generic programming, so it will eventually need to be explicitly modeled.
+
 
