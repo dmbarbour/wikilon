@@ -1,18 +1,17 @@
 
 # Application Models for Awelon Project
 
-The conventional, mainstream "application model" is a detached process that will effectfully access and manipulate external data and services, perhaps registering itself with a network service to listen for external requests. We observe this process only indirectly through its effects on shared stateful resources. Awelon could easily follow convention, e.g. by modeling monadic IO or a message-passing process. But my ultimate goal for Awelon project is to unify programming and user experiences. To that end, the "detached" process seems a poor fit. Application state should be visible and accessible. 
+The conventional, mainstream "application model" is a detached process that interacts with shared services and data. Awelon could easily follow convention, e.g. modeling monadic IO or a message-passing process. But my goal for Awelon project is to unify programming and user experiences, to make sharing and composition easy. To that end, the detached process seems a poor fit, being inaccessible and invisible.
 
-An intriguing feature of [Awelon language](AwelonLang.md) is that, due to rewrite semantics, we can always "save" process state as an Awelon program to simplify debugging or distribution. We could save process state into a dictionary, for example, to provide sufficient context to interpret it.
+An intriguing feature of [Awelon language](AwelonLang.md) is that, due to rewrite semantics, process state corresponds to an Awelon program. We can render a program for debugging, serialize it for distribution, or save it to our dictionary for durability. We can feasibly model active jobs as embedded within a dictionary.
 
-        /myDict/ secureHash
-        :job-1123 myDict/[process state is recorded here]
+        :job-1123 [process state is recorded here]
 
-An external agent could then "run" the jobs in our dictionary, executing requested effects, addending inputs, and saving the updated process state. This does provide a fair level of visibility and access. For example, we can easily checkpoint or share the process, or kill the task by deleting the job word, or directly inject messages or modify states, or change some of the code it's running against. We can feasibly support useful real-time views like, "how would the process reply to this message?" without risk of influencing that process's state:
+Presumably, an external agent would find available jobs, perform requested operations (such as sending e-mail or fetching HTML), then compute the next process state. It might run many steps between saving process states. Besides maintaining the process over time and viewing its state in a debugger, we could capture checkpoints or probe uncommitted sample messages.
 
-        :view-example job-1123 [example-message] send
+        :my-view job-1123 [sample message] send
 
-However, I believe we could do better than this by more broadly embracing the use of dictionaries for representing application state. Instead of centralized process state, we could feasibly model structured application state in our dictionaries. For example, REPLs and iPython-inspired "notebook" applications could feasibly be directly encoded in a dictionary.
+Thus, even for a relatively conventional process model, we could improve visibility and accessibility. However, I believe we can do even better by representing 'applications' as structured objects within a dictionary. This results in very RESTful applications with deeply accessible state. For example, REPLs and iPython-inspired "notebook" applications could be encoded in a dictionary using a word per logical line: 
 
         :repl-1473-0 initial-state
         :repl-1473-1 repl-1473-0 command2
@@ -20,49 +19,38 @@ However, I believe we could do better than this by more broadly embracing the us
         :repl-1473-3 repl-1473-l2 command2
         :repl-1473 repl-1473-l3
 
-Actually, this corresponds to the more general *command pattern* from OOP (see below). This document is mostly a brainstorm and exploration of patterns and structures that may be suitable for Awelon application models. It shouldn't be a problem for a dictionary to simultaneously support several "kinds" of applications. But we will need to explore ideas to see what actually works in practice.
+This REPL corresponds closely to a *command pattern* from OOP. It enables access to and editing of prior lines, rendering an output per line, infinite undo, branching the REPL, or embedding its current value (via the head) into other programs. In general, this document is just brainstorming patterns that might be suitable for modeling application state within a dictionary. 
+
+## Expressive Spreadsheets
+
+An Awelon dictionary is essentially a filesystem with spreadsheet-like characteristics. But it's feasible to actually record spreadsheets within the dictionary, defining a word per cell. Every Awelon definition can then be evaluated independently. Essentially, this is just an editable view on part of a dictionary, using a row-column convention:
+
+        :foo-2-a "world"
+        :foo-3-a "hello"
+        :foo-4-a foo-3-a foo-2-a concat
+
+To be useful as a spreadsheet, the main requirement is a sufficiently dense encoding of rows and columns. If everything is sparsely distributed, we'd be better off favoring an ad-hoc dependency lattice layout.
 
 ## Functional Relational Programming
 
-Functional-relational programming involves storing all user inputs in a table and computing the current application state. Operations presented to users (e.g. a button on a form) must come with associated instructions for adding new inputs. This sort of approach fits very naturally with RESTful programs.
+Although we can tabilize data into a dictionary like a spreadsheet, it isn't readily accessible in that form for relational algebra operations. It might be better to model tables as first-class values that we maintain within the dictionary. Doing so would allow our dictionaries to double as databases. Application state could be computed as views of tables, while operations could correspond to actions on the database value.
 
 ## Monotonic Dictionaries
 
-It is feasible to operate on a dictionary monotonically - such that we never redefine a word. In some cases, this requires leaving undefined words in the dictionary as placeholders for the undefined "future". Awelon can easily evaluate in context of undefined words, although one must also arrange computation such that we can extract useful results from partial evaluations.
-
-The main advantage of monotonic dictionaries is that they may be continuously evaluated in-place. There is never any need to recompute, only to continue computations. By leveraging stowage and secure hash resources, state may scale freely. Hence, a word may correspond to an application whose state is updated based on filling gaps in a definition. See also *Managed Dictionaries*, below - monotonic dictionaries are essentially *frozen* by default, and we might need to gradually GC the dictionary to limit size.
+Awelon can evaluate in context of undefined words. It is feasible to model applications such that we never modify a word's definition, only define words that are undefined and occasionally garbage-collect unnecessary words. An advantage of doing this: it's trivial to continuously 'evaluate' the dictionary in-place without losing information. There is a lot of natural garbage collection. (See also *Managed Dictionaries*. A monotonic dictionary is essentially *frozen* in every word.)
 
 ## Command Pattern
 
 A command pattern might be represented as:
 
-        :foo-v0 initial state constructor
-        :foo-v1 foo-v0 command1
-        :foo-v2 foo-v1 command2
+        :foo-0 initial state constructor
+        :foo-1 foo-0 command1
+        :foo-2 foo-1 command2
         ...
-        :foo-v99 foo-v98 command99
-        :foo foo-v99
+        :foo-99 foo-98 command99
+        :foo foo-99
 
-In this case, we mutate the "head" word for definition of an object `foo`, but the command stream could be monotonic. Use of command pattern enables a stream of small updates to construct and modify a large object. This particular design records every command as a distinct set of words, simplifying views of historical values, forking, undo, etc.. We could try to automatically compact and simplify the command stream, within the limitation of stable dependencies.
-
-Command pattern can be used for such things as:
-
-* addending a time-series database
-* updating a key-value database or other large object
-* editing documents modeled as finger-tree ropes
-* modeling user actions - a button press, HTTP POST
-
-Effectively, command pattern models a mutable object within a dictionary, albeit only mutable by external agents. A disadvantage of the command pattern is its non-monotonic structure, the destructive update of `foo`
-
-## Expressive Spreadsheets
-
-It would not be difficult to view and project parts of a dictionary as spreadsheets. For example:
-
-        :foo-a2 "world"
-        :foo-a3 "hello"
-        :foo-b2 foo-a3 foo-a2 concat
-
-We could choose to view `foo` as a spreadsheet, with automatic layout of columns `a b c ..` and rows `1 2 3 ..`. We could generalize to named columns and rows, so long as the resulting display is dense enough. Due to Awelon's evaluation by rewriting, it's possible for any cell to contain a subprogram that we can edit and evaluate in place, render (using other editable views), and reference as a function. Edited cells would simply be written into the dictionary.
+Essentially, we represent a stream of commands manipulating a state. The explicit representation simplifies historical views, forking, undo, and similar. In general, keeping the entire history of commands may cost too much in some cases, so we may need to occasionally checkpoint the state. But for many use cases, the number of commands won't be too large and checkpoints may be managed explicitly.
 
 ## Publish Subscribe
 
