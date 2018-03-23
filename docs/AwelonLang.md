@@ -20,7 +20,7 @@ The intention is to leverage Awelon together with [projectional editing](http://
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Syntactically, a word has regex `[a-z][a-z0-9-]*`. That is, a word consists of lower case alphanumerics and hyphens, and starts with an alpha.
+Words are the user-definable unit for Awelon code. Syntactically, a word has regex `[a-z][a-z0-9-]*`. That is, a word consists of lower case alphanumerics and hyphens, and starts with an alpha. Definitions of words are acyclic, Awelon encoded functions.
 
 The formal meaning of a word within Awelon code is equivalence to its definition. But words are often given special connotations in context of an environment. For example, `foo-doc` may associate documentation with word `foo`, or `main` may serve as the default entry point for a monadic process.
 
@@ -144,7 +144,7 @@ Stowage uses the *Secure Hash Resources* space to offload data from working memo
 
 ## Dictionary
 
-Awelon words are defined in a codebase called a "dictionary". A dictionary is simply an association between words and Awelon encoded functions. However, for Awelon project's goals, we require a standard import/export representation that supports efficient update, sharing, and diffs at scales of many gigabytes or terabytes.
+Awelon words are defined in a codebase called a "dictionary". A dictionary is simply an association between words and Awelon encoded functions. However, for Awelon project's goals, we require a standard import/export representation that supports efficient update, sharing, snapshots, versioning, and diffs at scales of many gigabytes or terabytes.
 
 The proposed representation:
 
@@ -154,11 +154,9 @@ The proposed representation:
         :symbol2 definition2
         ~symbol3
 
-A dictionary 'node' is a line-oriented ASCII text, representing an update log. Most lines will define or delete symbols (`:` or `~` respectively), but we may also index a matched prefix to a subtree. Symbols usually correspond to Awelon words, and definitions to Awelon code. Internal nodes are identified by their secure hash, cf. *Secure Hash Resources*. Symbols for inner nodes are stripped of the matched prefix, hence `:poke` under `/p` becomes `:oke`. For lookup, only the last update for a given symbol or prefix is used. Hence, `/p` will mask prior updates such as `/prod` and `:poke`. We can normalize our dictionary nodes by erasing irrelevant updates and sorting whatever remains. The empty prefix or symbol is permitted.
+A dictionary 'node' is a line-oriented ASCII text, representing an update log. Most lines will define or delete symbols (`:` or `~` respectively), but we may also index a prefix to a subtree (via `/`). Symbols usually correspond to Awelon words, and definitions to Awelon code. Internal nodes are identified by their secure hash, cf. *Secure Hash Resources*. Symbols for inner nodes are stripped of the matched prefix, hence `:poke` under `/p` becomes `:oke`. For lookup, only the last update for a given symbol or prefix is used. Hence, `/p` will mask all prior updates with prefix `p` such as `/prod` and `:poke`. We can normalize our dictionary nodes by erasing irrelevant updates and sorting whatever remains.
 
-This representation combines characteristics of the LSM-tree, radix tree, and Merkle tree. It supports deeply immutable structure, structure sharing, lightweight version snapshots, lazy compaction, scaling beyond local memory or disk, efficient diffs, and lightweight real-time working set updates. The empty prefix `/ secureHash` can be used to represent prototype inheritance, checkpoints, or resets. Like other LSM-trees, this does allow capture of multiple definitions for a symbol. But even that can be useful to optimize caching based on relative stability of definitions.
-
-*Note:* Comments are not supported at the dictionary representation layer. They would be inaccessible and easily lost due to compaction operations. It is not difficult to cheat this by defining non-word symbols. But developers are encouraged instead to embed metadata in the dictionary in a more stable and accessible manner.
+This representation combines characteristics of the LSM-tree, radix tree, and Merkle tree. It supports deeply immutable structure, structure sharing, lightweight version snapshots, lazy compaction, distributed storage, efficient diffs, and lightweight real-time working set updates. The empty prefix `/ secureHash` can be used to represent prototype inheritance, checkpoints, or resets. Like other LSM-trees, this does allow capture of multiple definitions for a symbol. But even that can be useful to optimize caching based on relative stability of definitions.
 
 ### Libraries and Modules 
 
@@ -177,9 +175,9 @@ Several of Awelon's proposed [application models](ApplicationModel.md) rely on s
 
 In the dictionary representation, we simply define the extended symbols. For example, we can can write `:d/bar def` to update the definition for word `bar` in dictionary `d`. We can also use `/d/ secureHash` to logically embed or update an entire dictionary. 
 
-Common functions and types will frequently be replicated between hierarchical dictionaries. The space overhead is mitigated by structure sharing. But writing out `d/42` is just ugly and inefficient if it has the same meaning as `42`. So we permit localization: an evaluator may rewrite the hierarchical qualifier when doing so does not affect behavior.
+Common functions and types will frequently be replicated between hierarchical dictionaries. The space overhead is mitigated by structure sharing. But writing out `d/42` is just ugly and inefficient if it has the same meaning as `42`. So we permit localization: an evaluator may rewrite a hierarchical qualifier whenever doing so does not affect behavior.
 
-*Note:* It may be useful to encode a developer's primary dictionary under a prefix such as `d/word`. This enables embedding of metadata (such as timestamps or version tracking) via auxiliary dictionaries. 
+*Note:* It may be useful to encode a developer's primary dictionary under a prefix such as `d/word`. This enables embedding of metadata (such as timestamps or access control) via associated sibling dictionaries. 
 
 ## Evaluation
 
@@ -192,34 +190,23 @@ Primitives rewrite by simple pattern matching:
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite into their evaluated definitions. However, words will not rewrite unless doing so leads to further progress. There is no benefit in rewriting a word if it only leads to the inlined definition. This rule is called lazy linking. If a word is undefined, it will not rewrite further.
+Words rewrite into their evaluated definitions. If a word is undefined, it will not rewrite further. However, words will not rewrite unless doing so leads to further progress. There is no benefit in rewriting a word if it only leads to the inlined definition. This rule is called lazy linking. Lazy linking also ensures words denoting first-class values, such as `true = [a d]`, should be bound and moved directly, e.g. `true [] b => [true]`. 
 
-Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. However, all evaluation orders should lead to the same result. Only if evaluation is halted early (on breakpoint or quota) should we observe evidence of the orderings and optimizations used.
+Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore valid computations should reach the same result regardless of strategy. If evaluation halts early on a breakpoint or quota, we may expose evaluation strategy and other optimizations. Annotations may guide evaluation more explicitly, and may even influence the visible result.
 
-## Value Words
+### Arity Annotations
 
-A 'value word' is any word whose evaluated definition is a single block. Natural numbers would be a common example, but we might also include booleans like `true` or `false`, or references such as `story-chapter32`. Data binding (and data plumbing in general) can operate on value words directly:
-
-        true [] b == [true]
-        42 [] b   == [42]
-
-Value words are implied by lazy linking. 
-
-## Arity
-
-Arity annotations have simple rewrite rules:
+Arity annotations are very useful for Awelon, and have simple rewrite rules:
 
         [B][A](a2) == [B][A]
         [C][B][A](a3) == [C][B][A]
         ...
 
-These annotations can be used to defer linking of words where a partial evaluation isn't useful. For example, consider a swap function `w = (a2) [] b a`. Ignoring the arity annotation, we'd rewrite `[A]w => [[A]]a`, which isn't useful progress. With the arity annotation, `[A]w` does not evaluate further, but `[B][A]w` evaluates to `[A][B]`. 
-
-Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior as `[[A]F]`, but the former defers evaluation. Whereas `(lazy)` values are evaluated if they're included in a program result, computations deferred by arity annotations are not evaluated until arity conditions are met - they're effectively [call-by-name](https://en.wikipedia.org/wiki/Evaluation_strategy#Call_by_name).
+These annotations can be used to defer linking of words where a partial evaluation isn't useful. For example, consider a swap function `w = (a2) [] b a`. Ignoring the arity annotation, we'd rewrite `[A]w => [[A]]a`, which isn't useful progress. With the arity annotation, `[A]w` does not evaluate further, but `[B][A]w` evaluates to `[A][B]`. Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior as `[[A]F]`, but the former defers computation until it the result is required. 
 
 ## Loops
 
-Awelon does not permit cyclic definitions. We can define fixpoint combinators:
+Awelon definitions are acyclic, but we can express fixpoint combinators:
 
         [X][F]z == [X][[F]z]F
         z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
@@ -261,7 +248,7 @@ There are many behavior-preserving rewrites that Awelon does not normally perfor
 
 A runtime has discretion to perform rewrites that don't affect the final evaluated program (i.e. same rendered result). Explicit annotations are required to permit visible optimizations.
 
-*Note:* It is feasible to perform high level optimizations, such as rewriting `[F] map [G] map` to `[F G] map` or reordering matrix multiplications to minimize number of operations. Unfortunately, it's generally unclear how to express these optimizations or prove their validity, and such optimizations are fragile to abstractions. I would recommend modeling such optimizations explicitly, constructing an intermediate program 'plan' then optimizing and compiling it into an Awelon function.
+*Note:* It is feasible to perform high level optimizations, such as rewriting `[F] map [G] map` to `[F G] map` or reordering matrix multiplications to minimize number of operations. Unfortunately, it's unclear how to express these optimizations or prove their validity, and such optimizations are fragile to abstraction. I would recommend modeling such optimizations explicitly, via intermediate data structure. 
 
 ## Compilation
 
@@ -269,7 +256,7 @@ Direct interpretation of Awelon code can be reasonably efficient. But for optima
 
 ## Error Reporting
 
-We can represent errors by simply introducing an `(error)` annotation that cannot be directly removed by any rewrite rule. Hence, once `(error)` appears within a computation, that computation is stuck, and obviously so. Error values can be represented, such as `[(error)]`, and may be dropped or copied but not applied. This could be coupled with a comment like `["divide by zero"(error)]`. Errors in evaluation or static linking for a word should be raised to the attention of developers. We can also introduce a `(trace)` annotation to copy messages and values to a debug log.
+We can represent errors by simply introducing an `(error)` annotation that acts as an undefined word, unable to be further rewritten. Then, we can define words such as `divide-by-zero = (error)` to create explicit, named errors that never rewrite further. Error values can be expressed as `[(error)]`. Errors in the top-level of an evaluated definition should be reported to programmers, except in the trivial case.
 
 ## Static Typing
 
@@ -313,13 +300,11 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-In this view, Awelon's natural numbers are given a `#` prefix, hence the view is optimized for signed integers. This particular view takes the path of building one view upon another. If the view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`.
+This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Besides numeric towers, editable views could easily support lists, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Line comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is also feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors.
 
-Besides numeric towers, editable views could easily support lists, continuation-passing style, generators with yield, and other features. Line comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is also feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors.
+We can also project edit sessions that view and edit multiple words together. In simplest form, we might have `my-session = [foo][bar][baz]` so we can 'open' the session then edit those three words together.
 
-We can project edit sessions to view and edit multiple words together. In simplest form, we might have `my-session = [foo][bar][baz]` so we can 'open' the session then edit those three words together.
-
-Although initial emphasis is plain text views, the eventual goal is to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, spreadsheets, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined/opened into the current view.
+Although our initial emphasis is plain text views, the eventual goal is to support richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, spreadsheets, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined/opened into the current view.
 
 ### Named Local Variables
 
@@ -328,7 +313,7 @@ We can leverage editable views to model named local variables, like lambdas or l
         7 -> X; EXPR            let-in equivalent
         [-> X; EXPR]            lambda equivalent
 
-When writing this view to Awelon, we must extract `X` from our expression. We can achieve this with a simple variable extraction algorithm:
+We can extract `X` from our expression by simple algorithm:
 
         EXPR == X T(X,EXPR) for value X
 
@@ -340,17 +325,17 @@ When writing this view to Awelon, we must extract `X` from our expression. We ca
             | only G contains X             => [F] a T(X,G)
             | F and G contain X             => c [T(X,F)] a T(X,G)
 
-For performance, we should optimize conditional branches to avoid copying.
+For performance, we can optimize static conditionals to avoid copying:
 
-        T(X, [L][R]if) => [T(X,L)][T(X,R)]if
+        T(X,[F][T]if) => [T(X,F)][T(X,T)]if
 
-We can use a simple comment to record the variable names. 
+It makes sense to record variable names as comments - that's how we use them.
 
         -> X; EXPR
             becomes
         "lambda X"(a2)d T(X,EXPR)
 
-It makes sense to record variable names as comments, given that's very often how we use them. In any case, to read it back out we'd need to propagate the variable back into our program whenever we see the lambda comment. This feature is easily extended to multiple arguments.
+Named local variables hint at how to build higher level languages above Awelon.
 
 ## Arrays and In-place Updates
 
