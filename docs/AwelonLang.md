@@ -20,7 +20,9 @@ The intention is to leverage Awelon together with [projectional editing](http://
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word has regular expression `[a-z][a-z_0-9]*`. That is, it consists of alphanumerics and the underscore, and must start with an alpha. There is no size limit, but words should be small in practice. The definition for a word must be a valid Awelon subprogram and be acyclic, i.e. having no direct or indirect dependency on itself.
+Words are the user-definable unit for Awelon code. Syntactically, a word has regex `[a-z][a-z0-9-]*`. That is, a word consists of lower case alphanumerics and hyphens, and starts with an alpha.
+
+The formal meaning of a word within Awelon code is equivalence to its definition. But words are often given special connotations in context of an environment. For example, `foo-doc` may associate documentation with word `foo`, or `main` may serve as the default entry point for a monadic process.
 
 ## Natural Numbers
 
@@ -162,7 +164,7 @@ This representation combines characteristics of the LSM-tree, radix tree, and Me
 
 For Awelon project, the intention is that we'll usually curate and share entire dictionaries - ensuring all definitions are versioned, managed, tested together. Instead of libraries, software distribution would be modeled via DVCS-inspired mechanisms - pull requests, bug reports, etc.. 
 
-However, a dictionary can represent conventional libraries using subsets of words with a common prefix. For example, `/math_ secureHash` patches in the specified version of a math library. If users insist, it would not be difficult to distribute software based on this. A projectional editor could support namespaces that hide the prefix for reading the code.
+However, a dictionary can represent conventional libraries using subsets of words with a common prefix. For example, `/math- secureHash` patches in the specified version of a math library. If users insist, it would not be difficult to distribute software based on this. A projectional editor could support namespaces that hide the prefix for reading the code.
 
 ### Hierarchical Dictionary Structure
 
@@ -196,7 +198,7 @@ Evaluation strategy is unspecified, and the default may be a heuristic mix of la
 
 ## Value Words
 
-A 'value word' is any word whose evaluated definition is a single block. Natural numbers would be a common example, but we might also include booleans like `true` or `false`, or references such as `story_chapter32`. Data binding (and data plumbing in general) can operate on value words directly:
+A 'value word' is any word whose evaluated definition is a single block. Natural numbers would be a common example, but we might also include booleans like `true` or `false`, or references such as `story-chapter32`. Data binding (and data plumbing in general) can operate on value words directly:
 
         true [] b == [true]
         42 [] b   == [42]
@@ -220,10 +222,10 @@ Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]`
 Awelon does not permit cyclic definitions. We can define fixpoint combinators:
 
         [X][F]z == [X][[F]z]F
-        z = [[(a3) c i] b (eq_z) [c] a b w i](a3) c i
+        z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
 
         assuming:
-            [def of foo](eq_foo) == [foo]
+            [def of foo](eq-foo) == [foo]
             [B][A]w == [A][B]       w = (a2) [] b a
                [A]i == A            i = [] w a d
 
@@ -313,9 +315,9 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
 
 In this view, Awelon's natural numbers are given a `#` prefix, hence the view is optimized for signed integers. This particular view takes the path of building one view upon another. If the view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`.
 
-Besides numeric towers, editable views could easily support lists, continuation-passing style, generators with yield, and other features. Line comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long_prefix_foo` can be abbreviated as `lp_foo`. It is also feasible for projections to leverage color, such that `html_div` vs. `math_div` both render as `div` but in different colors.
+Besides numeric towers, editable views could easily support lists, continuation-passing style, generators with yield, and other features. Line comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is also feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors.
 
-We can project edit sessions to view and edit multiple words together. In simplest form, we might have `my_session = [foo][bar][baz]` so we can 'open' the session then edit those three words together.
+We can project edit sessions to view and edit multiple words together. In simplest form, we might have `my-session = [foo][bar][baz]` so we can 'open' the session then edit those three words together.
 
 Although initial emphasis is plain text views, the eventual goal is to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, spreadsheets, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined/opened into the current view.
 

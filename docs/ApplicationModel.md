@@ -6,19 +6,19 @@ The conventional, mainstream "application model" is a detached process that will
 An intriguing feature of [Awelon language](AwelonLang.md) is that, due to rewrite semantics, we can always "save" process state as an Awelon program to simplify debugging or distribution. We could save process state into a dictionary, for example, to provide sufficient context to interpret it.
 
         /myDict/ secureHash
-        :job_1123 myDict/[process state is recorded here]
+        :job-1123 myDict/[process state is recorded here]
 
-An external agent could then "run" the jobs in our dictionary, continuously executing requested effects, providing inputs, and saving the updated state. This does provide a fair level of visibility and access. For example, we can easily checkpoint or share the process, or kill it by deleting the `job_1123` word, or directly inject messages or modify states, or change some of the code it's running against. We can feasibly support useful real-time views like, "how would the process reply to this message?" without risk of influencing that process's state:
+An external agent could then "run" the jobs in our dictionary, executing requested effects, addending inputs, and saving the updated process state. This does provide a fair level of visibility and access. For example, we can easily checkpoint or share the process, or kill the task by deleting the job word, or directly inject messages or modify states, or change some of the code it's running against. We can feasibly support useful real-time views like, "how would the process reply to this message?" without risk of influencing that process's state:
 
-        :view_example job_1123 [example_message] send
+        :view-example job-1123 [example-message] send
 
 However, I believe we could do better than this by more broadly embracing the use of dictionaries for representing application state. Instead of centralized process state, we could feasibly model structured application state in our dictionaries. For example, REPLs and iPython-inspired "notebook" applications could feasibly be directly encoded in a dictionary.
 
-        :repl_1473_0 initial_state
-        :repl_1473_1 repl_1473_0 command2
-        :repl_1473_2 repl_1473_1 command2
-        :repl_1473_3 repl_1473_2 command2
-        :repl_1473   repl_1473_3
+        :repl-1473-0 initial-state
+        :repl-1473-1 repl-1473-0 command2
+        :repl-1473-2 repl-1473-1 command2
+        :repl-1473-3 repl-1473-l2 command2
+        :repl-1473 repl-1473-l3
 
 Actually, this corresponds to the more general *command pattern* from OOP (see below). This document is mostly a brainstorm and exploration of patterns and structures that may be suitable for Awelon application models. It shouldn't be a problem for a dictionary to simultaneously support several "kinds" of applications. But we will need to explore ideas to see what actually works in practice.
 
@@ -36,12 +36,12 @@ The main advantage of monotonic dictionaries is that they may be continuously ev
 
 A command pattern might be represented as:
 
-        :foo_v0 initial state constructor
-        :foo_v1 foo0 command1
-        :foo_v2 foo1 command2
+        :foo-v0 initial state constructor
+        :foo-v1 foo-v0 command1
+        :foo-v2 foo-v1 command2
         ...
-        :foo_v99 foo_v98 command99
-        :foo foo_v99
+        :foo-v99 foo-v98 command99
+        :foo foo-v99
 
 In this case, we mutate the "head" word for definition of an object `foo`, but the command stream could be monotonic. Use of command pattern enables a stream of small updates to construct and modify a large object. This particular design records every command as a distinct set of words, simplifying views of historical values, forking, undo, etc.. We could try to automatically compact and simplify the command stream, within the limitation of stable dependencies.
 
@@ -58,9 +58,9 @@ Effectively, command pattern models a mutable object within a dictionary, albeit
 
 It would not be difficult to view and project parts of a dictionary as spreadsheets. For example:
 
-        :foo_a_2 "world"
-        :foo_a_3 "hello"
-        :foo_b_2 foo_a_3 foo_a_2 concat
+        :foo-a2 "world"
+        :foo-a3 "hello"
+        :foo-b2 foo-a3 foo-a2 concat
 
 We could choose to view `foo` as a spreadsheet, with automatic layout of columns `a b c ..` and rows `1 2 3 ..`. We could generalize to named columns and rows, so long as the resulting display is dense enough. Due to Awelon's evaluation by rewriting, it's possible for any cell to contain a subprogram that we can edit and evaluate in place, render (using other editable views), and reference as a function. Edited cells would simply be written into the dictionary.
 
@@ -108,7 +108,7 @@ This would admit a corresponding set of rewrites:
 
 Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. However, when a secure hash resource is referenced from an opaque definition, we could rewrite the secure hash to a simplified or evaluated form.
 
-Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo_meta_gc` for elements under `foo`, or we could represent our policies under a global word like `meta_gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
+Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo-meta-gc` for elements under `foo`, or we could represent our policies under a global word like `meta-gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
 
 # Programs as Processes
 
