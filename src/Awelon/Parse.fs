@@ -17,7 +17,7 @@ open Stowage
 //   NS = Word
 //   Atom = Word | Annotation | Nat | Text | Resource | Label 
 //
-//   Word = [a-z][a-z0-9_]*
+//   Word = [a-z][a-z0-9-]* 
 //   Annotation = '(' Word ')'
 //   Nat = '0' | [1-9][0-9]*
 //   Text = '"' (not '"')* '"'
@@ -32,7 +32,7 @@ open Stowage
 // This module implements a hand-written parser for Awelon code. 
 module Parse =
 
-    /// A Word is a ByteString with regex `[a-z][a-z0-9_]*`
+    /// A Word is a ByteString with regex `[a-z][a-z0-9-]*`. 
     type Word = ByteString
 
     /// A Natural number is `0 | [1-9][0-9]*`. 
@@ -117,11 +117,12 @@ module Parse =
 
     let inline isWordStart c = (byte 'z' >= c) && (c >= byte 'a')
     let inline isNumChar c = (byte '9' >= c) && (c >= byte '0')
-    let inline isWordChar c = isWordStart c || isNumChar c || (byte '_' = c)
+    let inline isWordChar c = isWordStart c || isNumChar c || (byte '-' = c)
 
     let isValidWord w =
         if (BS.isEmpty w) then false else
-        isWordStart (BS.unsafeHead w) && BS.forall isWordChar (BS.unsafeTail w)
+        isWordStart (BS.unsafeHead w) 
+            && BS.forall isWordChar (BS.unsafeTail w)
 
     let inline private startsWith pred s = 
         (not (BS.isEmpty s)) && (pred (BS.unsafeHead s))

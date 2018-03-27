@@ -3,8 +3,9 @@ open System.Collections.Generic
 open Stowage
 open Data.ByteString
 
-// Awelon language has a simple standard language definition, based
-// on a log-structured merge-tree with radix-tree indexing. Example:
+// Awelon language has a simple standard dictionary definition, based
+// on a log-structured merge-tree with radix-tree indexing. This is 
+// intended to support import/export and distributed computing.
 //
 //      /prefix1 secureHash1
 //      /prefix2 secureHash2
@@ -17,13 +18,13 @@ open Data.ByteString
 // node based on a matching prefix (/). Definitions should be Awelon 
 // code. Referenced nodes are identified by their secure hash or empty
 // string to delete a prefix. The matched prefix is stripped from inner
-// nodes. The empty prefix is valid, useful for prototype inheritance.  
+// nodes. The empty prefix is valid, useful for prototype inheritance
+// or checkpointing a stream. 
 //
 // This representation relies on Awelon symbols and definitions not
-// requiring all bytes, such that we can use LF to separate updates
-// and SP to separate the symbol without sizes or escapes. Legibility
-// is a goal, although this representation is unsuitable for direct
-// human editing. 
+// using arbitrary bytes. In particular, we assume SP is not used in
+// symbols, and LF is not used in definitions or symbols. Legibility
+// is a goal, for easy debugging if not direct editing.
 //
 // Only the last update for a symbol or matching prefix is used. So we
 // can normalize by erasing masked updates and sorting what remains.
@@ -33,6 +34,8 @@ open Data.ByteString
 // Hierarchical dictionaries simply use `dictname/word` symbols, and we
 // can use `/dictname/ secureHash` to update a hierarchical dictionary.
 //
+// The main weakness of this representation is inefficient iteration
+// and selection of lexicographic ranges.
 module Dict =
 
     let cLF = 10uy
@@ -62,8 +65,8 @@ module Dict =
     /// also provide a hidden slot to hold Stowage dependencies.
     ///
     /// Large definitions can incur repetitive overheads, so it is
-    /// recommended to move large definitions into Stowage (using
-    /// the `$secureHash` wrapper). Binary resources should almost
+    /// recommended to move large definitions into Stowage, using
+    /// the `$secureHash` redirect. Binary resources should almost
     /// always be defined via `%secureHash` redirects.
     [<Struct>]
     type Def = 
@@ -76,8 +79,15 @@ module Dict =
     let isValidDefStr s = BS.forall isValidDefChar s
     let inline isValidDef (d:Def) = isValidDefStr (d.Data)
 
-    /// A dictionary node indexed for efficient lookups.
-    /// 
+    /// Rewrite local definition to `$secureHash` remote redirect.
+    let externDef (db:Stowage) (def:Def) : Def =
+        let ref = VRef.stow (EncBytesRaw.codec) db (def.Data)
+        def.KeepAlive()
+        Def(BS.cons (byte '$') (ref.ID), (ref :> System.Object))
+
+    /// A dictionary node, indexed and normalized for efficient 
+    /// lookups. Assumes addend-only for updates to dictionary.
+    ///  
     /// Definitions are encoded using an option type for deletion:
     ///
     ///  Some def -> :symbol definition  
@@ -89,7 +99,7 @@ module Dict =
     ///  None     -> /prefix
     ///
     /// This directory structure is encoded using VRef to simplify
-    /// direct access and compaction.
+    /// GC management, but we require the standard dictionary codec.
     [<Struct>]
     type Dict = 
         { dirs : CritbitTree<Dir>
@@ -126,18 +136,19 @@ module Dict =
               defs = CritbitTree.empty
             }
 
-    let inline private isPrefix p s = (p = (BS.take (BS.length p) s))
-
     // obtain leftmost value of a CritbitTree node
     let rec private leftValN node =
         match node with
         | CritbitTree.Inner(_,l,_,_) -> leftValN l
         | CritbitTree.Leaf v -> v
 
-    // Any prefix is certainly in the search path because in a prefix
-    // of a symbol will match the symbol up to prefix length. But not
-    // all keys in the search path are valid prefixes. So test each 
-    // from longest match to shortest.
+
+    let inline private isPrefix p s = (p = (BS.take (BS.length p) s))
+
+    // Any prefix is certainly in the search path because bits in the
+    // prefix of a symbol will match up to prefix length. But not all
+    // keys in the search path are valid prefixes, since we don't look
+    // at every bit. So just test from most matched critbits to fewest.
     let rec private matchDirN sym kl node =
         match node with
         | CritbitTree.Inner(cb,l,kr,r) ->
@@ -172,7 +183,7 @@ module Dict =
     let delSym (sym:Symbol) (dict:Dict) : Dict =
         // erase entry if the symbol is obviously undefined,
         // otherwise add a `~sym` entry for pending deletion.
-        if Option.isNone (matchDirectory sym dict)
+        if Option.isNone (matchDirT sym (dict.dirs))
             then { dict with defs = CritbitTree.remove sym (dict.defs) }
             else { dict with defs = CritbitTree.add sym None (dict.defs) }
     
@@ -187,24 +198,26 @@ module Dict =
 
 
     /// Modify dictionary by logically appending an entry.
+    /// Useful for streaming construction of dictionaries.
     let applyUpd (dict:Dict) (upd:DictEnt) : Dict =
         match upd with
         | Direct (p,dir) -> updPrefix p dir dict
         | Define (sym,def) -> defSym sym def dict
         | Delete sym -> delSym sym dict
 
-    let fromSeq (s:seq<DictEnt>) : Dict =
-        Seq.fold applyUpd empty s
+    let private defEnt (sym,defOpt) =
+        match defOpt with
+        | Some def -> Define(sym,def)
+        | None -> Delete sym
 
     /// Expand a dictionary to a sequence of entries.
-    let toSeq (dict:Dict) : seq<DictEnt> =
-        let defEnt (sym,defOpt) =
-            match defOpt with
-            | Some def -> Define(sym,def)
-            | None -> Delete sym
+    let toSeqEnt (dict:Dict) : seq<DictEnt> =
         let dirs = CritbitTree.toSeq (dict.dirs) |> Seq.map Direct
         let defs = CritbitTree.toSeq (dict.defs) |> Seq.map defEnt
         Seq.append dirs defs
+
+    let fromSeqEnt (s:seq<DictEnt>) : Dict =
+        Seq.fold applyUpd empty s
 
     let inline private trimSP s =
         let isSP c = (c = cSP)
@@ -223,8 +236,8 @@ module Dict =
         if ((c0 = cDir) && (RscHash.isValidHash h)) then Direct (sym, Some (mkDir h)) else
         raise ByteStream.ReadError
 
-    /// Parse all entries in a dictionary. May raise ByteStream.ReadError.
-    let rec parseDictEnts mkDef mkDir s : seq<DictEnt> =
+    /// Parse entries in a dictionary string. May raise ByteStream.ReadError.
+    let rec parseDictEnts mkDef mkDir (s:ByteString) : seq<DictEnt> =
         if BS.isEmpty s then Seq.empty else
         seq {
             let struct(line,lfmore) = BS.span ((<>) cLF) s
@@ -233,7 +246,7 @@ module Dict =
         }
 
     let inline parseDict mkDef mkDir s : Dict =
-        fromSeq (parseDictEnts mkDef mkDir s)
+        fromSeqEnt (parseDictEnts mkDef mkDir s)
 
     /// Write an entry. Assumes valid context (start of line).
     /// NOTE: Does not include LF to terminate/separate entry!
@@ -265,7 +278,7 @@ module Dict =
     /// Serialize/Render a dictionary to a ByteString.
     /// This will write a normalized
     let writeDict (dict:Dict) : ByteString =
-        ByteStream.write (writeEnts (toSeq dict))
+        ByteStream.write (writeEnts (toSeqEnt dict))
 
     let inline private sizeEntHdBody du =
         match du with
@@ -283,7 +296,7 @@ module Dict =
     /// Size (in bytes) to write an entire dictionary.
     let sizeDictBytes (dict:Dict) : SizeEst =
         let accum n du = n + sizeEntBytes du
-        Seq.fold accum 0UL (toSeq dict)
+        Seq.fold accum 0UL (toSeqEnt dict)
 
     // Shared dictionary parse cache. This permits structure sharing
     // in memory, albeit at the cost of extra lookup overheads.
@@ -296,6 +309,18 @@ module Dict =
                  }
         new MCache<ByteString,Dict>(cm,eq)
 
+    /// Load a dictionary using cache;.
+    let loadRef (ref:VRef<Dict>) : Dict =
+        match MCache.tryFind (ref.ID) (dictLoadCache) with
+        | Some d -> d
+        | None ->
+            let mkDef s = Def(s, (ref :> System.Object))
+            let mkDir h = VRef.wrap (ref.Codec) (ref.DB) h
+            let s = ref.DB.Load(ref.ID)
+            let sz = 120UL + uint64 (BS.length s)
+            let d = parseDict mkDef mkDir s
+            MCache.tryAdd (ref.ID) d sz (dictLoadCache)
+
     /// Load a dictionary node given a directory reference.
     ///
     /// Uses default Stowage.Cache. Loading a directory many times
@@ -303,16 +328,7 @@ module Dict =
     let load (dir:Dir) : Dict =
         match dir with
         | None -> empty
-        | Some ref ->
-            match MCache.tryFind (ref.ID) (dictLoadCache) with
-            | Some d -> d
-            | None ->
-                let mkDef s = Def(s, (ref :> System.Object))
-                let mkDir h = VRef.wrap (ref.Codec) (ref.DB) h
-                let s = ref.DB.Load(ref.ID)
-                let sz = 120UL + uint64 (BS.length s)
-                let d = parseDict mkDef mkDir s
-                MCache.tryAdd (ref.ID) d sz (dictLoadCache)
+        | Some ref -> loadRef ref
 
     /// Find a definition for a symbol, if it exists. This will
     /// recursively load remote nodes as needed, caching them 
@@ -327,10 +343,157 @@ module Dict =
                 let k' = BS.drop (BS.length p) k
                 tryFind k' (load dir)
 
+    let private addPrefixT (p:Prefix) (t:CritbitTree<'A>) : CritbitTree<'A> =
+        // CritbitTree doesn't support shortcuts here: no sharing of
+        // prefixes. So we'll just need to add a prefix to every key.
+        let addP k v t = CritbitTree.add (BS.append p k) v t
+        CritbitTree.foldBack addP t (CritbitTree.empty)
+
+    /// Add a prefix to every symbol in a dictionary.
+    let addPrefix (p:Prefix) (d:Dict) : Dict =
+        if BS.isEmpty p then d else
+        { dirs = addPrefixT p (d.dirs)
+          defs = addPrefixT p (d.defs)
+        }
+
+    /// Remove all symbols with given prefix from the dictionary.
+    let inline dropPrefix (p:Prefix) (d:Dict) : Dict = 
+        updPrefix p None d
+
+    // Concatenate dictionaries at entry level, O(L * lg(L+R)).
+    // It's necessary to optimize for smaller first argument
+    // for efficient sequencing and partitioning.
+    let private concatDictEnts (a:Dict) (b:Dict) : Dict =
+        let inline blockPrefix s = Option.isSome (matchDirT s (b.dirs))
+        let inline blockSymbol s = CritbitTree.containsKey s (b.defs) || blockPrefix s
+        let accumDir p dir t = if blockPrefix p then t else CritbitTree.add p dir t
+        let accumDef s def t = if blockSymbol s then t else CritbitTree.add s def t
+        let dirs' = CritbitTree.foldBack accumDir (a.dirs) (b.dirs)
+        let defs' = CritbitTree.foldBack accumDef (a.defs) (b.defs)
+        { dirs = dirs'; defs = defs' }
+
+    /// Select symbols matching a given prefix from dictionary.
+    /// This filters out symbols that lack the matching prefix.
+    /// Useful for browsing a dictionary based on prefixes. More
+    /// efficient than splitTreeAt.
+    let rec selectPrefix (prefix:Prefix) (d:Dict) : Dict =
+        // preserve obvious prefix matches in dictionary
+        let dP = { dirs = CritbitTree.selectPrefix prefix (d.dirs)
+                   defs = CritbitTree.selectPrefix prefix (d.defs)
+                 }
+        // recursively filter from a wider directory, if necessary 
+        match matchDirT prefix (d.dirs) with
+        | Some (struct(pre,Some ref)) when ((BS.length pre) < (BS.length prefix)) ->
+            let fix = BS.drop (BS.length pre) prefix
+            let ss = selectPrefix fix (loadRef ref)
+            concatDictEnts (addPrefix pre ss) dP
+        | _ -> dP // no subdirectory to include
+
+    // extract and remove leftmost element of a non-empty critbit tree.
+    let rec private splitLeastValN (node:CritbitTree.Node<'V>) : struct('V * CritbitTree<'V>) =
+        match node with
+        | CritbitTree.Inner(cb,l,kr,r) ->
+            let struct(v,rem) = splitLeastValN l
+            let rem' = 
+                match rem with
+                | CritbitTree.Root(kl',l') ->
+                    CritbitTree.Root(kl', CritbitTree.Inner(cb, l', kr, r))
+                | CritbitTree.Empty -> CritbitTree.Root(kr,r)
+            struct(v,rem')
+        | CritbitTree.Leaf v -> struct(v,CritbitTree.Empty)
+
+    let rec private seqDefsN (kl:Symbol) (node:CritbitTree.Node<Def option>) : seq<(Symbol * Def)> = 
+        seq {
+            match node with
+            | CritbitTree.Inner(_,l,kr,r) ->
+                yield! seqDefsN kl l
+                yield! seqDefsN kr r
+            | CritbitTree.Leaf defOpt ->
+                match defOpt with
+                | Some def -> yield (kl,def)
+                | None -> ()
+        }
+    let private seqDefs (t:CritbitTree<Def option>) : seq<Symbol * Def> =
+        match t with
+        | CritbitTree.Root(kl,l) -> seqDefsN kl l
+        | CritbitTree.Empty -> Seq.empty
+
+    /// Iterate through all defined symbols in lexicographic order.
+    /// Only the most recent definition for each symbol is rendered.
+    let rec toSeq (d:Dict) : seq<(Symbol * Def)> = seq {
+        // yield least symbol if before least directory.
+        // Otherwise, open the least directory and retry.
+        match (d.dirs) with
+        | CritbitTree.Root(dirK,dirN) ->
+            match (d.defs) with
+            | CritbitTree.Root(defK,defN) when (defK < dirK) ->
+                let struct(defOpt, defs') = splitLeastValN defN
+                let dRem = { d with defs = defs' }
+                match defOpt with
+                | Some def -> yield (defK,def)
+                | None -> () // don't report deleted symbols
+                yield! toSeq dRem
+            | _ ->
+                // load directory into dictionary, then retry
+                let struct(dirV,dirs') = splitLeastValN dirN
+                let dDir = addPrefix dirK (load dirV)
+                let dRem = { d with dirs = dirs' }
+                yield! toSeq (concatDictEnts dDir dRem)
+        | CritbitTree.Empty -> yield! seqDefs (d.defs)
+        }
+
+    // iteratively partition dictionary, accumulating directories
+    // to left of the given key in 'l' and opening directories if
+    // they (naively) might include elements from both partitions.
+    let rec private splitAtKey' k l (d : Dict) =
+        match (d.dirs) with
+        | CritbitTree.Root(dirP, dirN) when (dirP < k) ->
+            // prefix is either to left of key or includes key
+            let struct(dirV,dirs') = splitLeastValN dirN
+            if isPrefix dirP k then // prefix includes key
+                // load directory into dictionary, retry split
+                let dDir = addPrefix dirP (load dirV)
+                let dRem = { d with dirs = dirs' } 
+                let d' = concatDictEnts dDir dRem
+                splitAtKey' k l d'
+            else // record prefix to left of tree
+                let l' = CritbitTree.add dirP dirV l
+                let d' = { d with dirs = dirs' }
+                splitAtKey' k l' d'
+        | _ -> // remaining prefixes are >= to the key
+            let struct(defsL,defsR) = CritbitTree.splitAtKey k (d.defs)
+            let dl = { dirs = l; defs = defsL }
+            let dr = { dirs = (d.dirs); defs = defsR }
+            struct(dl,dr)
+
+    /// Partition the dictionary on a symbol, such that all symbols
+    /// lexicographically smaller are to the left and symbols equal
+    /// or greater are to the right. Useful for browsing dictionary.
+    let splitAtKey (k:Symbol) (dict:Dict) : struct(Dict * Dict) =
+        splitAtKey' k (CritbitTree.empty) dict
+
+    // TODO: simplistic compaction of dictionaries.
+    //
+    // The dictionary representation has a lot of heuristic freedom.
+    // We may prefer larger prefixes or smaller ones, for example. 
+    // But for the moment, it's more important to just support a 
+    // simple compaction heuristic.
+    //
+    // One point to consider is that the "working set" for definitions
+    // shouldn't have too many pending definitions after we decide to
+    // flush the updates. So, an all-or-nothing approach for pushing
+    // data into nodes might work best.
+    //
+    // 
+    // For compaction of dictionaries, it's preferable if we can use
+    // relatively large prefixes. Also, we don't want a thrashing 
+    // working set, so it's preferable to 
+    //
+    // The dictionary structure used here has a relatively large
+    // degree-of-freedom 
     
 
-    
-       
+        
 
 
     
@@ -341,13 +504,11 @@ module Dict =
         let deps = List.toArray (RscHash.foldHashDeps addDep [] s)
         Def(s, deps :> System.Object)
 
-
-
     /// Simplified codec for VRef<Dict>. This does not perform any
     /// automatic compaction for large dictionaries.
     let codec =
         { new Codec<Dict> with
-            member __.Write d dst = writeEnts (toSeq d) dst
+            member __.Write d dst = writeEnts (toSeqEnt d) dst
             member cD.Read db src = parseDict (autoDef db) (VRef.wrap cD db) (ByteStream.readRem src)
             member cD.Compact db d = struct(d, sizeDictBytes d)
         }
