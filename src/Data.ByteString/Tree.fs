@@ -278,59 +278,6 @@ module CritbitTree =
             | _ -> struct(Empty, t)
         | Empty -> struct(Empty, Empty)
 
-    // Potential Functions: 
-    // - Select all keys that are a prefix of the input.
-    // - 
-
-    module private EnumNode =
-        type Stack<'V> = (Key * Node<'V>) list
-        type Elem<'V> = (Key * 'V)
-        type State<'V> = (Elem<'V> * Stack<'V>)
-        type StepFn<'V> = Stack<'V> -> Key -> Node<'V> -> State<'V>
-        
-        let rec stepL s kl n =
-            match n with
-            | Inner (_, l, kr, r) -> stepL ((kr,r)::s) kl l
-            | Leaf v -> ((kl,v),s)
-
-        let rec stepR s kl n =
-            match n with
-            | Inner (_, l, kr, r) -> stepR ((kl,l)::s) kr r
-            | Leaf v -> ((kl,v),s)
-
-        type Enumerator<'V> = // enumerates left to right
-            val step : StepFn<'V>
-            val mutable private state : State<'V>
-            member e.Elem with get() = fst e.state
-            member e.Stack with get() = snd e.state
-            new (step,k,n) = 
-                // need MoveNext for first element.
-                let state0 = (Unchecked.defaultof<_>, (k,n)::[])
-                { step = step; state = state0 }
-            interface System.Collections.Generic.IEnumerator<Elem<'V>> with
-                member e.Current with get() = e.Elem
-            interface System.Collections.IEnumerator with
-                member e.Current with get() = upcast e.Elem
-                member e.MoveNext() =
-                    match e.Stack with
-                    | ((kr,r)::sr) -> e.state <- e.step sr kr r; true
-                    | _ -> false
-                member e.Reset() = raise (System.NotSupportedException())
-            interface System.IDisposable with
-                member e.Dispose() = ()
-
-        type Enumerable<'V> =
-            val private s : StepFn<'V>
-            val private k : Key
-            val private n : Node<'V>
-            new(s:StepFn<'V>, k:Key, n:Node<'V>) = { s = s; k = k; n = n }
-            member e.GetEnum() = new Enumerator<'V>(e.s, e.k, e.n)
-            interface System.Collections.Generic.IEnumerable<Elem<'V>> with
-                member e.GetEnumerator() = upcast e.GetEnum()
-            interface System.Collections.IEnumerable with
-                member e.GetEnumerator() = upcast e.GetEnum()
-
-
     let ofArray (arr:(Key * 'V) array) : Tree<'V> =
         Array.fold (fun t (k,v) -> add k v t) empty arr
     let ofList (lst:(Key * 'V) list) : Tree<'V> =
@@ -338,17 +285,33 @@ module CritbitTree =
     let ofSeq (s:seq<Key * 'V>) : Tree<'V> =
         Seq.fold (fun t (k,v) -> add k v t) empty s
 
-    /// Convert to reverse-ordered sequence. 
+    let rec private toSeqN kl node = seq {
+        match node with
+        | Leaf v -> yield (kl,v)
+        | Inner (_,l,kr,r) ->
+            yield! toSeqN kl l
+            yield! toSeqN kr r
+        }
+
+    /// Convert to lexicographically ordered sequence.
     let toSeq (t:Tree<'V>) : seq<Key * 'V> =
         match t with
         | Empty -> Seq.empty
-        | Root(kl,n) -> upcast EnumNode.Enumerable<'V>(EnumNode.stepL,kl,n)
+        | Root(kl,n) -> toSeqN kl n
+
+    let rec private toSeqNR kl node = seq {
+        match node with
+        | Leaf v -> yield (kl,v)
+        | Inner (_,l,kr,r) ->
+            yield! toSeqNR kr r
+            yield! toSeqNR kl l
+        }
 
     /// Reverse-ordered sequence (greatest key to least, foldBack order)
     let toSeqR (t:Tree<'V>) : seq<Key * 'V> =
         match t with
         | Empty -> Seq.empty
-        | Root(kl,n) -> upcast EnumNode.Enumerable<'V>(EnumNode.stepR,kl,n)
+        | Root(kl,n) -> toSeqNR kl n
 
     let toArray (t:Tree<'V>) : (Key * 'V) array = Array.ofSeq (toSeq t)
     let toList (t:Tree<'V>) : (Key * 'V) list = List.ofSeq (toSeq t)

@@ -94,24 +94,14 @@ type ByteString =
     interface System.IComparable<ByteString> with
         member x.CompareTo y = ByteString.Compare x y
 
-    member x.GetEnumerator() : System.Collections.Generic.IEnumerator<byte> =
-        if (0 = x.Length) then Seq.empty.GetEnumerator() else
-        let a = x.UnsafeArray
-        let reset = (x.Offset - 1)
-        let limit = (x.Length + reset)
-        let ix = ref reset 
-        { new System.Collections.Generic.IEnumerator<byte> with
-                member e.Current with get() = a.[!ix]
-            interface System.Collections.IEnumerator with
-                member e.Current with get() = box a.[!ix]
-                member e.MoveNext() = 
-                    if(!ix = limit) then false else
-                    ix := (1 + !ix)
-                    true
-                member e.Reset() = ix := reset
-            interface System.IDisposable with
-                member e.Dispose() = ()
+    member x.ToSeq() = 
+        let a = x // copy byref for capture
+        seq {
+            for ix = (a.Offset) to (a.Offset + a.Length - 1) do
+                yield a.UnsafeArray.[ix]
         }
+    member inline private x.GetEnumerator() = 
+        x.ToSeq().GetEnumerator()
 
     interface System.Collections.Generic.IEnumerable<byte> with
         member x.GetEnumerator() = x.GetEnumerator()
