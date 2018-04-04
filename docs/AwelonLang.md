@@ -93,7 +93,7 @@ For variants, the basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(
 
 ## Annotations
 
-Annotations in Awelon take the form of a parenthetical word, such as `(par)` or `(lazy)`. Annotations formally have identity semantics, but informally may hint an interpreter or compiler to optimize representations, influence evaluation order, trace debug outputs, or fail fast on assertions. The set of supported annotations depends on the runtime system and should be documented carefully and adhere to de-facto standards. 
+Annotations in Awelon take the form of a parenthetical word, such as `(par)` or `(error)`. Annotations formally have identity semantics, but may inform an interpreter or compiler to verify assumptions, optimize representations, influence evaluation order, trace debug outputs, fail fast on assertions. Annotations represent a programmer's assumptions or intentions. The set of supported annotations depends on the runtime system and should be documented carefully and adhere to de-facto standards. 
 
 Potential annotations:
 
@@ -192,7 +192,7 @@ Primitives rewrite by simple pattern matching:
 
 Words rewrite into their evaluated definitions. If a word is undefined, it will not rewrite further. However, words will not rewrite unless doing so leads to further progress. There is no benefit in rewriting a word if it only leads to the inlined definition. This rule is called lazy linking. Lazy linking also ensures words denoting first-class values, such as `true = [a d]`, should be bound and moved directly, e.g. `true [] b => [true]`. 
 
-Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore valid computations should reach the same result regardless of strategy. If evaluation halts early on a breakpoint or quota, we may expose evaluation strategy and other optimizations. Annotations may guide evaluation more explicitly, and may even influence the visible result.
+Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore valid computations should reach the same result regardless of strategy. If evaluation halts early on a breakpoint or quota, a runtime may expose evaluation strategy and other optimizations. Annotations may guide evaluation more explicitly, and may influence the visible result.
 
 ### Arity Annotations
 
@@ -230,45 +230,21 @@ Memoization involves seeking a representation of the computation in a separate t
 
 For effective incremental computing, memoization must be carefully combined with cache-friendly patterns. Persistent data structures and stowage are useful for developing these patterns, insofar as they provide implicit boundaries for memoization.
 
-## Optimization
-
-There are many behavior-preserving rewrites that Awelon does not normally perform. For example:
-
-        [A] a [B] a => [A B] a      apply composes
-        [A] a d     => d A          tail call optimization
-        [] a        =>              apply identity is a NOP
-        b d         => d d          either way we drop two values
-        c d         =>              drop the copy
-        c [d] a     =>              drop the other copy
-        [i] b       =>              because [A][i]b == [[A]i] == [A]
-        b i         => i            expansion of [X][F]b i == [X][F]i
-        [] b a      => w            by definition of w
-        c w         => c            copies are equivalent
-        [E] w d     => d [E]        why swap first?
-
-A runtime has discretion to perform rewrites that don't affect the final evaluated program (i.e. same rendered result). Explicit annotations are required to permit visible optimizations.
-
-*Note:* It is feasible to perform high level optimizations, such as rewriting `[F] map [G] map` to `[F G] map` or reordering matrix multiplications to minimize number of operations. Unfortunately, it's unclear how to express these optimizations or prove their validity, and such optimizations are fragile to abstraction. I would recommend modeling such optimizations explicitly, via intermediate data structure. 
-
-## Compilation
-
-Direct interpretation of Awelon code can be reasonably efficient. But for optimal performance, we'll need to compile Awelon to an intermediate language that uses an auxiliary call/return stack and registers for local dataflow. Additionally, static fixpoint loops could be compiled into the more conventional labeled jumps. Every accelerator can become a primitive operator for a compiled intermediate language.
-
 ## Error Reporting
 
 We can represent errors by simply introducing an `(error)` annotation that acts as an undefined word, unable to be further rewritten. Then, we can define words such as `divide-by-zero = (error)` to create explicit, named errors that never rewrite further. Error values can be expressed as `[(error)]`. Errors in the top-level of an evaluated definition should be reported to programmers, except in the trivial case.
 
 ## Static Typing
 
-Awelon doesn't depend on types. There is no type-driven dispatch or overloading. However, the language implies a simple static type model. If we can discover errors earlier by using static type analysis, that's a good thing. The stack-like environment can be typed as a tuple, and values as functions. Types for our primitive operations:
+Awelon doesn't depend on types. There is no type-driven dispatch or overloading. However, the language implies a simple static type model. If we can discover errors earlier by using static type analysis, that's a good thing. The stack-like environment can be typed as a tuple, and values as functions. Record constructors are typed using row polymorphism. Types for our primitive operations:
 
         a       ((s * x) * (s → s')) → (s' * x)
         b       ((s * x) * ((e * x) → e')) → (s * (e → e'))
         c       (s * x) → ((s * x) * x)
         d       (s * x) → s
         [F]     s → (s * type(F))
-        :label  ({R/label} * x) → {R, label:x}
-        .label  (s * ({} → {R, label:x})) → ((s * x) * ({} → {R}))
+        :label  ({R/label} * x) → {label:x | R}
+        .label  (s * ({} → {label:x | R})) → ((s * x) * ({} → {R}))
 
 Type annotations can be expressed using Awelon annotations. We can use specific annotations such as `(nat)` or `(bool)` or `(t3)` for a 3-tuple. Or we can favor general annotations using `[Type Descriptor](type)d`. Suitable annotations will need to be standardized, eventually, based on what our type analysis tools will accept.
 
@@ -335,7 +311,7 @@ It makes sense to record variable names as comments - that's how we use them.
             becomes
         "lambda X"(a2)d T(X,EXPR)
 
-Named local variables hint at how to build higher level languages above Awelon.
+Named local variables hint at how to build higher level languages above Awelon. 
 
 ## Arrays and In-place Updates
 
