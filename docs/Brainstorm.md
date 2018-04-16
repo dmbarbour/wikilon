@@ -27,11 +27,11 @@ But I could split the exchange aspect as follows:
         [B][A]a == B[A]         (apply')
         [B][A]e == [A][B]       (exchange)
 
-This would result in greater separation of responsibilities. It simplifies the inline function.
-
-OTOH, the current 'apply' has a nice symmetry with bind:
+This would result in greater separation of responsibilities. It simplifies the inline function to just `[] a d`. But the benefits ultimately seem limited. OTOH, the current 'apply' has a nice symmetry with bind, regarding the second argument:
 
         [B][A]a == A[B]         apply to all but second element
         [B][A]b == [[B]A]       apply to just the second element
+
+
 
 

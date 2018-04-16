@@ -58,7 +58,7 @@ Publish subscribe is a model for continuous, live programming of real world syst
 
 With ad-hoc conventions a dictionary might describe subscriptions to external data resources. An agent can fulfill these subscriptions, pushing data into the dictionary. Conversely, external agents might subscribe to words or expressions on a dictionary and observe changes in their evaluation due to changes in the underlying data. 
 
-By leveraging hierarchical dictionaries, it's also feasible to publish-subscribe entire dictionaries rather than individual words. This would be more convenient from a security and modularity perspective: we can synchronize an independent, externally maintained dictionary into our dictionary then access the relevant data.
+We can leverage hierarchical dictionaries to publish and subscribe entire dictionaries. This automatically benefits from dictionary-layer structure sharing, lazy downloads, streaming, secure hash checkpoints, etc.. Maintaining data in separate dictionaries then sharing the dictionaries is much more efficient and robust compared to multiple dictionaries each trying to maintain the same data. (However, we must carefully avoid dependency loops.)
 
 ## Effectful Work Orders
 

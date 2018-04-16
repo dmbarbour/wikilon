@@ -8,19 +8,19 @@ Awelon is a Turing complete, purely functional language based on concatenative c
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
 
-Besides the four primitives, programmers develop a *Dictionary* within which each word is defined by an Awelon encoded function. For example, if we want an inline function `[A]i == A` then we could define `i = [[]] a a d`. Evaluation proceeds by rewriting according to the primitive combinators and lazily substituting words for definitions when doing so permits further progress. As a practical language, Awelon additionally has built-in support for encoding data: natural numbers, embedded texts, binary resources, and labeled structures. 
+Beyond these four primitives, programmers develop a *Dictionary* where each word is defined by an Awelon encoded function. For example, if we want an inline function `[A]i == A` then we could define `i = [[]] a a d`. Evaluation proceeds by rewriting according to the primitive combinators and lazily substituting words by their definitions when doing so permits further progress. Hence, the result of evaluation is an equivalent program. To work with data, Awelon has special support for natural numbers, records, texts, and binaries.
 
-Those `[]` square brackets contain Awelon code and represent first-class functions. Values in Awelon are always first-class functions, typically using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or [Scott encodings](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). However, effective Awelon compilers or interpreters will recognize and optimize common functions and value types. This is a concept of software *Accleration* to improve efficient use of CPU and memory. Acceleration for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
+Those `[]` square brackets contain Awelon code and represent first-class functions. Values in Awelon are always first-class functions, typically using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or [Scott encodings](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). However, effective Awelon compilers or interpreters should recognize and optimize common functions and value types. This is a concept of software *Accleration* to improve efficient use of CPU and memory, extending the set of language performance primitives. Acceleration for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
 
-Compilers or interpreters will also recognize a set of annotations, represented by parenthetical words. For example, `[A](par)` might indicate parallel evaluation for the subprogram `A`, or `[F](accel)` might indicate that `F` should be recognized and accelerated. Annotations are represented by parenthetical words and have identity semantics - programs must have the same formal behavior even if annotations are ignored. However, external observers should be affected. Annotations serve valuable roles in debugging, guiding performance, and expressing programmer intentions.
+Compilers or interpreters will also recognize a set of *Annotations*, represented by parenthetical words. For example, `[A](par)` can request parallel evaluation for the subprogram `A`, or `[F](accel)` might indicate that `F` should be recognized and accelerated. Annotations have identity semantics. Ignoring them won't affect observations within the program. However, external observers will be affected. Annotations serve roles in debugging and guiding performance.
 
 By itself, Awelon is a very simplistic language - a purely functional assembly. 
 
-The intention is to leverage Awelon together with [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) tools. We can project rich textual or even graphical programming interfaces above the simple Awelon code. Because Awelon evaluates by rewriting, we can rewrite the code and project a similar interface from the evaluation result. This can support a close relationship between a program source and its user interface, similar to a spreadsheet. Awelon project explores alternative [application models](ApplicationModel.md) that leverage the language's special characteristics, with goals for composition and sharing of data and applications between users.
+The intention is to leverage [projectional editing tools](http://martinfowler.com/bliki/ProjectionalEditing.html) to render programs with a rich structural or graphical syntax. Because Awelon evaluates by rewriting, the same projections can render evaluated results and intermediate states. The purpose of Awelon language is to develop [application and data models](ApplicationModel.md) that are accessible, sharable, and composable by end users.
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Syntactically, a word has regex `[a-z][a-z0-9-]*`. That is, a word consists of lower case alphanumerics and hyphens, and starts with an alpha. Definitions of words are acyclic, Awelon encoded functions.
+Words are the user-definable unit for Awelon code. Syntactically, a word has regex `[a-z][a-z0-9-]*`. That is, a word consists of lower case alphanumerics and hyphens, and starts with an alpha. Definitions of words are acyclic, Awelon encoded functions. (Recursive definitions must use anonymous recursion; see *Loops*.)
 
 The formal meaning of a word within Awelon code is equivalence to its definition. But words are often given special connotations in context of an environment. For example, `foo-doc` may associate documentation with word `foo`, or `main` may serve as the default entry point for a monadic process.
 
@@ -192,7 +192,7 @@ Primitives rewrite by simple pattern matching:
 
 Words rewrite into their evaluated definitions. If a word is undefined, it will not rewrite further. However, words will not rewrite unless doing so leads to further progress. There is no benefit in rewriting a word if it only leads to the inlined definition. This rule is called lazy linking. Lazy linking also ensures words denoting first-class values, such as `true = [a d]`, should be bound and moved directly, e.g. `true [] b => [true]`. 
 
-Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore valid computations should reach the same result regardless of strategy. If evaluation halts early on a breakpoint or quota, a runtime may expose evaluation strategy and other optimizations. Annotations may guide evaluation more explicitly, and may influence the visible result.
+Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore valid computations should reach the same result regardless of strategy. If evaluation halts early (e.g. on breakpoint or quota) thena runtime's evaluation strategy and optimizations may be exposed. Annotations may guide evaluation strategy explicitly, influencing the rendered result (but not its meaning).
 
 ### Arity Annotations
 
@@ -202,7 +202,7 @@ Arity annotations are very useful for Awelon, and have simple rewrite rules:
         [C][B][A](a3) == [C][B][A]
         ...
 
-These annotations can be used to defer linking of words where a partial evaluation isn't useful. For example, consider a swap function `w = (a2) [] b a`. Ignoring the arity annotation, we'd rewrite `[A]w => [[A]]a`, which isn't useful progress. With the arity annotation, `[A]w` does not evaluate further, but `[B][A]w` evaluates to `[A][B]`. Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior as `[[A]F]`, but the former defers computation until it the result is required. 
+These annotations can be used to defer linking of words where a partial evaluation isn't useful. For example, consider a swap function `w = (a2) [] b a`. Ignoring the arity annotation, we'd rewrite `[A]w => [[A]]a`, which isn't useful progress. With the arity annotation, `[A]w` does not evaluate further, but `[B][A]w` evaluates directly to `[A][B]`. Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior as `[[A]F]`, but the former defers computation until the result is required. 
 
 ## Loops
 
@@ -216,19 +216,17 @@ Awelon definitions are acyclic, but we can express fixpoint combinators:
             [B][A]w == [A][B]       w = (a2) [] b a
                [A]i == A            i = [] w a d
 
-This is the strict fixpoint combinator, which awaits one additional argument before evaluating. Fixpoint combinators are general but relatively painful to use directly. In practice, we'll want to develop specialized loop combinators covering the common conditional and foreach loops.
-
-*Aside:* I intend for Awelon to evolve towards collection-oriented programming styles. Most loops are implicit in collections processing.
+This is the strict fixpoint combinator, which awaits one additional argument before evaluating. Using fixpoint combinators, we can express general recursive functions and loops. Unfortunately, fixpoint is difficult to use directly - even after writing dozens of fixpoint functions, I still find it awkward. This can be mitigated by use of *Named Local Variables* to represent function-local named recursion (see below). But in practice, it seems more convenient favor specialized loop combinators and collections-oriented programming styles.
 
 ## Memoization
 
-The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). Memoization may be implicit for definitions of words or secure hash resources, but requires annotations to work with anonymous data:
+Annotations can easily indicate [memoization](https://en.wikipedia.org/wiki/Memoization).
 
         [computation](memo) => [result]
 
-Memoization involves seeking a representation of the computation in a separate table then directly replacing it by the result from that table. The exact mechanism may vary, and may involve partial traces to allow partial reuse between similar computations. Memoization may be probabilistic in nature, e.g. allowing for old entries to be expired.
+Memoization involves searching for an existing record of the computation, or writing one if it does not exist. The exact mechanism may vary. Naively, we could use a table lookup. A more sophisticated mechanism might involve reusable partial evaluation traces. Regardless, the idea is to use memory - without explicitly introducing *state* - to avoid redundant computations.
 
-For effective incremental computing, memoization must be carefully combined with cache-friendly patterns. Persistent data structures and stowage are useful for developing these patterns, insofar as they provide implicit boundaries for memoization.
+For effective incremental computing, we must use memoization together with cache-friendly patterns: compositional views over persistent data structures, stowage for large but stable volumes of data.
 
 ## Error Reporting
 
@@ -255,6 +253,15 @@ Unfortunately, simple static types are sometimes too simplistic and restrictive.
 In this context, we could develop a series of functions like `pick2nd` and `pick3rd`, at cost of much boiler-plate. Or we could try to defer static typing until after we've specialized on the first parameter, treating `pick` as a macro. Intention to defer type checking can be indicated by annotation, e.g. adding a `(dyn)` comment to the subprogram with `[A](dyn) => [A]` behavior.
 
 *Note:* Besides static types, termination analysis is also useful. As a purely functional language, non-termination or divergence is always an error for Awelon programs.
+
+## Opaque Data Types
+
+Modularity in functional programming is often based on opaque or abstract data types. Direct access to the data representation is confined to a predictable volume of code. This helps developers isolate bugs, testing, and maintenance concerns. For Awelon, we can support opaque data types via paired annotations:
+
+        (seal-foo)      (s * x) → (s * seal<foo>(x))
+        (open-foo)      (s * seal<foo>(x)) → (s * x)
+
+Sealed data types are easy to enforce statically or dynamically, and can resist accidental data access. But we need another restriction for opaque data types: annotations `(seal-foo)` and `(open-foo)` should be directly used only in source for words starting with `foo-`, confining access to a predictable prefix. This restriction is easily enforced by a linter, and aligns nicely with potential Awelon libraries.
 
 ## Structural Equivalence
 
@@ -324,6 +331,7 @@ Awelon's explicit copy and drop makes it relatively easy to track dynamically wh
 
 ## Generic Programming in Awelon
 
-A typical example of generic programming is that `add` should add two numbers of the same type, without local knowledge of the type involved. This might be achieved by Haskell type classes or Rust traits. Unfortunately, Awelon does not provide any built-in features for generic programming, so it will eventually need to be explicitly modeled.
+An inherent weakness of Awelon is lack of inference for generic programming. We cannot implicitly overload an `add` symbol to use different functions for different types like natural numbers and matrices. Explicit methods are available, via parametric polymorphism, row-polymorphic records, and free algebraic structure. We could model trait parameters, such that function `foo<T>` might use `T.add`. However, the explicit nature of these techniques may hinder legibility of code.
 
+Fortunately, legibility can be mitigated by projectional editing. For example, `nat-add` and `matrix-add` and `T.add` could be rendered as `add` using a different color for each common prefixes. Further, an editor might also help clients efficiently input code that is explicitly generic, i.e. so inputting `add` provides interactive edit-time selection of the intended variant.
 
