@@ -12,6 +12,10 @@ namespace Awelon
 // - Durable Cache: a large-scale durable, external memory for
 //   computed results, potentially maintained over time.
 //
+// For Memory cache, I can easily use the Stowage.MCache. It might
+// also be wise to generalize Durable cache at the Stowage package,
+// perhaps building upon a DB variable.
+//
 // I'll need two different kinds of data structures to support these.
 // But I think a common API could probably work well for both.
 // 

@@ -606,91 +606,116 @@ module Dict =
                     yield! diffLoop (m dirA a') (m dirB b')
             }
         diffLoop a0 b0
+    
+    // Flush updates for a selected Dict node.
+    let private flush_node (c:Codec<Dict>) (db:Stowage) (d:Dict) : Dict =
+        let nodeMin = 25UL * uint64 (RscHash.size)
+        let struct(prior,upd) = splitProto d
+        if isEmpty upd then d else // short-circuit trivial cases
+        let struct(d',sz') = c.Compact db (concatDictEnts' (load prior) upd)
+        if (sz' < nodeMin) then d' else
+        fromProto (Some (VRef.stow c db d'))
 
     // Flush buffered updates into Stowage nodes. Nodes are compacted. 
-    // Small nodes are inlined to limit Stowage reference overheads.
-    let private flush (c:Codec<Dict>) (db:Stowage) (d0:Dict) : Dict =
-        let nodeMin = uint64 (25 * RscHash.size) // ~4% ref:data ratio
+    // Small nodes are inlined to control Stowage reference overheads.
+    let private flush_children (c:Codec<Dict>) (db:Stowage) (d0:Dict) : Dict =
         let step (ix:byte) (d:Dict) : Dict = 
             let p = BS.singleton ix
-            let struct(prior,upd) = splitProto (extractPrefix p d)
-            if isEmpty upd then d else // short-circuit if no updates
-            let struct(dp,szdp) = Codec.compactSz c db (concatDictEnts' (load prior) upd)
-            if (szdp < nodeMin) // inline small nodes!
-                then concatDictEnts' (dropPrefix p d) (prependPrefix p dp)
-                else updPrefix p (Some (VRef.stow c db dp)) d
+            let dp = flush_node c db (extractPrefix p d)
+            concatDictEnts' (dropPrefix p d) (prependPrefix p dp)
         let rec loop ix d =
             let d' = step ix d
             if (ix = (System.Byte.MaxValue)) then d' else
             loop (ix + 1uy) d'
         loop (System.Byte.MinValue) (mergeProto d0)
 
-    let inline private write d dst = writeEnts (toSeqEnt d) dst
-    let inline private read c db src =
-        // prefer to read via `loadRef` for caching and efficient GC
-        parseDict (autoDef db) (VRef.wrap c db) (ByteStream.readRem src)
+    // compact with buffered nodes
+    let private lsm_compact c db d =
+        let thresh = 40_000UL
+        let sz = sizeDict d
+        if (sz < thresh) then struct(d,sz) else
+        let d' = flush_children c db d
+        struct(d', sizeDict d')
 
-    /// Default codec for Dict, using LSM-trie inspired compaction.
-    /// Every node has a buffer for recent writes, and we flush to
-    /// child nodes when the node is relatively large. This reduces
-    /// write costs and is good for structure sharing at large scale.
-    /// But it can be difficult to reason about total tree size due
-    /// to defunct definitions remaining in leaf nodes.
-    let codec = 
-        { new Codec<Dict> with
-            member __.Write d dst = write d dst
-            member cD.Read db src = read cD db src
-            member cD.Compact db d =
-                let thresh = 40_000UL
-                let sz = sizeDict d
-                if (sz < thresh) then struct(d,sz) else
-                let d' = flush cD db d
-                struct(d', sizeDict d')
-        }
+    // compact without buffering
+    let private trie_compact c db d =
+        if isEmpty d then struct(empty,0UL) else
+        let d' = flush_children c db d
+        struct(d', sizeDict d')
 
-    /// Codec for Dict without buffering: on compaction, updates are
-    /// aggressively pushed to their leaf nodes. The advantage is a
-    /// predictable tree size and history-independent structure. But
-    /// writes are relatively expensive, and there is no working set
-    /// for fast reads of recent updates.
-    /// 
-    /// We can still buffer and batch updates at Dict root between 
-    /// compactions, which can usefully mitigate those costs.
-    let codec' = 
-        { new Codec<Dict> with
-            member __.Write d dst = write d dst
-            member cD.Read db src = read cD db src
-            member cD.Compact db d =
-                if isEmpty d then struct(empty,0UL) else
-                let d' = flush cD db d
-                struct(d', sizeDict d')
-        }
+    let inline private write d dst = 
+        writeEnts (toSeqEnt d) dst
+    let inline private readBytes c db s = 
+        parseDict (autoDef db) (VRef.wrap c db) s
+    let inline private read c db src = 
+        readBytes c db (ByteStream.readRem src)
+    let inline private write_sized d dst =
+        EncVarNat.write (sizeDict d) dst // sizeDict is exact
+        write d dst
+    let inline private read_sized nc db src =
+        let len = EncVarNat.read src
+        let s = ByteStream.readBytes (int len) src
+        readBytes nc db s
+    let inline private compact_root_sized c db d =
+        let d' = flush_node c db d
+        let sz = sizeDict d'
+        struct(d',(EncVarNat.size sz) + sz)
 
-    /// Capture a Dict as a Dir. Access with load or fromProto.
+    /// Default codec for Dict. Compaction is based on LSM-trie.
+    /// Each node is a buffer for recent updates. This buffering 
+    /// amortizes write costs, increases longevity for structure
+    /// sharing of deep tree nodes, and serves as a working set.
+    /// But it can be difficult to reason about tree size, and 
+    /// the tree structure depends on historical update order.
     ///
-    /// Caveat: this does not have a threshold. Small dictionaries
-    /// will result in small Stowage nodes, which are inefficient. 
-    let checkpoint (c:Codec<Dict>) (db:Stowage) (d:Dict) : Dir =
-        let struct(proto,upd) = splitProto d
-        if isEmpty upd then proto else
-        let d' = Codec.compact c db (concatDictEnts' (load proto) upd)
-        if isEmpty d' then None else
-        Some (VRef.stow c db d')
+    /// Note: This is for inner nodes. See rcodec.
+    let ncodec = 
+        { new Codec<Dict> with
+            member __.Write d dst = write d dst
+            member c.Read db src = read c db src
+            member c.Compact db d = lsm_compact c db d
+        }
 
-    /// Checkpoint a prefix, resulting in a directory for that prefix.
-    let inline checkpointPrefix c db p d =
-        checkpoint c db (extractPrefix p d)
+    /// Root codec for Dict values within larger structures. This
+    /// extends the ncodec by prefixing size metadata, so we can
+    /// easily delimit the serialized Dict. Further, we'll rewrite
+    /// nodes to `/ secureHash` unless they're small to simplify
+    /// reasoning about sizes of structures containing Dicts.
+    let rcodec =
+        { new Codec<Dict> with
+            member __.Write d dst = write_sized d dst
+            member __.Read db src = read_sized ncodec db src
+            member __.Compact db d = compact_root_sized ncodec db d
+        }
 
-    /// Reduce a specific prefix to a `/prefix secureHash` entry.
-    let inline compactPrefix c db p d =
-        updPrefix p (checkpointPrefix c db p d) d
+    /// Alternate codec for Dict without buffering. Updates will
+    /// be aggressively flushed to leaf nodes, reconstructing the
+    /// intermediate Stowage nodes. The main benefit is that we 
+    /// can reason more easily about the tree size and structure
+    /// after compaction.
+    let ncodec' = 
+        { new Codec<Dict> with
+            member __.Write d dst = write d dst
+            member c.Read db src = read c db src
+            member c.Compact db d = trie_compact c db d
+        }
 
-    // TODO:
+    /// Root codec without buffering.
+    let rcodec' =
+        { new Codec<Dict> with
+            member __.Write d dst = write_sized d dst
+            member __.Read db src = read_sized ncodec' db src
+            member __.Compact db d = compact_root_sized ncodec' db d
+        }
+
+    // TODO: potential extensions
     //
     // - dictionary unions and intersections
     // - dictionary browsing heuristics (prefix selection?)
     // - reverse lookup indexing on dictionaries
     // - three-way diffs?
-    // - cached evaluations and  dictionaries
-        
+    // - cached evaluations and dictionaries
+
+type Dict = Dict.Dict
+
 
