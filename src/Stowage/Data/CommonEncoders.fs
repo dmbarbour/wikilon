@@ -96,9 +96,6 @@ module EncByte =
 /// (data) is encoded raw
 ///
 /// This is intended for encoding bytestrings mixed with other data.
-/// It's assumed that, if the data contains any RscHash references,
-/// those references should be protected from adjacency issues (e.g.
-/// like how EncRscHash uses `{hash}`. 
 module EncBytes =
     let size (b:ByteString) : SizeEst =
         let len = uint64 b.Length
@@ -118,6 +115,29 @@ module EncBytes =
             member __.Read db src = read src
             member __.Compact db b = struct(b,size b)
         }
+
+/// Wrap data with a size header.
+///
+///    (size)(data)
+///
+/// This will write data twice: write to a temporary buffer to find
+/// exact size, then a fast copy to the destination buffer, with the
+/// size metadata. Upon read, we'll isolate the codec to the data 
+/// within the sized volume. It's assumed that any RscHash references
+/// in data are protected from adjacency concerns, like the `{hash}`.
+module EncSized =
+
+    let codec (c:Codec<'V>) =
+        { new Codec<'V> with
+            member __.Write v dst = 
+                EncBytes.write (Codec.writeBytes c v) dst
+            member __.Read db src = 
+                Codec.readBytes c db (EncBytes.read src)
+            member __.Compact db v =
+                let struct(v',szV) = c.Compact db v
+                struct(v', (EncVarNat.size szV) + szV)
+        }
+                
 
 /// Raw ByteString Encoder. 
 ///

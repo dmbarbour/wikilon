@@ -606,107 +606,85 @@ module Dict =
                     yield! diffLoop (m dirA a') (m dirB b')
             }
         diffLoop a0 b0
-    
-    // Flush updates for a selected Dict node.
-    let private flush_node (c:Codec<Dict>) (db:Stowage) (d:Dict) : Dict =
-        let nodeMin = 25UL * uint64 (RscHash.size)
-        let struct(prior,upd) = splitProto d
-        if isEmpty upd then d else // short-circuit trivial cases
-        let struct(d',sz') = c.Compact db (concatDictEnts' (load prior) upd)
-        if (sz' < nodeMin) then d' else
-        fromProto (Some (VRef.stow c db d'))
 
-    // Flush buffered updates into Stowage nodes. Nodes are compacted. 
-    // Small nodes are inlined to control Stowage reference overheads.
-    let private flush_children (c:Codec<Dict>) (db:Stowage) (d0:Dict) : Dict =
+
+    // flush buffered updates to each byte-level child node.
+    // Assumes compaction will decide whether or not to stow.
+    let private nodeFlush (thresh:SizeEst) (c:Codec<Dict>) (db:Stowage) (struct(d0,sz0)) =
+        if (sz0 < thresh) then struct(d0,sz0) else
         let step (ix:byte) (d:Dict) : Dict = 
             let p = BS.singleton ix
-            let dp = flush_node c db (extractPrefix p d)
+            let dp = Codec.compact c db (extractPrefix p d)
             concatDictEnts' (dropPrefix p d) (prependPrefix p dp)
         let rec loop ix d =
             let d' = step ix d
             if (ix = (System.Byte.MaxValue)) then d' else
             loop (ix + 1uy) d'
-        loop (System.Byte.MinValue) (mergeProto d0)
+        let df = loop (System.Byte.MinValue) (mergeProto d0)
+        struct(df, sizeDict df)
 
-    // compact with buffered nodes
-    let private lsm_compact c db d =
-        let thresh = 40_000UL
-        let sz = sizeDict d
-        if (sz < thresh) then struct(d,sz) else
-        let d' = flush_children c db d
-        struct(d', sizeDict d')
+    // push oversized nodes to stowage via `/ secureHash`
+    let private nodeStow (thresh:SizeEst) (c:Codec<Dict>) (db:Stowage) (struct(d0,sz0)) =
+        if (sz0 < thresh) then struct(d0,sz0) else
+        let d = fromProto (Some (VRef.stow c db d0))
+        struct(d, sizeDict d)
 
-    // compact without buffering
-    let private trie_compact c db d =
-        if isEmpty d then struct(empty,0UL) else
-        let d' = flush_children c db d
-        struct(d', sizeDict d')
 
-    let inline private write d dst = 
-        writeEnts (toSeqEnt d) dst
-    let inline private readBytes c db s = 
-        parseDict (autoDef db) (VRef.wrap c db) s
-    let inline private read c db src = 
-        readBytes c db (ByteStream.readRem src)
-    let inline private write_sized d dst =
-        EncVarNat.write (sizeDict d) dst // sizeDict is exact
-        write d dst
-    let inline private read_sized nc db src =
-        let len = EncVarNat.read src
-        let s = ByteStream.readBytes (int len) src
-        readBytes nc db s
-    let inline private compact_root_sized c db d =
-        let d' = flush_node c db d
-        let sz = sizeDict d'
-        struct(d',(EncVarNat.size sz) + sz)
-
-    /// Default codec for Dict. Compaction is based on LSM-trie.
-    /// Each node is a buffer for recent updates. This buffering 
-    /// amortizes write costs, increases longevity for structure
-    /// sharing of deep tree nodes, and serves as a working set.
-    /// But it can be difficult to reason about tree size, and 
-    /// the tree structure depends on historical update order.
-    ///
-    /// Note: This is for inner nodes. See rcodec.
-    let ncodec = 
+    /// LSM-trie based codec for Dictionary nodes.
+    /// 
+    /// Parameter nodeMin determines the serialization size of a node
+    /// after compaction. Larger nodes are stowed to `/ secureHash`.
+    /// Parameter updBuff is a threshold for trying to compact child
+    /// nodes. A larger updBuff allows pending updates to aggregate
+    /// near the root of the tree, forming an implicit working set 
+    /// and amortizing tree reconstruction costs for small updates.
+    /// 
+    /// The main disadvantage of an LSM-trie is that the buffering
+    /// can make it difficult to reason about total storage costs.
+    /// But we can set `updBuff` to 0 for trie-style compaction.
+    let node_codec_config (nodeMin:SizeEst) (updBuff:SizeEst) =
         { new Codec<Dict> with
-            member __.Write d dst = write d dst
-            member c.Read db src = read c db src
-            member c.Compact db d = lsm_compact c db d
+            member __.Write d dst = 
+                writeEnts (toSeqEnt d) dst
+            member c.Read db src = 
+                parseDict (autoDef db) (VRef.wrap c db) (ByteStream.readRem src)
+            member c.Compact db d =
+                let struct(prior,upd) = splitProto d
+                if isEmpty upd then struct(d, sizeDict d) else
+                let d0 = concatDictEnts' (load prior) upd
+                (struct(d0, sizeDict d0))
+                    |> nodeFlush updBuff c db 
+                    |> nodeStow nodeMin c db 
         }
 
-    /// Root codec for Dict values within larger structures. This
-    /// extends the ncodec by prefixing size metadata, so we can
-    /// easily delimit the serialized Dict. Further, we'll rewrite
-    /// nodes to `/ secureHash` unless they're small to simplify
-    /// reasoning about sizes of structures containing Dicts.
-    let rcodec =
-        { new Codec<Dict> with
-            member __.Write d dst = write_sized d dst
-            member __.Read db src = read_sized ncodec db src
-            member __.Compact db d = compact_root_sized ncodec db d
-        }
+    // Some reasonable heuristics for configuring compaction.
+    //
+    // The default update buffer is low enough that we might
+    // overflow due to inline nodes and definitions, but that 
+    // just reduces a few nodes to trie-style compactions.
+    // 
+    // It should be relatively rare in Awelon to have huge
+    // fanouts, except for the root node.
+    let private defaultNodeMin = 25UL * uint64 (RscHash.size)  
+    let private defaultUpdBuff = 25UL * defaultNodeMin            
 
-    /// Alternate codec for Dict without buffering. Updates will
-    /// be aggressively flushed to leaf nodes, reconstructing the
-    /// intermediate Stowage nodes. The main benefit is that we 
-    /// can reason more easily about the tree size and structure
-    /// after compaction.
-    let ncodec' = 
-        { new Codec<Dict> with
-            member __.Write d dst = write d dst
-            member c.Read db src = read c db src
-            member c.Compact db d = trie_compact c db d
-        }
+    /// Node codec with default LSM-trie compaction thresholds. 
+    let node_codec = node_codec_config defaultNodeMin defaultUpdBuff
 
-    /// Root codec without buffering.
-    let rcodec' =
-        { new Codec<Dict> with
-            member __.Write d dst = write_sized d dst
-            member __.Read db src = read_sized ncodec' db src
-            member __.Compact db d = compact_root_sized ncodec' db d
-        }
+    /// Node codec with Trie-style compactions (no buffering).
+    let node_codec' = node_codec_config defaultNodeMin 0UL
+
+    /// The root codec is for the root node, which might be included
+    /// in composite data structures - such as a list of Dict values.
+    /// This essentially delimits the node using a size prefix. The
+    /// node codecs assume they own the full stream or Stowage node.
+    let inline root_codec_config (nc:Codec<Dict>) = EncSized.codec nc
+
+    /// Root Dict value codec with normal LSM-trie buffering.
+    let root_codec = root_codec_config node_codec
+
+    /// Root Dict value codec with Trie-style compactions.
+    let root_codec' = root_codec_config node_codec'
 
     // TODO: potential extensions
     //
