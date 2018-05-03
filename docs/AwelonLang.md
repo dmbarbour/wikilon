@@ -126,9 +126,9 @@ Awelon does not constrain annotations beyond requirement for identity semantics.
 
 Acceleration is a performance assumption for Awelon.
 
-An obvious target for acceleration is natural numbers and arithmetic. We should be able to add or multiply two numbers in a small constant time, and represent big numbers in a small space. A more sophisticated example might involve representations for matrices and functions for linear algebra, enabling use of SIMD or GPGPU. An even more advanced variation might accelerate an "interpreter" function for a safe subset of OpenCL, to effectively embed that subset of OpenCL into the Awelon language.
+An obvious target for acceleration is natural numbers and arithmetic. We should be able to add or multiply two numbers in a small constant time, and represent big numbers in a small space. A more sophisticated example might involve representations for matrices and functions for linear algebra, enabling use of SIMD or GPGPU. Accelerated evaluation for a safe subset of OpenCL or Kahn process networks could support cloud computing.
 
-Accelerators are essentially "built-in" functions with a reference implementation in Awelon. They extend the set of "performance primitives" for an Awelon interpreter or compiler. In general, accelerated functions should be recognized using: `[reference impl](accel)`. The annotation both documents our performance assumption and provides an opportunity for feedback to resist invisible performance rot when porting code or tweaking definitions.
+Accelerators are essentially "built-in" functions with a reference implementation in Awelon. They extend the set of "performance primitives" for an Awelon interpreter or compiler. In general, accelerated functions should be indicated explicitly by annotation: `[reference impl](accel)`. The annotation documents our performance assumption and provides an opportunity for feedback - a warning message - if the assumption does not hold. This can help resist invisible performance rot upon porting to another version of the compiler or adjusting definitions.
 
 Development and standardization of accelerators is a long term project and performance path for Awelon systems. Once we have enough of them, much Awelon code will be viewed as glue code between accelerators.
 
@@ -194,9 +194,9 @@ Words rewrite into their evaluated definitions. If a word is undefined, it will 
 
 Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore valid computations should reach the same result regardless of strategy. If evaluation halts early (e.g. on breakpoint or quota) thena runtime's evaluation strategy and optimizations may be exposed. Annotations may guide evaluation strategy explicitly, influencing the rendered result (but not its meaning).
 
-### Arity Annotations
+### Arity Awaiting Annotations
 
-Arity annotations are very useful for Awelon, and have simple rewrite rules:
+Arity awaiting annotations are useful for Awelon, and have simple rewrite rules:
 
         [B][A](a2) == [B][A]
         [C][B][A](a3) == [C][B][A]
@@ -236,15 +236,15 @@ We can represent errors by simply introducing an `(error)` annotation that acts 
 
 Awelon doesn't depend on types. There is no type-driven dispatch or overloading. However, the language implies a simple static type model. If we can discover errors earlier by using static type analysis, that's a good thing. The stack-like environment can be typed as a tuple, and values as functions. Record constructors are typed using row polymorphism. Types for our primitive operations:
 
-        a       ((s * x) * (s → s')) → (s' * x)
-        b       ((s * x) * ((e * x) → e')) → (s * (e → e'))
-        c       (s * x) → ((s * x) * x)
-        d       (s * x) → s
-        [F]     s → (s * type(F))
-        :label  ({R/label} * x) → {label:x | R}
-        .label  (s * ({} → {label:x | R})) → ((s * x) * ({} → {R}))
+        a           ((s * x) * (s → s')) → (s' * x)
+        b           ((s * x) * ((e * x) → e')) → (s * (e → e'))
+        c           (s * x) → ((s * x) * x)
+        d           (s * x) → s
+        [F]         s → (s * type(F))
+        :label      ({R/label} * x) → {label:x | R}
+        .label      (s * ({} → {label:x | R})) → ((s * x) * ({} → {R}))
 
-Type annotations can be expressed using Awelon annotations. We can use specific annotations such as `(nat)` or `(bool)` or `(t3)` for a 3-tuple. Or we can favor general annotations using `[Type Descriptor](type)d`. Suitable annotations will need to be standardized, eventually, based on what our type analysis tools will accept.
+Type annotations can be expressed using Awelon annotations, we only need some conventions. Obviously, we can use specific annotations such as `(nat)` or `(bool)`. Lightweight annotations could describe function arity, such that `[F](t21)` indicates `F` receives two arguments and returns one result. For more sophisticated or precise types, we may eventually support `[Type Descriptor](type)d`, enabling flexible type descriptions.
 
 Unfortunately, simple static types are sometimes too simplistic and restrictive. For example, the `pick` function from Forth isn't amenable to static typing without sophisticated dependent types:
 
@@ -254,22 +254,24 @@ In this context, we could develop a series of functions like `pick2nd` and `pick
 
 *Note:* Besides static types, termination analysis is also useful. As a purely functional language, non-termination or divergence is always an error for Awelon programs.
 
-## Opaque Data Types
+### Opaque Data Types
 
-Modularity in functional programming is often based on opaque or abstract data types. Direct access to the data representation is confined to a predictable volume of code. This helps developers isolate bugs, testing, and maintenance concerns. For Awelon, we can support opaque data types via paired annotations:
+Modularity in functional programming is frequently based around opaque or abstract data types. Direct access to the data representation is confined to a predictable volume of code. Other code must use the provided interface. Using opaque data, we can enforce invariants, control coupling, partition programming tasks, and isolate bugs. 
 
-        (seal-foo)      (s * x) → (s * seal<foo>(x))
-        (open-foo)      (s * seal<foo>(x)) → (s * x)
+For Awelon, we can support opaque data types via paired annotations:
 
-Sealed data types are easy to enforce statically or dynamically, and can resist accidental data access. But we need another restriction for opaque data types: annotations `(seal-foo)` and `(open-foo)` should be directly used only in source for words starting with `foo-`, confining access to a predictable prefix. This restriction is easily enforced by a linter, and aligns nicely with potential Awelon libraries.
+        (seal-foo)  (s * x) → (s * foo:x)
+        (open-foo)  (s * foo:x) → (s * x)
+
+These annotations serve as symbolic type wrappers, resisting accidental access to data. Enforcement can be static or dynamic, and with compiler support the runtime overhead can feasibly be eliminated. For opacity, we further restrict access using a prefix matching constraint: `(seal-foo)` or `(open-foo)` may only be directly used in definitions of words that start with `foo-`. This would be enforced by a linter. Thus, hyphenated prefixes describe the predictable volumes of code confining direct access to data, and this would align with potential libraries.
 
 ## Structural Equivalence
 
-A structural equivalence assertion has surprising utility.
+Annotations can assert two functions are the same, structurally:
 
         [A][B](eq) => [A][B]     iff A,B, structurally equivalent
 
-Using this, we can assert that two key-value structures share the same key comparison or hash functions, or the same first-class 'typeclass' model. We can perform lightweight unit testing. Although Awelon lacks nominative types, asserting structural equivalence for certain functions can serve a similar role.
+Structural equivalence assertions are certainly convenient for lightweight unit testing. But the motivating use case is sorted merge. Efficient merge requires assuming the two structures are sorted using the same comparison function. If we couple that function with the data, we can use `(eq)` to verify our assumption.
 
 ## Editable Views
 

@@ -19,7 +19,102 @@ Thus, even for a relatively conventional process model, we could improve visibil
         :repl-1473-3 repl-1473-l2 command2
         :repl-1473 repl-1473-l3
 
-This REPL corresponds closely to a *command pattern* from OOP. It enables access to and editing of prior lines, rendering an output per line, infinite undo, branching the REPL, or embedding its current value (via the head) into other programs. In general, this document is just brainstorming patterns that might be suitable for modeling application state within a dictionary. 
+This REPL corresponds closely to a *command pattern* from OOP. It enables access to and editing of prior lines, rendering an output per line, infinite undo, branching the REPL, or embedding its current value (via the head) into other programs. In general, this document is just brainstorming patterns that might be suitable for modeling application state within a dictionary.
+
+## Application Model Desiderata
+
+I have several desiderata for application models in Awelon systems:
+
+* composable: we can systematically embed or integrate applications
+* accessible: we can render, animate, directly manipulate app state
+* immutable: state is represented by an immutable, non-unique value
+* sharable: can copy or move apps to a new environment and continue
+* concurrent: model many simultaneous interactions with environment
+* distributed: partition state and computation across many machines
+* deterministic: behavior is very predictable up to external inputs
+
+First-class representation is good for composition and sharing. Object identity and allocation should be avoided because they interfere with immutable representation, sharing, determinism (of ID creation), and garbage collection. Hierarchical structure could be useful for composition and distribution. Having a stable structure and state model is very convenient for accessibility and extensibility.
+
+*Note:* For fast early development, it might be best to initially focus on a simple proven model, like Erlang-style message passing or a simple monadic process model. 
+
+# First Class Models
+
+## Kahn Process Networks
+
+I am interested in leveraging [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) in Awelon. KPNs support multiple input and output channels. The order with which messages for separate input channels are provided does not matter, which provides a simple basis for concurrency on input. Messages may be pending on multiple output channels, which provides a simple basis for concurrency on output. Gluing outputs to inputs provides a simple basis for composition of KPNs. Importantly, it is feasible to *accelerate* the evaluation of KPNs such that we avoid explicit routing of messages. This would be useful for large scale applications, distributing computations across multiple machines. 
+
+We can model reactive KPNs by adding explicit time-step message to every channel. This enables us to express either "no input until later" or "no input this time" to a process waiting on that channel. (The subtle difference is whether we permit streaming of many inputs within a time-step.) Each process would send similar messages on the appropriate output channels. With this, we can model real-time systems with asynchronous, interleaved inputs. We can also use acknowledgement channels to model network back pressure, i.e. so an upstream process doesn't push a message until prior messages are received. KPNs are effectively a deterministic variant of flow-based programming.
+
+The main weakness of KPNs is that it is difficult to represent dynamic network structure. We can potentially use first-class KPN values to model temporary subnets.
+
+## Machines
+
+The [machines](https://hackage.haskell.org/package/machines) model developed by Edward Kmett and Rúnar Bjarnason attempts to solve several issues with conventional monadic IO. The underlying types:
+
+        Step k o r = Stop | Yield o r | Await (k t) ((1+t) → r)
+        Machine k o = Step k o (Machine k o)
+        MachineT m k o = m (Step k o (MachineT m k o))
+
+In each step, a machine can either halt, yield an output, or await an input. In the model provided above, awaiting an input may fail so we have a continue option. A `(k t)` value represents a request returning a type `t` value, relying on Haskell's support for GADTs to constrain the input type. The `(1+t)` at Await allows for a machine to handle request failure, e.g. if upstream input stops. The `MachineT` variant permits ad-hoc interactions with the monadic environment.
+
+Awelon doesn't have great support for GADTs. But we could this simplify to:
+        
+        Step' i o r = Stop | Yield o r | Await ((1+i) → r)
+
+The simplified form cannot describe what it's waiting for. Regardless, we model a machine as a stream that requests incremental input, and potentially performs some interactions on the side. This structure is relatively more rigid than KPNs. But there is also a clear halting condition, which can serve as a useful basis for dynamic structure.
+
+## State Sharing Processes
+
+Awelon project's goals include visibility, accessibility, and extensibility. A shared state model is convenient for these goals: the state value is something we can render, animate, directly manipulate, debug, extend with concurrent processes. Purely functional programming forbids ad-hoc aliasing of shared state, but we can easily model time-sharing with one writer at a time. Naively, a simple state sharing process model is:
+
+        type P s = s → (s * P s)
+
+Each process step returns the next state and next step function. We assume the state value of type `s` will be observed and manipulated by other processes between steps. Human users or external software agents also act as processes in this respect: they view and manipulate state, and update their own memory while doing so. Processes are anonymous. Communication between processes is indirect, via state. The state model `s` can provide message queues, tables, registries, tuple spaces, or other concepts as needed for communications. 
+
+Process model `P` is naive because it doesn't support waiting for input or process life cycles. We can extend our model to fix these issues. Consider:
+
+        type PR s = s → 1 + (s * PR s)                  P+Retry
+        type PRC s = List of (s → 1 + (s * PRC s))      PR+Concurrency
+
+By introducing retry, a process can explicitly await state changes without a busy-wait loop. By modeling concurrent operations via collections of processes, we support non-determinism (scheduling within list is unspecified), and we can model process life cycles (spawning processes, termination via empty list).
+
+Some other weaknesses can be addressed by focusing on the state model `s`. If our state model is logically monotonic in nature, we can reason more readily about behavior in the face of non-determinism. Hierarchical structure could simplify routing and distributed partitioning. Invariants could be protected by modeling an abstract data type with a constrained API.
+
+Although the general idea seems promising, it's too high level to use directly.
+
+## Mobile Process Objects
+
+We can model a process as having a location on a stateful tape, grid, or network. In each step, the process could observe and manipulate "local" states, update its own state, and optionally navigate. We can also extend the model to processes with multiple locations - two fingers on the same tape, or on two separate tapes, logically pinching spaces together like a wormhole.
+
+The main advantage of this over state sharing processes is that we could distribute our grid or network across a physical machines to improve parallelism (assuming the process objects are also well distributed). The weaknesses of state sharing processes still apply.
+
+## Behavioral Programming
+
+In [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/), our processes don't directly manipulate state. Instead, multiple processes - called behaviors - will automatically coordinate to compute a sequence of events. A behavior will suppress events, propose events, observe events, and potentially spawn new behaviors. Upon occurrence of an awaited event, a behavior's state may change. In simplest form, we might model this as:
+
+        type B e = (List of e * (e → 1 + List of (B e)))
+
+That is, each behavior is proposing a list of events and also provides a function to either suppress a proposed event or spawn a set of behaviors if that event is accepted. To be accepted, an event must be accepted by all coordinating behaviors. This idea could reasonably be extended with partial events, weighted events, or multiple event channels. 
+
+I think this is interesting, but it seems difficult to integrate with real IO.
+
+## Message-Passing Models
+
+Message-passing systems are easy to model and implement. In each step a machine will receive one message, compute a finite set of output messages, and update its private state. Messages are addressed to specific machines can contain arbitrary values. Unlike actors model, we do not assume the ability to spawn new machines - but we could model that as an effect. 
+
+        type Machine    = Message → (Machine * Queue of Message)
+        type Message    = Address * Content
+        type Network    = Map of Address to Machine * Queue of Message
+
+An application would be represented as a set of machines within a network. An implementation can readily partition the network of virtual machines across multiple physical machines. Distributed performance would rely on empirical determination of 'cliques' (groups of machines that mostly communicate internally). Effects and external outputs are represented by sending messages to addresses outside the network. But there are some issues:
+
+* Message arrival order is generally non-deterministic. This generally requires a lot of overhead for coordination protocols. This could be ameliorated by assuming a "friendly" network that preserves batching and order of messages between any two machines.
+
+* Messages will usually include a reply-to address. Unfortunately, this entangles machines and messages within a specific network. We cannot casually identify or rewrite addresses embedded within a message body. We cannot compose two networks that might have overlapping machine addresses. Relative addresses would not preserve meaning when tasks are refactored or delegated to subordinate machines. 
+
+For the latter reason, I'm hesitant to favor any model relying on first-class object identity. Yet message-passing would be an easy path to useful real world systems.
+
+# Second Class Models
 
 ## Expressive Spreadsheets
 
@@ -31,13 +126,7 @@ An Awelon dictionary is essentially a filesystem with spreadsheet-like character
 
 To be useful as a spreadsheet, the main requirement is a sufficiently dense encoding of rows and columns. If everything is sparsely distributed, we'd be better off favoring an ad-hoc dependency lattice layout.
 
-## Functional Relational Programming
-
-Although we can tabilize data into a dictionary like a spreadsheet, it isn't readily accessible in that form for relational algebra operations. It might be better to model tables as first-class values that we maintain within the dictionary. Doing so would allow our dictionaries to double as databases. Application state could be computed as views of tables, while operations could correspond to actions on the database value.
-
-## Monotonic Dictionaries
-
-Awelon can evaluate in context of undefined words. It is feasible to model applications such that we never modify a word's definition, only define words that are undefined and occasionally garbage-collect unnecessary words. An advantage of doing this: it's trivial to continuously 'evaluate' the dictionary in-place without losing information. There is a lot of natural garbage collection. (See also *Managed Dictionaries*. A monotonic dictionary is essentially *frozen* in every word.)
+Awelon does not provide any automatic mechanisms to access collections or tables encoded this way, but it is feasible for agents or projectional editors to additionally maintain records and lists based on which words are defined in the dictionary. This would allow full-table access, while preserving the acyclic structure between individual "cells".
 
 ## Command Pattern
 
@@ -48,7 +137,7 @@ A command pattern might be represented as:
         :foo-2 foo-1 command2
         ...
         :foo-99 foo-98 command99
-        :foo foo-99
+        :foo-hd foo-99
 
 Essentially, we represent a stream of commands manipulating a state. The explicit representation simplifies historical views, forking, undo, and similar. In general, keeping the entire history of commands may cost too much in some cases, so we may need to occasionally checkpoint the state. But for many use cases, the number of commands won't be too large and checkpoints may be managed explicitly.
 
@@ -56,29 +145,15 @@ Essentially, we represent a stream of commands manipulating a state. The explici
 
 Publish subscribe is a model for continuous, live programming of real world systems.
 
-With ad-hoc conventions a dictionary might describe subscriptions to external data resources. An agent can fulfill these subscriptions, pushing data into the dictionary. Conversely, external agents might subscribe to words or expressions on a dictionary and observe changes in their evaluation due to changes in the underlying data. 
+With ad-hoc conventions a dictionary might describe subscriptions to external data resources. An agent can fulfill these subscriptions, pushing data into the dictionary. Conversely, external agents might subscribe to words or expressions on a dictionary and observe changes in their evaluation due to changes in the underlying data.
 
-We can leverage hierarchical dictionaries to publish and subscribe entire dictionaries. This automatically benefits from dictionary-layer structure sharing, lazy downloads, streaming, secure hash checkpoints, etc.. Maintaining data in separate dictionaries then sharing the dictionaries is much more efficient and robust compared to multiple dictionaries each trying to maintain the same data. (However, we must carefully avoid dependency loops.)
+We can leverage hierarchical dictionaries to publish-subscribe entire databases. Various topics such as weather or geography could be maintained independently in separate dictionaries, then synchronized when the network is available. This benefits from dictionary-layer structure sharing, lazy downloads, streaming and checkpoints, etc..
 
 ## Effectful Work Orders
 
-A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. 
+Most effect models today are based around imperative commands. But a more RESTful concept is the [work order](https://en.wikipedia.org/wiki/Work_order), a document that describes some work to be done and allows agents to select which jobs they perform. My intuition is that work orders would be a better basis for exporting work requirements to a multi-agent system compared to imperative commands. Of course, any individual work order might consist of a sequence of commands.
 
-Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unclaimed, unfulfilled, authorized, and within the agent's domain). Upon discovering suitable orders, the agent may staje a claim, perform some work, then update the order to indicate progress or completion. A single order may be fulfilled by multiple agents over time. In the general case, subordinate orders may be constructed to handle subtasks.
-
-Both human and software agents may participate.
-
-Modeling orders in a codebase or database is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: instead of *removing* a tuple, we might stake a 'claim' on an order. Use of claims is more expressive for long-running tasks with publish-subscribe views, scheduling or expiration of claims, and concurrent interactions (interrupts, collaborative claims, etc.). 
-
-Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as monadic tasks or a reactive process networks. Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
-
-## Tables and Databases
-
-Modeling tables or databases within the dictionary is straightforward. For example, a command pattern might represent an append-only log for a table, or collection thereof. The challenge is everything else - indexing, queries and query optimization, incremental computing. Fortunately, indexes can generally be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier.
-
-The main challenge, I suspect, is that we'll frequently update fields that are not relevant for computing a given view, or some fields will update more frequently than others. I imagine this will require careful attention to support fine-grained memoizations, separating columns of the database, arranging for stable intermediate views, etc..
-
-*Aside:* I suspect 'spreadsheets' in Awelon would best be modeled as first-class tables, such that we can usefully summarize them into reports and other structures. In context of a spreadsheet, a 'column' could be original data, or computed using relational algebra and so on.
+This is similar to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept, except that work orders aren't necessarily removed while they're worked upon. They might be updated to indicate who is working on them, though.
 
 ## Managed Dictionaries
 
@@ -97,28 +172,4 @@ This would admit a corresponding set of rewrites:
 Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. However, when a secure hash resource is referenced from an opaque definition, we could rewrite the secure hash to a simplified or evaluated form.
 
 Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo-meta-gc` for elements under `foo`, or we could represent our policies under a global word like `meta-gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
-
-# Programs as Processes
-
-While Awelon is designed for non-conventional apps, we can certainly model a more conventional application structure where a program directly interacts with the real world and humans as part of a computation. Applications can operate on streams of messages or subscription updates.
-
-## Interactive Evaluations
-
-An agent can evaluate a program, render or make observations about it, then inject some input or modify code and continue evaluation. This design most clearly fits REPLs and variants (like interactive fictions). But it can also fit some GUIs, e.g. if we represent button pressing as a form of modifying code (by inlining a block or selecting a case from a record of options). Programs can be modeled as publish-subscribe systems, where a set of relatively stable subscriptions is presented to the agent and the agent inputs messages. More generally, monadic or [KPN based](KPN_Effects.md) IO also fits interactive evaluation: evaluation halts with some set of outputs and requests for input, and we continue evaluation after providing more inputs. 
-
-Interactive evaluation at the larger dictionary level is feasible with futures/promises and a monotonic codebase, or sufficient use of memoization with the command pattern. So the main difference with interactive evaluation of programs is doing so at the anonymous program layer.
-
-## Command Stream Processing
-
-Awelon is amenable to command stream processing. The general form is:
-
-        [process] commandA  => commandB [process']
-
-This simplistic stream processing model conveniently supports composition:
-
-        [procF] [procG] commandA => [procF] commandB [procG']
-                                 ...
-                                 => commandC [procF'] [procG']
-
-We can monotonically input commands to the right hand side of our program, and incrementally output commands from the left hand side. The process object contains any state and may have some background parallelism. This model isn't a great fit for 'interactive' evaluation, but it may work nicely with Unix-like pipelines and has an advantage of not needing an external agent to explain.
 
