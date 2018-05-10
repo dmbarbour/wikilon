@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Awelon.fsproj" />
+    <ProjectReference Include="..\..\Stowage\Stowage.fsproj" />
+    <ProjectReference Include="..\..\Stowage\Data\Stowage.Data.fsproj" />
     <ProjectReference Include="..\..\Data.ByteString\Data.ByteString.fsproj" />
   </ItemGroup>
 

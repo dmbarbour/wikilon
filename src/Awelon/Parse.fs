@@ -30,7 +30,7 @@ open Stowage
 //   LabelGet = '.' Word
 // 
 // This module implements a hand-written parser for Awelon code. 
-module Parse =
+module Parser =
 
     /// A Word is a ByteString with regex `[a-z][a-z0-9-]*`. 
     type Word = ByteString
@@ -360,5 +360,4 @@ module Parse =
     /// Write to byte string. (Trivially wraps write'.)
     let inline write (p:Program) : ByteString = 
         ByteStream.write (write' p) 
-
 

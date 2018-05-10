@@ -608,8 +608,12 @@ module Dict =
         diffLoop a0 b0
 
 
-    // flush buffered updates to each byte-level child node.
-    // Assumes compaction will decide whether or not to stow.
+    // If the node is large enough, flush updates to child nodes.
+    // This is achieved by extracting and compacting each prefix
+    // independently. The codec provides the strategy for how to
+    // merge or chain updates. We do assume that compaction will
+    // control maximum size at the prefix (e.g. after compaction,
+    // a node shouldn't require more than 2kB to serialize).
     let private nodeFlush (thresh:SizeEst) (c:Codec<Dict>) (db:Stowage) (struct(d0,sz0)) =
         if (sz0 < thresh) then struct(d0,sz0) else
         let step (ix:byte) (d:Dict) : Dict = 
@@ -632,16 +636,15 @@ module Dict =
 
     /// LSM-trie based codec for Dictionary nodes.
     /// 
-    /// Parameter nodeMin determines the serialization size of a node
-    /// after compaction. Larger nodes are stowed to `/ secureHash`.
-    /// Parameter updBuff is a threshold for trying to compact child
-    /// nodes. A larger updBuff allows pending updates to aggregate
-    /// near the root of the tree, forming an implicit working set 
-    /// and amortizing tree reconstruction costs for small updates.
+    /// Nodes larger than nodeMin are rewritten to `/ secureHash`.
+    /// Smaller nodes will be inlined. The updBuff determines the
+    /// recursive use of compaction: if nodes are larger than the
+    /// buffer, we create or rewrite child nodes to control size.
+    /// This allows recent updates to aggregate near the root of
+    /// the tree.
     /// 
-    /// The main disadvantage of an LSM-trie is that the buffering
-    /// can make it difficult to reason about total storage costs.
-    /// But we can set `updBuff` to 0 for trie-style compaction.
+    /// For worst case nodes (or if updBuff is 0) we reduce to
+    /// Trie based compaction behaviors, which also isn't bad.
     let node_codec_config (nodeMin:SizeEst) (updBuff:SizeEst) =
         { new Codec<Dict> with
             member __.Write d dst = 
@@ -657,27 +660,30 @@ module Dict =
                     |> nodeStow nodeMin c db 
         }
 
-    // Some reasonable heuristics for configuring compaction.
-    //
-    // The default update buffer is low enough that we might
-    // overflow due to inline nodes and definitions, but that 
-    // just reduces a few nodes to trie-style compactions.
-    // 
-    // It should be relatively rare in Awelon to have huge
-    // fanouts, except for the root node.
-    let private defaultNodeMin = 25UL * uint64 (RscHash.size)  
-    let private defaultUpdBuff = 25UL * defaultNodeMin            
+    // Note: compaction by node_codec doesn't leverage prototype 
+    // chains via `/ secureHash`. Such chains could extend node 
+    // lifespan and structure sharing, albeit at expense to cost
+    // of lookups. But I lack simple, efficient heuristics for
+    // deciding when to use chaining.
+
+    // Limit reference overheads to about 4% (~1.6kB)
+    let private defaultNodeMin = 25UL * uint64 (RscHash.size)
+
+    // Flush nodes if they're larger than 30 small nodes (~48kB).
+    let private defaultUpdBuff = 30UL * defaultNodeMin
 
     /// Node codec with default LSM-trie compaction thresholds. 
     let node_codec = node_codec_config defaultNodeMin defaultUpdBuff
 
-    /// Node codec with Trie-style compactions (no buffering).
+    /// Node codec with Trie compactions: no update buffering.
     let node_codec' = node_codec_config defaultNodeMin 0UL
 
-    /// The root codec is for the root node, which might be included
-    /// in composite data structures - such as a list of Dict values.
-    /// This essentially delimits the node using a size prefix. The
-    /// node codecs assume they own the full stream or Stowage node.
+    /// The root codec is for the "root" Dict value.
+    ///
+    /// Critically, this prefixes the Dict value with size information
+    /// so we can use the Dict within other Stowage data structures. 
+    /// For contrast, node_codec will always consume the remainder of
+    /// the byte stream when reading or writing.
     let inline root_codec_config (nc:Codec<Dict>) = EncSized.codec nc
 
     /// Root Dict value codec with normal LSM-trie buffering.
