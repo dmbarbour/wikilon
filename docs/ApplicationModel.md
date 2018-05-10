@@ -26,18 +26,27 @@ This REPL corresponds closely to a *command pattern* from OOP. It enables access
 I have several desiderata for application models in Awelon systems:
 
 * composable: we can systematically embed or integrate applications
+* first-class: we can represent the application model within Awelon
 * accessible: we can render, animate, directly manipulate app state
 * immutable: state is represented by an immutable, non-unique value
 * sharable: can copy or move apps to a new environment and continue
 * concurrent: model many simultaneous interactions with environment
 * distributed: partition state and computation across many machines
-* deterministic: behavior is very predictable up to external inputs
+* deterministic: behavior is fully repeatable up to external inputs
 
-First-class representation is good for composition and sharing. Object identity and allocation should be avoided because they interfere with immutable representation, sharing, determinism (of ID creation), and garbage collection. Hierarchical structure could be useful for composition and distribution. Having a stable structure and state model is very convenient for accessibility and extensibility.
+First-class value representation of processes is convenient for composition, immutability, and sharing. However, first-class "object identity" - where we explicitly communicate references to process or state components - is problematic for sharing, composition, determinism, and even memory management. I'll directly exclude models that rely on object identity.
 
-*Note:* For fast early development, it might be best to initially focus on a simple proven model, like Erlang-style message passing or a simple monadic process model. 
+Concurrency requires we both represent multiple external requests and receive multiple inputs, and progress incrementally (i.e. such that supplying any requested input may result in new requests, no need to supply all inputs up-front). Distribution, meanwhile, requires long-lived components (relative to latencies), which tends to require incremental communication. Determinism, in context of concurrency, requires that any internal communications between components be confluent.
 
-# First Class Models
+Transparent representations are accessible. But opaque representations (abstract data types, closures, etc.) are convenient for protecting assumptions and state invariants. I suspect we'll want something in-between in practice.
+
+## Monadic Processes
+
+Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type.
+
+Concurrency and distribution without first-class channels requires careful consideration. Using a free monad representation, it is feasible to introduce concurrency extension like `fork-join : m a → m b → m (a * b)` that expose both component requests. For remote computations, we could feasibly introduce support for ad-hoc remote requests, e.g. `remote : Location → R a → m a`. But it's unclear how to effectively use *internal* distribution.
+
+Nonetheless, monadic processes are a *proven* model for effects with functional programming. It should be worth investing in as a means to quickly get started, implementing user-programmable tasks on Awelon web servers. Distribution isn't essential for many problems, and use of distributed resources is still feasible via accelerated models internally (e.g. accelerated subset of OpenCL). 
 
 ## Kahn Process Networks
 
@@ -45,7 +54,7 @@ I am interested in leveraging [Kahn Process Networks (KPNs)](https://en.wikipedi
 
 We can model reactive KPNs by adding explicit time-step message to every channel. This enables us to express either "no input until later" or "no input this time" to a process waiting on that channel. (The subtle difference is whether we permit streaming of many inputs within a time-step.) Each process would send similar messages on the appropriate output channels. With this, we can model real-time systems with asynchronous, interleaved inputs. We can also use acknowledgement channels to model network back pressure, i.e. so an upstream process doesn't push a message until prior messages are received. KPNs are effectively a deterministic variant of flow-based programming.
 
-The main weakness of KPNs is that it is difficult to represent dynamic network structure. We can potentially use first-class KPN values to model temporary subnets.
+The main weakness of KPNs is that it is difficult to represent a dynamic network structure. We can work around this a little using first-class KPN values, but even then it would be awkward to extract and preserve process state.
 
 ## Machines
 
@@ -53,15 +62,10 @@ The [machines](https://hackage.haskell.org/package/machines) model developed by 
 
         Step k o r = Stop | Yield o r | Await (k t) ((1+t) → r)
         Machine k o = Step k o (Machine k o)
-        MachineT m k o = m (Step k o (MachineT m k o))
 
-In each step, a machine can either halt, yield an output, or await an input. In the model provided above, awaiting an input may fail so we have a continue option. A `(k t)` value represents a request returning a type `t` value, relying on Haskell's support for GADTs to constrain the input type. The `(1+t)` at Await allows for a machine to handle request failure, e.g. if upstream input stops. The `MachineT` variant permits ad-hoc interactions with the monadic environment.
+In each step, a machine can either halt, yield an output, or await an input. Awaiting an input allows an explicit request `(k t)` and may fail so we accept a `(1+t)` result. Uniform input failure is convenient for accessibility: it allows us to compute and render a "current" incremental output assuming there are no more inputs.
 
-Awelon doesn't have great support for GADTs. But we could this simplify to:
-        
-        Step' i o r = Stop | Yield o r | Await ((1+i) → r)
-
-The simplified form cannot describe what it's waiting for. Regardless, we model a machine as a stream that requests incremental input, and potentially performs some interactions on the side. This structure is relatively more rigid than KPNs. But there is also a clear halting condition, which can serve as a useful basis for dynamic structure.
+Effectively, this is a model of streams with incremental inputs. It's more rigidly structured than KPNs, yet close in nature to monadic computations. 
 
 ## State Sharing Processes
 
@@ -76,45 +80,50 @@ Process model `P` is naive because it doesn't support waiting for input or proce
         type PR s = s → 1 + (s * PR s)                  P+Retry
         type PRC s = List of (s → 1 + (s * PRC s))      PR+Concurrency
 
-By introducing retry, a process can explicitly await state changes without a busy-wait loop. By modeling concurrent operations via collections of processes, we support non-determinism (scheduling within list is unspecified), and we can model process life cycles (spawning processes, termination via empty list).
+By introducing retry, a process can explicitly await state changes without a busy-wait loop. By modeling concurrent operations via collections of processes, we support non-determinism (scheduling within list is unspecified), and we can model process life cycles (spawning processes, termination via empty list). 
 
-Some other weaknesses can be addressed by focusing on the state model `s`. If our state model is logically monotonic in nature, we can reason more readily about behavior in the face of non-determinism. Hierarchical structure could simplify routing and distributed partitioning. Invariants could be protected by modeling an abstract data type with a constrained API.
+Some other weaknesses can be addressed by focusing on the state model `s`. If our state model is logically monotonic in nature, we can reason more readily about behavior in the face of non-determinism. Use of accelerated state models, such as KPNs, could support distributed and parallel computing. State invariants could be protected by modeling `s` as an abstract data type with a constrained API.
 
-Although the general idea seems promising, it's too high level to use directly.
-
-## Mobile Process Objects
-
-We can model a process as having a location on a stateful tape, grid, or network. In each step, the process could observe and manipulate "local" states, update its own state, and optionally navigate. We can also extend the model to processes with multiple locations - two fingers on the same tape, or on two separate tapes, logically pinching spaces together like a wormhole.
-
-The main advantage of this over state sharing processes is that we could distribute our grid or network across a physical machines to improve parallelism (assuming the process objects are also well distributed). The weaknesses of state sharing processes still apply.
+The main weakness is that there is no built-in coordination between processes. Each process obtains exclusive control of the state, and any coordination must be represented within the model itself. Also, there's no effective means to make this system observably deterministic.
 
 ## Behavioral Programming
 
-In [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/), our processes don't directly manipulate state. Instead, multiple processes - called behaviors - will automatically coordinate to compute a sequence of events. A behavior will suppress events, propose events, observe events, and potentially spawn new behaviors. Upon occurrence of an awaited event, a behavior's state may change. In simplest form, we might model this as:
+In [behavioral programming (BP)](http://www.wisdom.weizmann.ac.il/~bprogram/), processes don't directly manipulate state. Instead, concurrent processes - called behaviors - will automatically coordinate to compute a sequence of events. Each behavior can suppress events, propose events, observe events, and potentially terminate or spawn concurrent behaviors. In a purely functional system, we might model this as:
 
-        type B e = (List of e * (e → 1 + List of (B e)))
+        type B e = e → 1 + (S e)
+        type S e = (Set of e) * (Set of (B e))
 
-That is, each behavior is proposing a list of events and also provides a function to either suppress a proposed event or spawn a set of behaviors if that event is accepted. To be accepted, an event must be accepted by all coordinating behaviors. This idea could reasonably be extended with partial events, weighted events, or multiple event channels. 
+Our system has a set of proposed events and a set of behaviors. Each behavior has an opportunity to either suppress or accept an event. Upon acceptance, we will compute a next set of proposed events and behaviors. An event is accepted only if all behaviors in the current system accept it, and our next system is the union of next events and behaviors. External agents could interfere with this system by injecting new behaviors or events, or by selecting a non-deterministic "next" event after we filter the rejected events.
 
-I think this is interesting, but it seems difficult to integrate with real IO.
+Although behavioral programming uses the word "event", the value could feasibly represent a system state. Doing so would offer similar advantages as state-sharing processes. We can also support "soft" coordination models, e.g. by including a score upon acceptance, or representing sets as priority-ordered lists.
 
-## Message-Passing Models
+## Multi-Variable Behavioral Programming 
 
-Message-passing systems are easy to model and implement. In each step a machine will receive one message, compute a finite set of output messages, and update its private state. Messages are addressed to specific machines can contain arbitrary values. Unlike actors model, we do not assume the ability to spawn new machines - but we could model that as an effect. 
+For large systems, we need fine-grained state and behaviors. 
 
-        type Machine    = Message → (Machine * Queue of Message)
-        type Message    = Address * Content
-        type Network    = Map of Address to Machine * Queue of Message
+Assume our state or event is represented by a collection of single-assignment shared variables. Concurrent behaviors will observe and assign subsets of variables. A potential API:
 
-An application would be represented as a set of machines within a network. An implementation can readily partition the network of virtual machines across multiple physical machines. Distributed performance would rely on empirical determination of 'cliques' (groups of machines that mostly communicate internally). Effects and external outputs are represented by sending messages to addresses outside the network. But there are some issues:
+        get : Label a → m a
+        set : Label a → a → m 1
+        alt : m a → m a → m a
+        fail : ∀ a . m a
 
-* Message arrival order is generally non-deterministic. This generally requires a lot of overhead for coordination protocols. This could be ameliorated by assuming a "friendly" network that preserves batching and order of messages between any two machines.
+Use of `alt` allows for non-deterministic decisions. 
 
-* Messages will usually include a reply-to address. Unfortunately, this entangles machines and messages within a specific network. We cannot casually identify or rewrite addresses embedded within a message body. We cannot compose two networks that might have overlapping machine addresses. Relative addresses would not preserve meaning when tasks are refactored or delegated to subordinate machines. 
+To model stateful behaviors, we might loop or enable access to history:
 
-For the latter reason, I'm hesitant to favor any model relying on first-class object identity. Yet message-passing would be an easy path to useful real world systems.
+        type B = List of (m B)      STATEFUL LOOP
+        hist : Label a → m a        STATEFUL HISTORY
+
+Access to historical information is more convenient in context of live software updates, job control, state accessibility, etc.. Loops, especially with concurrency, tend to be opaque and escape the thumb of human users. In case of access to history, we might assume a low-priority optional behavior of form `hist label >>= set label` to preserve unassigned variables across time-steps by default, plus a `reset` function to drop variables.
+
+To support priority explicitly, we could prioritize `alt` by including a number that heuristically indicates how much weight we should associate with the first option above the second. To support scratch-spaces for computations and composition of applications, we could also support a hierarchical state model with subdirectories, e.g. `in : Directory → m a → m a`. For concurrent operations, we can safely add a `fork` operation due to single-assignment restrictions.
+
+The main weakness of this model is that it results easily in combinatorial explosions of possible solutions. This seems to be a fundamental issue, unavoidable for fine-grained state. It can be mitigated by prioritized choice.
 
 # Second Class Models
+
+Although these aren't suitable as a foundation for *general* applications, they could still be useful and interesting.
 
 ## Expressive Spreadsheets
 
@@ -139,7 +148,9 @@ A command pattern might be represented as:
         :foo-99 foo-98 command99
         :foo-hd foo-99
 
-Essentially, we represent a stream of commands manipulating a state. The explicit representation simplifies historical views, forking, undo, and similar. In general, keeping the entire history of commands may cost too much in some cases, so we may need to occasionally checkpoint the state. But for many use cases, the number of commands won't be too large and checkpoints may be managed explicitly.
+Essentially, we represent a stream of commands manipulating a state. We could render the state after each command, like a REPL or notebook application. The explicit representation simplifies historical views, forking, undo, and similar. In general, keeping the entire history of commands may cost too much in some cases, so we may need to occasionally checkpoint the state. But for many use cases, the number of commands won't be too large and checkpoints may be managed explicitly.
+
+*Aside:* This could also be viewed as a specialized 1D spreadsheet.
 
 ## Publish Subscribe
 
