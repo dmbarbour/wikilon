@@ -205,6 +205,9 @@ module Dict =
             then { dict with defs = CritbitTree.remove sym (dict.defs) }
             else { dict with defs = CritbitTree.add sym defOpt (dict.defs) }
 
+    let inline add sym def d = updSym sym (Some def) d
+    let inline remove sym d = updSym sym None d
+
     /// Update directory index at a given prefix.
     let updPrefix (p:Prefix) (dir:Dir) (dict:Dict) : Dict =
         // mask existing entries with the given prefix
@@ -613,7 +616,7 @@ module Dict =
     // independently. The codec provides the strategy for how to
     // merge or chain updates. We do assume that compaction will
     // control maximum size at the prefix (e.g. after compaction,
-    // a node shouldn't require more than 2kB to serialize).
+    // a node shouldn't require much more than 2kB to serialize).
     let private nodeFlush (thresh:SizeEst) (c:Codec<Dict>) (db:Stowage) (struct(d0,sz0)) =
         if (sz0 < thresh) then struct(d0,sz0) else
         let step (ix:byte) (d:Dict) : Dict = 

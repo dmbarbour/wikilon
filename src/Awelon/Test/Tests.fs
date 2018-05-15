@@ -7,7 +7,6 @@ open Stowage
 open Awelon
 open Data.ByteString
 
-
 // For parser tests, it's convenient to parse then print and
 // compare the printed string. If parse fails, we can instead
 // test the remainder with "?rem".
@@ -45,6 +44,41 @@ let ``basic parser tests`` () =
     Assert.Equal("hello/world/[1]", ps "  hello/world/[  1  ]  ")
     Assert.Equal("a/b/c/d", ps "  a/b/c/d  ")
     Assert.Equal("? []", ps "hello/world/ []")
+    Assert.Equal("(hello)", ps "  (hello)  ")
+    Assert.Equal("?(hel ", ps "  (hel ")
+    Assert.Equal("?) ", ps "  hello) ")
+    Assert.Equal("?%bbb", ps "  %bbb")
+    let h = RscHash.hash (BS.fromString "test")
+    let asBin = BS.toString (BS.cons (byte '%') h)
+    let asRsc = BS.toString (BS.cons (byte '$') h)
+    Assert.Equal(asBin, ps asBin)
+    Assert.Equal(asRsc, ps asRsc)
+
+//   Atom = Word | Annotation | Nat | Text | Resource | Label 
+//
+//   Word = [a-z][a-z0-9-]* 
+//   Annotation = '(' Word ')'
+//   Nat = '0' | [1-9][0-9]*
+//   Text = '"' (not '"')* '"'
+//   Resource = BinRef | CodeRef
+//   BinRef = '%' RscHash
+//   Label = LabelPut | LabelGet
+//   LabelPut = ':' Word
+//   LabelGet = '.' Word
+
+let inline s n = BS.fromString (string n)
+let inline addS s d = Dict.add s (Dict.Def(s)) d
+let inline addN (n:int) (d:Dict) : Dict = addS (s n) d
+let inline remN (n:int) (d:Dict) : Dict = Dict.remove (s n) d
+
+[<Fact>]
+let ``simple dict tests`` () =
+    Assert.True(Dict.isEmpty (Dict.empty))
+    Assert.False(Dict.isEmpty (Dict.empty |> addN 1))
+    Assert.True(Dict.isEmpty (Dict.empty |> addN 1 |> remN 1))
+    
+
+// TODO: test simple interpreters, fixpoint functions, etc.
 
 
 // a fixture is needed to load the database
@@ -96,7 +130,11 @@ type DBTests =
         gcLoop 0UL
 
 
+    // Assuming entries of around 10 bytes each, and pages of 50k, we need
+    // 5000 entries per page. So a few million entries corresponds a few
+    // tens of pages, which is sufficient for testing.
     
+   
 
 
 
