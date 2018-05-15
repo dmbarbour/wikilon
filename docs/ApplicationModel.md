@@ -108,7 +108,7 @@ Assume our state or event is represented by a collection of single-assignment sh
         alt : m a → m a → m a
         fail : ∀ a . m a
 
-Use of `alt` allows for non-deterministic decisions. 
+Use of `alt` allows for non-deterministic decisions, with `fail` eliminating some decisions. Setting a variable twice will also result in failure. Labels can feasibly be constructed based on types, or have a finite set of types.
 
 To model stateful behaviors, we might loop or enable access to history:
 
@@ -119,7 +119,26 @@ Access to historical information is more convenient in context of live software 
 
 To support priority explicitly, we could prioritize `alt` by including a number that heuristically indicates how much weight we should associate with the first option above the second. To support scratch-spaces for computations and composition of applications, we could also support a hierarchical state model with subdirectories, e.g. `in : Directory → m a → m a`. For concurrent operations, we can safely add a `fork` operation due to single-assignment restrictions.
 
-The main weakness of this model is that it results easily in combinatorial explosions of possible solutions. This seems to be a fundamental issue, unavoidable for fine-grained state. It can be mitigated by prioritized choice.
+Weaknesses of this model are combinatorial explosions of search paths (too many options) and expression of concurrent constraints or contributions to a single value (e.g. no way for individual behaviors to say "render this" then combine all these options).
+
+## Reactive Demand Programming
+
+Reactive Demand Programming (RDP) allows multiple behaviors to contribute to a value explicitly, combining these "contributions" into a shared set (e.g. via union function). Minimally, a monadic API like this:
+
+        get : Label a → m (Set of a)      CURRENT STATE
+        put : Label a → Set of a → m ()   FOR NEXT STATE
+
+Like BP, this uses the idea of modeling processes with continuously applied behaviors instead of a stateful loop. This is very convenient for live programming. And we could also borrow the idea of suppression from BP, albeit without failure:
+
+        suppress : Label a → (a → bool) → m ()
+
+The main difference from BP is that RDP behaviors will observe a full set instead of candidates for a variable, instead of non-deterministically selecting one candidate. This avoids the combinatorial explosions, and is more expressive for concurrent constraints or contributions. OTOH, to provide deterministic representations for `Set of a`, we generally require type `a` to be comparable (e.g. integers and texts are okay, but not arbitrary functions).
+
+Effects will be modeled in terms of sharing a subset of variables with external behaviors. Besides RDP variables, we could support concurrent forks and perhaps some single-assignment variables within a time step. Hierarchical structure for labeled variables can also be useful. We could ameliorate the volatility of RDP variables by assuming a concurrent `get >>= put` behavior for a subset of "durable" variables (depending on label), in which case suppression would be necessary to erase values.
+
+For distributed systems, we could leverage hierarchical structure for labels, and support "asynchronous" behaviors in terms of awaiting stable/fixpoint variable states or using explicit `delay` operations to distribute a behavior over time. (However, we might impose a maximum quota for delay.) 
+
+RDP is a programming model designed for Awelon project. It's a great fit for live programming. The main weakness is that we'll need to write several ad-hoc effects adapters. Adapting to external publish-subscribe systems is perhaps the easiest.
 
 # Second Class Models
 
