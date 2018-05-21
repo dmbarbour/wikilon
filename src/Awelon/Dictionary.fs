@@ -394,6 +394,9 @@ module Dict =
                 let k' = BS.drop (BS.length p) k
                 tryFind k' (load dir)
 
+    /// Test whether dictionary contains a specified symbol.
+    let inline contains (k:Symbol) (d:Dict) : bool = 
+        Option.isSome (tryFind k d)
 
     // TODO: support review of historical definitions recorded in
     // the dictionary?
@@ -423,8 +426,8 @@ module Dict =
 
     // Concatenate dictionaries at entry level, optimized for larger b.
     // That is, we'll iterate entries in `a` instead of `b`. This isn't
-    // safe for the general use case due to how we erase some prefixes.
-    // But it's useful when `a` is a directory extracted from `b`.
+    // safe for the general use case due to how we erase some entries.
+    // But it's useful for merging subdirectories into the root node.
     let private concatDictEnts (a:Dict) (b:Dict) : Dict =
         if isEmpty b then a else
         let inline maskPrefix p = Option.isSome (matchDirT p (b.dirs))
@@ -657,7 +660,7 @@ module Dict =
             member c.Compact db d =
                 let struct(prior,upd) = splitProto d
                 if isEmpty upd then struct(d, sizeDict d) else
-                let d0 = concatDictEnts' (load prior) upd
+                let d0 = concatDictEnts (load prior) upd
                 (struct(d0, sizeDict d0))
                     |> nodeFlush updBuff c db 
                     |> nodeStow nodeMin c db 
@@ -675,25 +678,35 @@ module Dict =
     // Flush nodes if they're larger than 30 small nodes (~48kB).
     let private defaultUpdBuff = 30UL * defaultNodeMin
 
-    /// Node codec with default LSM-trie compaction thresholds. 
+    /// Node codec with buffered update LSM-trie compactions. 
     let node_codec = node_codec_config defaultNodeMin defaultUpdBuff
+    let inline compact db d = Codec.compact node_codec db d
 
-    /// Node codec with Trie compactions: no update buffering.
+    /// Node codec with history-independent Trie compactions.
     let node_codec' = node_codec_config defaultNodeMin 0UL
+    let inline compact' db d = Codec.compact node_codec' db d
 
-    /// The root codec is for the "root" Dict value.
+    /// Stow a Dict to a Dir.
     ///
-    /// Critically, this prefixes the Dict value with size information
-    /// so we can use the Dict within other Stowage data structures. 
-    /// For contrast, node_codec will always consume the remainder of
-    /// the byte stream when reading or writing.
-    let inline root_codec_config (nc:Codec<Dict>) = EncSized.codec nc
+    /// This creates a new Stowage node, unless applied to a trivial
+    /// dictionary (empty or single `/ secureHash` line). Compaction
+    /// is not implicit, the Dict is stored as it is. Note: this may
+    /// create small directory nodes, which may be inefficient.
+    let stow (db:Stowage) (d:Dict) : Dir = 
+        let struct(prior,upd) = splitProto d 
+        if isEmpty upd then prior else
+        Some (VRef.stow (node_codec) db d)
 
-    /// Root Dict value codec with normal LSM-trie buffering.
-    let root_codec = root_codec_config node_codec
+    /// This `codec` frames the Dict value with size information.
+    /// This enables use within other Stowage data types, but is 
+    /// unsuitable for internal directory nodes. In contrast, the
+    /// `node_codec` consumes an entire byte stream.
+    ///
+    /// This version uses buffered update LSM-trie compaction.
+    let codec = EncSized.codec node_codec
 
-    /// Root Dict value codec with Trie-style compactions.
-    let root_codec' = root_codec_config node_codec'
+    /// As `codec`, but history-independent Trie compactions.
+    let codec' = EncSized.codec node_codec'
 
     // TODO: potential extensions
     //
