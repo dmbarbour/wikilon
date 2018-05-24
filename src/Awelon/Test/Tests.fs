@@ -60,10 +60,9 @@ let ``basic parser tests`` () =
 
 // TODO: test interpreters
 
-
+let testDefStr = BS.fromString "this is a volume-filling test definition for awelon dictionaries"
 let inline bs n = BS.fromString (string n)
-let inline addS s d = Dict.add s (Dict.Def(s)) d
-let inline addN (n:int) (d:Dict) : Dict = addS (bs n) d
+let inline addN (n:int) (d:Dict) : Dict = Dict.add (bs n) (Dict.Def(testDefStr)) d
 let inline remN (n:int) (d:Dict) : Dict = Dict.remove (bs n) d
 let inline flip fn a b = fn b a
 
@@ -162,71 +161,82 @@ type DBTests =
             if (ct' <> ct) then gcLoop ct'
         gcLoop 0UL
 
-
-
-    // Assuming entries of around 10 bytes each, and pages of 50k, we need
-    // ~5000 entries per page. So a few million entries corresponds a few
-    // tens of pages, which is sufficient for testing compactions. Or I can
-    // try a smaller page/buffer size.
     [<Fact>]
     member tf.``test dict compaction`` () =
-        let rng = new System.Random(13)
-        let sw_write = new System.Diagnostics.Stopwatch()
-        let sw_read = new System.Diagnostics.Stopwatch()
+        let rng = new System.Random(11)
+        let sw = new System.Diagnostics.Stopwatch()
         let cc d = Dict.compact (tf.Stowage) d
-        let frac = 1000 
+        let frac = 3000
         let compactK k d = if (0 <> (k % frac)) then d else cc d
         let add n d = compactK n (addN n d)
         let rem n d = compactK n (remN n d)
-        let a = [| 1 .. 60000 |]
+        let a = [| 1 .. 70000 |]
         let r = [| 1 .. (a.Length / 3) |] 
         shuffle rng a
         shuffle rng r
 
-        sw_write.Start()
+        printfn "building a test dictionary"
+        sw.Restart()
         let d =  Dict.empty
               |> Array.foldBack add a 
               |> Array.foldBack rem r
               |> Dict.compact (tf.Stowage)
         tf.Flush()
-        sw_write.Stop()
+        sw.Stop()
+        printfn "test dictionary built (%A ms)" (sw.Elapsed.TotalMilliseconds)
 
         let sz = Dict.sizeDict d
-        printfn "dict root node size: %A" sz
+        //printfn "dict root node size: %A" sz
         Assert.True((0UL < sz) && (sz < 1600UL))
 
         let write_op_ct = Array.length a + Array.length r
-        let write_op_usec = (1000.0 * sw_write.Elapsed.TotalMilliseconds) / (double write_op_ct)
-        printfn "constructed dict containing %A" (Dict.toSeq d |> Seq.map (fst >> BS.toString))
-        printfn "final root dict node:\n%s" (d |> Dict.writeDict |> BS.toString)
+        let write_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double write_op_ct)
         printfn "usec per write op: %A" write_op_usec
 
         Assert.False(Dict.contains (bs 1) d)
+        Assert.False(Dict.contains (bs (a.Length / 3)) d)
+        Assert.False(Dict.contains (bs ((a.Length / 3) - 1)) d)
+        Assert.False(Dict.contains (bs (a.Length / 7)) d)
         Assert.True(Dict.contains (bs a.Length) d)
+        Assert.True(Dict.contains (bs (a.Length - 1)) d)
+        Assert.True(Dict.contains (bs ((a.Length - 1) / 2)) d)
 
         // really doing iteration (sequential read). I might need to test
         // performance of random reads, seperately. But this isn't primarily
         // a performance test.
         let accum s n = s + uint64 n
+        let array_sum arr = Array.fold accum 0UL arr
+        let sum_expected = array_sum a - array_sum r
 
-        sw_read.Start()
-        printfn "computing length"
+        sw.Restart()
         let len = Dict.toSeq d |> Seq.length
-        printfn "len = %A; computing sum" len
         let sum = Dict.toSeq d
                 |> Seq.map (fst >> readNat)
                 |> Seq.fold accum 0UL
-        printfn "sum = %A" sum
-        sw_read.Stop()
-        printfn "sum: %A, len: %A" sum len
-        Assert.Equal(len, Array.length a - Array.length r)
-
-        let array_sum arr = Array.fold accum 0UL arr
-        let sum_expected = array_sum a - array_sum r
-        Assert.Equal(sum, sum_expected)
+        sw.Stop()
         let read_op_ct = 2 * len
-        let read_op_usec = (1000.0 * sw_read.Elapsed.TotalMilliseconds) / (double read_op_ct)
+        let read_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double read_op_ct)
         printfn "usec per read op: %A" read_op_usec
+        Assert.Equal(len, Array.length a - Array.length r)
+        Assert.Equal(sum, sum_expected)
+
+        // random-read performance test
+        shuffle rng a
+        let fnAccum acc k = 
+            match Dict.tryFind (bs k) d with
+            | Some _ -> (acc + uint64 k)
+            | None -> acc
+        sw.Restart()
+        let rsum = Array.fold fnAccum 0UL a
+        sw.Stop()
+        let rread_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double (Array.length a))
+        printfn "usec per random read op: %A" rread_op_usec
+        Assert.Equal(rsum,sum_expected)
+
+        
+        
+        
+
 
 
 

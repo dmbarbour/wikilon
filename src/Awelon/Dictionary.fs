@@ -114,7 +114,7 @@ module Dict =
     ///  None     -> /prefix
     ///
     /// This directory structure is encoded using VRef to simplify
-    /// GC management, but we require the standard dictionary codec.
+    /// GC integration, but we require a standard dictionary codec.
     [<Struct>]
     type Dict = 
         { dirs : CritbitTree<Dir>
@@ -238,12 +238,13 @@ module Dict =
         | CritbitTree.Leaf v -> struct(v,CritbitTree.Empty)
 
     let inline private stepDefEntL dict s defN =
+        // this is duplicate code within stepEntL
         let struct(def,defs') = splitLeftValN defN
         let dict' = { dict with defs = defs' }
-        struct(Define(s,def),dict')
+        (Define(s,def),dict')
 
     // Separate an entry from remainder of dictionary.
-    let private stepEntL (dict:Dict) : (struct(DictEnt * Dict)) option =
+    let private stepEntL (dict:Dict) : (DictEnt * Dict) option =
         match dict.dirs with
         | CritbitTree.Root(p,dirsN) ->
             match dict.defs with
@@ -252,7 +253,7 @@ module Dict =
             | _ -> 
                 let struct(dir,dirs') = splitLeftValN dirsN
                 let dict' = { dict with dirs = dirs' }
-                Some(struct(Direct (p,dir), dict'))
+                Some(Direct (p,dir), dict')
         | CritbitTree.Empty ->
             match dict.defs with
             | CritbitTree.Root(s,defN) -> 
@@ -262,13 +263,7 @@ module Dict =
 
     /// Expand to sequence of entries, sorted such that prefix /p
     /// would appear just before :p, using the bytestring order.
-    let rec toSeqEnt (dict:Dict) : seq<DictEnt> = seq {
-        match stepEntL dict with
-        | Some(struct(e,dict')) -> 
-            yield e
-            yield! toSeqEnt dict'
-        | None -> ()
-        }
+    let toSeqEnt (dict:Dict) : seq<DictEnt> = Seq.unfold stepEntL dict
 
     /// Apply a stream or sequence of entries to a dictionary.
     let inline applySeqEnt (d:Dict) (s:seq<DictEnt>) : Dict =
@@ -288,20 +283,20 @@ module Dict =
         let struct(sym,spdef) = BS.span ((<>) cSP) (BS.unsafeTail ln)
         let def = BS.drop 1 spdef // drop symbol-def separator
         if (c0 = cDef) then Define(sym, Some (mkDef def)) else
-        let h = trimSP def // ignore whitespace for Del and Def lines.
+        let h = trimSP def // ignore whitespace for Del and Dir lines.
         if ((c0 = cDel) && (BS.isEmpty h)) then Define (sym, None) else
         if ((c0 = cDir) && (BS.isEmpty h)) then Direct (sym, None) else
         if ((c0 = cDir) && (RscHash.isValidHash h)) then Direct (sym, Some (mkDir h)) else
         raise ByteStream.ReadError
 
+    let private parseLineStep onLine s =
+        if BS.isEmpty s then None else
+        let struct(ln,more) = BS.span ((<>) cLF) s
+        Some (onLine ln, BS.drop 1 more)
+
     /// Parse entries in a dictionary string. May raise ByteStream.ReadError.
-    let rec parseDictEnts mkDef mkDir (s:ByteString) : seq<DictEnt> =
-        if BS.isEmpty s then Seq.empty else
-        seq {
-            let struct(line,lfmore) = BS.span ((<>) cLF) s
-            yield parseDictEnt mkDef mkDir line
-            yield! parseDictEnts mkDef mkDir (BS.drop 1 lfmore)
-        }
+    let parseDictEnts mkDef mkDir (s:ByteString) : seq<DictEnt> =
+        Seq.unfold (parseLineStep (parseDictEnt mkDef mkDir)) s
 
     let inline parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
@@ -370,7 +365,7 @@ module Dict =
             let mkDef s = Def(s, (ref :> System.Object))
             let mkDir h = VRef.wrap (ref.Codec) (ref.DB) h
             let s = ref.DB.Load(ref.ID)
-            let sz = 120UL + uint64 (BS.length s)
+            let sz = 200UL + uint64 (BS.length s)
             let d = parseDict mkDef mkDir s
             System.GC.KeepAlive(ref)
             MCache.tryAdd (ref.ID) d sz (dictLoadCache)
@@ -478,24 +473,21 @@ module Dict =
 
     // Note: For now, I'm assuming the prototype chain is relatively
     // short, so we just merge it as needed. This assumption holds 
-    // for the default codec compaction method. Consequently, I don't
-    // try to find common ancestors or similar.
+    // for the provided codecs. 
 
-    /// Iterate through all defined symbols in order.
-    let rec toSeq (d:Dict) : seq<(Symbol * Def)> = seq {
+    let rec private seqStep (d:Dict) : Option<(Symbol * Def) * Dict> =
         match stepEntL d with
-        | Some(struct(e,d')) ->
+        | Some(e,d') ->
             match e with
-            | Define(sym, Some def) -> 
-                yield (sym,def)
-                yield! toSeq d'
+            | Define(sym, Some def) -> Some ((sym,def),d')
             | Direct(p, Some ref) ->
                 let dp = prependPrefix p (loadRef ref)
-                yield! toSeq (concatDictEnts dp d')
-            | _ -> 
-                yield! toSeq d'
-        | None -> ()
-        }
+                seqStep (concatDictEnts dp d')
+            | _ -> seqStep d'
+        | None -> None
+
+    /// Iterate through all defined symbols in order.
+    let toSeq (d:Dict) : seq<(Symbol * Def)> = Seq.unfold seqStep d
 
     // iteratively partition dictionary, accumulating directories
     // to left of the given key in 'l' and opening directories if
@@ -589,30 +581,27 @@ module Dict =
                 let struct(dir,upd) = splitProto (extractPrefix prefix origin)
                 struct(dir, concatDictEnts (prependPrefix prefix upd) local)
 
-        let rec diffLoop a b = seq {
+        let rec diffLoop (struct(a,b)) = 
             // a,b serve as iterators and accumulators
             match minSym (leastSym a) (leastSym b) with
-            | None -> ()
+            | None -> None
             | Some(struct(s,isDir)) -> 
                 if not isDir then
                     let struct(defA, a') = stepDef a0 s a
                     let struct(defB, b') = stepDef b0 s b
                     match diffOpt defA defB with
-                    | Some vdiff -> yield (s, vdiff)
-                    | None -> ()
-                    yield! diffLoop a' b'
+                    | Some vdiff -> Some((s, vdiff),struct(a',b')) // yields here
+                    | None -> diffLoop (struct(a',b'))
                 else
                     let struct(dirA, a') = stepDir a0 s a
                     let struct(dirB, b') = stepDir b0 s b
                     // short-circuit if prefixes refer to same node
-                    if (dirA = dirB) then yield! diffLoop a' b' else
+                    if (dirA = dirB) then diffLoop (struct(a',b')) else
                     // otherwise, merge the two prefixes and continue
                     let inline ld dir = prependPrefix s (mergeProto (load dir))
                     let inline m dir d0 = concatDictEnts (ld dir) d0
-                    yield! diffLoop (m dirA a') (m dirB b')
-            }
-        diffLoop a0 b0
-
+                    diffLoop (struct(m dirA a', m dirB b'))
+        Seq.unfold diffLoop (struct(a0,b0))
 
     // If the node is large enough, flush updates to child nodes.
     // This is achieved by extracting and compacting each prefix
@@ -637,7 +626,8 @@ module Dict =
     let private nodeStow (thresh:SizeEst) (c:Codec<Dict>) (db:Stowage) (struct(d0,sz0)) =
         if (sz0 < thresh) then struct(d0,sz0) else
         let d = fromProto (Some (VRef.stow c db d0))
-        struct(d, sizeDict d)
+        let sz = uint64 (3 + RscHash.size)
+        struct(d,sz)
 
 
     /// LSM-trie based codec for Dictionary nodes.
@@ -675,8 +665,8 @@ module Dict =
     // Limit reference overheads to about 4% (~1.6kB)
     let private defaultNodeMin = 25UL * uint64 (RscHash.size)
 
-    // Flush nodes if they're larger than 30 small nodes (~48kB).
-    let private defaultUpdBuff = 30UL * defaultNodeMin
+    // Flush nodes if they're larger than 25 small nodes (~40kB).
+    let private defaultUpdBuff = 25UL * defaultNodeMin
 
     /// Node codec with buffered update LSM-trie compactions. 
     let node_codec = node_codec_config defaultNodeMin defaultUpdBuff
@@ -690,8 +680,7 @@ module Dict =
     ///
     /// This creates a new Stowage node, unless applied to a trivial
     /// dictionary (empty or single `/ secureHash` line). Compaction
-    /// is not implicit, the Dict is stored as it is. Note: this may
-    /// create small directory nodes, which may be inefficient.
+    /// is not implicit! The Dict is stored as is.
     let stow (db:Stowage) (d:Dict) : Dir = 
         let struct(prior,upd) = splitProto d 
         if isEmpty upd then prior else
@@ -707,6 +696,18 @@ module Dict =
 
     /// As `codec`, but history-independent Trie compactions.
     let codec' = EncSized.codec node_codec'
+
+    // Performance Note:
+    //
+    //  I'm not thrilled about current performance. I'm getting
+    //  reads at 10-15usec, mixed write+compaction at 20-60 
+    //  (depending on compaction frequency), for a simple test.
+    //  For comparison, a similar test under LSMTrie gets 3usec
+    //  reads and 12usec writes. 
+    //
+    //  Use of MCache over raw VRef can save a lot of time for
+    //  random reads, but I'm uncertain whether it would be better
+    //  and simpler to use LVRef for now.
 
     // TODO: potential extensions
     //
