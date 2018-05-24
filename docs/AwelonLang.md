@@ -71,7 +71,7 @@ Awelon uses the 320-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the h
 
 We can safely neglect the theoretical concern of secure hash collisions. If BLAKE2b is cracked in the future, we can address it then by transitively rewriting all secure hashes in our Awelon dictionaries. I won't further belabor the issue. 
 
-*Security Note:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat a secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should guard against timing attacks that might leak these secure hashes. Favor constant-time comparisons when using hashes as keys, for example.
+*Security Notes:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat each secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should guard against timing attacks that might leak these secure hashes. Favor constant-time comparisons when using hashes as lookup keys, for example. In context of distributed storage, it may prove useful to use the first half of each hash for lookups and the remainder as a key for AES decryption. Finally, for resources with private, low-entropy data (like a phone number or credit card number), embedding a comment with a random string can help resist "does this data exist?" attacks. 
 
 ## Labeled Data
 
@@ -93,12 +93,12 @@ For variants, the basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(
 
 ## Annotations
 
-Annotations in Awelon take the form of a parenthetical word, such as `(par)` or `(error)`. Annotations formally have identity semantics, but may inform an interpreter or compiler to verify assumptions, optimize representations, influence evaluation order, trace debug outputs, fail fast on assertions. Annotations represent a programmer's assumptions or intentions. The set of supported annotations depends on the runtime system and should be documented carefully and adhere to de-facto standards. 
+Annotations in Awelon take the form of a parenthetical word, such as `(par)` or `(error)`. Annotations must formally have identity semantics, but may inform an interpreter or compiler to verify assumptions, fail fast on assertions, optimize representations, influence evaluation order, manage quotas, and render or breakpoint intermediate states for debugging. Annotations represent a programmer's assumptions or intentions that cannot be encoded using `a b c d` primitives. The set of supported annotations depends on the runtime system and should be documented carefully and adhere to de-facto standards.
 
 Potential annotations:
 
-* `(trace)` - record argument to a debug log
-* `(error)` - prevent progress within computation
+* `(trace)` - print argument to debug console or log
+* `(error)` - prevent progress within a computation
 * `(par)` - evaluate argument in parallel, in background
 * `(eval)` - evaluate argument before progressing further
 * `(stow)` - move large values to disk, load on demand
@@ -111,14 +111,13 @@ Potential annotations:
 * `(type)` - describe type of stack at given location
 * `(quota)` - impose limits on argument evaluation effort
 
-Some annotations such as `(par)` or `(jit)` are tags. They attach to a value:
+Some annotations such as `(jit)` are tags. They attach to a value:
 
         [A](tag) [B]b ==  [[A](tag) B]
 
-Some annotations, such as `(type)` or `(quota)`, require an extra argument: 
+Some annotations, such as `(type)` may require an additional argument: 
 
-        [Stack Descriptor](type)d
-        [Quota Descriptor](quota)d
+        [Type Descriptor](type)d
 
 Awelon does not constrain annotations beyond requirement for identity semantics.
 
@@ -138,9 +137,8 @@ Stowage is a simple idea, summarized by rewrite rules:
 
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
-        [large binary](stow) => %secureHash
 
-Stowage uses the *Secure Hash Resources* space to offload data from working memory. This actual offload effort would usually occur lazily, when space is needed. The data will be loaded again if necessary. Essentially, this gives us an immutable, persistent virtual memory model. What "large" means is heuristic, but should be simple to understand, predict, and reproduce. 
+Stowage uses the *Secure Hash Resources* space to offload data from working memory. This actual offload would usually apply lazily, when space is needed. The data will be loaded again when observed. Essentially, this gives us an immutable virtual memory model suitable for persistent data structures. What "large" means is heuristic, but should be simple to understand, predict, and reproduce. A simple rule like "1600 bytes is the lower bound of large" should be sufficient.
 
 ## Dictionary
 
@@ -154,15 +152,19 @@ The proposed representation:
         :symbol2 definition2
         ~symbol3
 
-A dictionary 'node' is a line-oriented ASCII text, representing an update log. Most lines will define or delete symbols (`:` or `~` respectively), but we may also index a prefix to a subtree (via `/`). Symbols usually correspond to Awelon words, and definitions to Awelon code. Internal nodes are identified by their secure hash, cf. *Secure Hash Resources*. Symbols for inner nodes are stripped of the matched prefix, hence `:poke` under `/p` becomes `:oke`. For lookup, only the last update for a given symbol or prefix is used. Hence, `/p` will mask all prior updates with prefix `p` such as `/prod` and `:poke`. We can normalize our dictionary nodes by erasing irrelevant updates and sorting whatever remains.
+A dictionary 'node' is represented with dense, line-oriented ASCII text, representing an update log. Most lines will define or delete symbols (`:` or `~` respectively), but we may also index a prefix to a subtree (via `/`). Symbols usually correspond to Awelon words, and definitions to Awelon code. Internal nodes are identified by their secure hash, cf. *Secure Hash Resources*. Symbols for inner nodes are stripped of the matched prefix, hence `:poke` under `/p` becomes `:oke`. For lookup, only the last update for a given symbol or prefix is used. Hence, `/p` will mask all prior updates with prefix `p` such as `/prod` and `:poke`. We can normalize our dictionary nodes by erasing irrelevant updates and sorting whatever remains.
 
-This representation combines characteristics of the LSM-tree, radix tree, and Merkle tree. It supports deeply immutable structure, structure sharing, lightweight version snapshots, lazy compaction, distributed storage, efficient diffs, and lightweight real-time working set updates. The empty prefix `/ secureHash` can be used to represent prototype inheritance, checkpoints, or resets. Like other LSM-trees, this does allow capture of multiple definitions for a symbol. But even that can be useful to optimize caching based on relative stability of definitions.
+For oversized definitions, this representation can be inefficient. We can ameliorate this by moving oversized definitions into the resource layer via `$secureHash` redirect.
 
-### Libraries and Modules 
+This representation combines characteristics of the LSM-tree, radix tree, and Merkle tree. It supports deeply immutable structure, structure sharing, lightweight version snapshots, lazy compaction, distributed storage, efficient diffs, and soft real-time streaming updates. The empty prefix `/ secureHash` can be leveraged to represent prototype inheritance or a stream reset. Like other LSM-trees, this does allow capture of multiple definitions for a symbol. But even that can be useful to optimize separate compilation based on relative stability of definitions.
+
+*Note:* Comments are not supported! Instead, embed comments within Awelon definitions (via `"comment"(a2)d`), or define words associated by ad-hoc conventions like `foo-doc` as documentation for `foo`. For dictionary-level metadata, consider defining words with a `meta-` prefix. This allows for documentation to be structured, abstracted, and indexed.
+
+### Software Packaging and Distribution
 
 For Awelon project, the intention is that we'll usually curate and share entire dictionaries - ensuring all definitions are versioned, managed, tested together. Instead of libraries, software distribution would be modeled via DVCS-inspired mechanisms - pull requests, bug reports, etc.. 
 
-However, a dictionary can represent conventional libraries using subsets of words with a common prefix. For example, `/math- secureHash` patches in the specified version of a math library. If users insist, it would not be difficult to distribute software based on this. A projectional editor could support namespaces that hide the prefix for reading the code.
+However, we can still support a more conventional software library/package model. In this case, all words in our package could define words with a common prefix such as `math-`. A line such as `/math- secureHash` would then embed the package in the dictionary. The secure hash serves as a fully specified, verifiable, provider-independent version number, albeit without any semantic versioning. We can also define `:math-meta-version "1.0.34"` if users insist. Although Awelon does not have namespaces built-in, we can leverage *Editable Views* to mask long prefixes.
 
 ### Hierarchical Dictionary Structure
 
@@ -285,11 +287,11 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Besides numeric towers, editable views could easily support lists, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Line comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is also feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors.
+This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Relative to built-in number support, there is some storage overhead - but it's relatively minor at larger scales (and compresses well). Besides numeric towers, editable views could feasibly support lists and matrices, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors, or other graphical expression of meaning.
 
 We can also project edit sessions that view and edit multiple words together. In simplest form, we might have `my-session = [foo][bar][baz]` so we can 'open' the session then edit those three words together.
 
-Although our initial emphasis is plain text views, the eventual goal is to support richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, spreadsheets, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined/opened into the current view.
+Although our initial emphasis is plain text views, the eventual goal is to support richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, copyable forms, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined/opened into the current view.
 
 ### Named Local Variables
 

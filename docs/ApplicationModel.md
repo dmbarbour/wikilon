@@ -42,9 +42,11 @@ Transparent representations are accessible. But opaque representations (abstract
 
 ## Monadic Processes
 
-Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type.
+Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type. Of course, this still leaves a big question regarding which effects to model.
 
 Concurrency and distribution without first-class channels requires careful consideration. Using a free monad representation, it is feasible to introduce concurrency extension like `fork-join : m a → m b → m (a * b)` that expose both component requests. For remote computations, we could feasibly introduce support for ad-hoc remote requests, e.g. `remote : Location → R a → m a`. But it's unclear how to effectively use *internal* distribution.
+
+The [Do Be Do Be Do](https://arxiv.org/pdf/1611.09259.pdf) paper for the Frank language describes n-ary operators that can process multiple computations simultaneously. This might offer a path towards distributed and concurrent monadic computations, but the model is not clear to me yet.
 
 Nonetheless, monadic processes are a *proven* model for effects with functional programming. It should be worth investing in as a means to quickly get started, implementing user-programmable tasks on Awelon web servers. Distribution isn't essential for many problems, and use of distributed resources is still feasible via accelerated models internally (e.g. accelerated subset of OpenCL). 
 
@@ -52,7 +54,9 @@ Nonetheless, monadic processes are a *proven* model for effects with functional 
 
 I am interested in leveraging [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) in Awelon. KPNs support multiple input and output channels. The order with which messages for separate input channels are provided does not matter, which provides a simple basis for concurrency on input. Messages may be pending on multiple output channels, which provides a simple basis for concurrency on output. Gluing outputs to inputs provides a simple basis for composition of KPNs. Importantly, it is feasible to *accelerate* the evaluation of KPNs such that we avoid explicit routing of messages. This would be useful for large scale applications, distributing computations across multiple machines. 
 
-We can model reactive KPNs by adding explicit time-step message to every channel. This enables us to express either "no input until later" or "no input this time" to a process waiting on that channel. (The subtle difference is whether we permit streaming of many inputs within a time-step.) Each process would send similar messages on the appropriate output channels. With this, we can model real-time systems with asynchronous, interleaved inputs. We can also use acknowledgement channels to model network back pressure, i.e. so an upstream process doesn't push a message until prior messages are received. KPNs are effectively a deterministic variant of flow-based programming.
+We can model reactive KPNs by adding explicit time-step message to every channel. This enables us to express either "no input until later" or "no input this time" to a process waiting on that channel. (The subtle difference is whether we permit streaming of many inputs within a time-step.) Each process would send similar messages on the appropriate output channels. With this, we can model real-time systems with asynchronous, interleaved inputs. We can also model acknowledgement channels to create network "back pressure", i.e. so an upstream process doesn't push more than K messages before prior messages are acknowledged as received. 
+
+KPNs are essentially a deterministic variant of flow-based programming.
 
 The main weakness of KPNs is that it is difficult to represent a dynamic network structure. We can work around this a little using first-class KPN values, but even then it would be awkward to extract and preserve process state.
 
@@ -123,26 +127,32 @@ Weaknesses of this model are combinatorial explosions of search paths (too many 
 
 ## Reactive Demand Programming
 
-Reactive Demand Programming (RDP) allows multiple behaviors to contribute to a value explicitly, combining these "contributions" into a shared set (e.g. via union function). Minimally, a monadic API like this:
+Reactive Demand Programming (RDP) allows multiple behaviors to contribute to a value explicitly, combining these "contributions" into a shared set (e.g. via union function). RDP is inspired from overlay networks and functional programming. Minimally, a monadic API could might like this:
 
         get : Label a → m (Set of a)      CURRENT STATE
         put : Label a → Set of a → m ()   FOR NEXT STATE
 
-Like BP, this uses the idea of modeling processes with continuously applied behaviors instead of a stateful loop. This is very convenient for live programming. And we could also borrow the idea of suppression from BP, albeit without failure:
+The monadic behavior would apply 'continuously' rather than representing a stateful loop. This is very convenient for live programming. We could also borrow from Behavioral Programming (BP) a concept of suppression or deletion:
 
-        suppress : Label a → (a → bool) → m ()
+        suppress : Label a → Set of a → m ()
 
-The main difference from BP is that RDP behaviors will observe a full set instead of candidates for a variable, instead of non-deterministically selecting one candidate. This avoids the combinatorial explosions, and is more expressive for concurrent constraints or contributions. OTOH, to provide deterministic representations for `Set of a`, we generally require type `a` to be comparable (e.g. integers and texts are okay, but not arbitrary functions).
+With suppression, we can additionally support durable data - labels that preserve data with an implicit `get >>= put` behavior. This would have some similarities to functional-relational programming. 
 
-Effects will be modeled in terms of sharing a subset of variables with external behaviors. Besides RDP variables, we could support concurrent forks and perhaps some single-assignment variables within a time step. Hierarchical structure for labeled variables can also be useful. We could ameliorate the volatility of RDP variables by assuming a concurrent `get >>= put` behavior for a subset of "durable" variables (depending on label), in which case suppression would be necessary to erase values.
-
-For distributed systems, we could leverage hierarchical structure for labels, and support "asynchronous" behaviors in terms of awaiting stable/fixpoint variable states or using explicit `delay` operations to distribute a behavior over time. (However, we might impose a maximum quota for delay.) 
+To provide deterministic representations for `Set of a` requires the ability to compare and order the `a` values. Comparable data is also useful to isolate changes for incremental updates, optimizing stable subnets. The cost, however, is that we cannot have arbitrary function value types within our sets.
 
 RDP is a programming model designed for Awelon project. It's a great fit for live programming. The main weakness is that we'll need to write several ad-hoc effects adapters. Adapting to external publish-subscribe systems is perhaps the easiest.
 
 # Second Class Models
 
 Although these aren't suitable as a foundation for *general* applications, they could still be useful and interesting.
+
+## Computable Forms
+
+Using editable views in a graphical environment, it is not difficult to represent a boolean as a checkbox or provide a color-picker together with an HSV type, a slider for a ranged number, or a calendar widget for a date type. We can model a drop-down "selection list" in terms of a list together with an indexed selector. Hence, we can model interactive forms as normal values or definitions in Awelon.
+
+Although the above is a usable approach, we can benefit from properly separating a record of input data from the form, i.e. such that our form is described by a *function* that receives a single *record argument*, and the record itself just contains the input data. With this approach, we can infer the required fields and types for the record, and perhaps present to our clients a value with holes in it, and perhaps render a partially evaluated result.
+
+This doesn't generalize easily for interactive applications, but forms seem widely applicable as a specialized feature.
 
 ## Expressive Spreadsheets
 
