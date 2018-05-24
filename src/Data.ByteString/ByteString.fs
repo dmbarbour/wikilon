@@ -132,7 +132,11 @@ module BS =
     let unsafeCreateA (arr : byte []) =
         ByteString(arr, 0, arr.Length)
 
-    let inline singleton (c : byte) = unsafeCreateA (Array.create 1 c)
+    let private allBytes = [| System.Byte.MinValue .. System.Byte.MaxValue |]
+    do assert(256 = allBytes.Length)
+
+    /// Singleton ByteStrings without runtime allocation
+    let singleton (c : byte) = unsafeCreate allBytes (int c) 1
 
     let inline ofSeq (s : seq<byte>) : ByteString = unsafeCreateA (Array.ofSeq s)
     let inline ofList (s : byte list) : ByteString = unsafeCreateA (Array.ofList s)
