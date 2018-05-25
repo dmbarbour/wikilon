@@ -161,17 +161,15 @@ type DBTests =
             if (ct' <> ct) then gcLoop ct'
         gcLoop 0UL
 
-    [<Fact>]
-    member tf.``test dict compaction`` () =
-        let rng = new System.Random(11)
+    member tf.CompactionTest (alen:int) (rng:System.Random) (c:Codec<Dict>) : unit =
         let sw = new System.Diagnostics.Stopwatch()
-        let cc d = Dict.compact (tf.Stowage) d
+        let cc d = Codec.compact c (tf.Stowage) d
         let frac = 3000
         let compactK k d = if (0 <> (k % frac)) then d else cc d
         let add n d = compactK n (addN n d)
         let rem n d = compactK n (remN n d)
-        let a = [| 1 .. 70000 |]
-        let r = [| 1 .. (a.Length / 3) |] 
+        let a = [| 1 .. alen |]
+        let r = [| 1 .. (alen / 3) |] 
         shuffle rng a
         shuffle rng r
 
@@ -180,7 +178,7 @@ type DBTests =
         let d =  Dict.empty
               |> Array.foldBack add a 
               |> Array.foldBack rem r
-              |> Dict.compact (tf.Stowage)
+              |> cc
         tf.Flush()
         sw.Stop()
         printfn "test dictionary built (%A ms)" (sw.Elapsed.TotalMilliseconds)
@@ -222,10 +220,7 @@ type DBTests =
 
         // random-read performance test
         shuffle rng a
-        let fnAccum acc k = 
-            match Dict.tryFind (bs k) d with
-            | Some _ -> (acc + uint64 k)
-            | None -> acc
+        let fnAccum acc k = acc + if Dict.contains (bs k) d then uint64 k else 0UL
         sw.Restart()
         let rsum = Array.fold fnAccum 0UL a
         sw.Stop()
@@ -233,6 +228,13 @@ type DBTests =
         printfn "usec per random read op: %A" rread_op_usec
         Assert.Equal(rsum,sum_expected)
 
+    [<Fact>]
+    member tf.``test dict compaction`` () =
+        let rng = new System.Random(1)
+        tf.CompactionTest 70000 rng (Dict.codec)
+        tf.CompactionTest 7000 rng (Dict.codec)
+        tf.CompactionTest 7000 rng (Dict.codec')
+        
         
         
         

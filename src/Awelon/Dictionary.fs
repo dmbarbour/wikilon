@@ -638,7 +638,7 @@ module Dict =
     /// buffer, we create or rewrite child nodes to control size.
     /// This allows recent updates to aggregate near the root of
     /// the tree.
-    /// 
+    ///
     /// For worst case nodes (or if updBuff is 0) we reduce to
     /// Trie based compaction behaviors, which also isn't bad.
     let node_codec_config (nodeMin:SizeEst) (updBuff:SizeEst) =
@@ -670,11 +670,9 @@ module Dict =
 
     /// Node codec with buffered update LSM-trie compactions. 
     let node_codec = node_codec_config defaultNodeMin defaultUpdBuff
-    let inline compact db d = Codec.compact node_codec db d
 
     /// Node codec with history-independent Trie compactions.
     let node_codec' = node_codec_config defaultNodeMin 0UL
-    let inline compact' db d = Codec.compact node_codec' db d
 
     /// Stow a Dict to a Dir.
     ///
@@ -695,6 +693,9 @@ module Dict =
     let codec = EncSized.codec node_codec
 
     /// As `codec`, but history-independent Trie compactions.
+    ///
+    /// Writes are a lot more expensive in this case, as they must
+    /// reconstruct every node in the path. But reads are cheaper. 
     let codec' = EncSized.codec node_codec'
 
     // Performance Note:

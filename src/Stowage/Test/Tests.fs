@@ -715,6 +715,7 @@ type DBTests =
 
         let sw_write = new System.Diagnostics.Stopwatch()
         let sw_read = new System.Diagnostics.Stopwatch()
+        let sw_rread = new System.Diagnostics.Stopwatch()
 
         // big tree tests, with stowage!
         let loopct = 3
@@ -729,33 +730,46 @@ type DBTests =
                     |> Array.foldBack add a
                     |> Array.foldBack rem r
                     |> Codec.compactSz tc (tf.Stowage)
-            Assert.True(sz < 1000UL) // node size limit
             let bytes = Codec.writeBytes tc t
-            Assert.Equal(int sz, BS.length bytes) // precise size estimate
             let h = tf.Stowage.Stow bytes
             System.GC.KeepAlive(t)
             tf.Flush() // ensure full write
             sw_write.Stop()
+            Assert.True(sz < 1000UL) // node size limit
+            Assert.Equal(int sz, BS.length bytes) // precise size estimate
 
             //printfn "LSMTrie: %s" (BS.toString h)
 
             tf.FullGC()
 
             sw_read.Start()
-            let t' = Codec.load tc (tf.Stowage) h
-            tf.Stowage.Decref h
+            let t' = Codec.load tc (tf.Stowage) h // fresh cache for reads
             let tsum = LSMTrie.fold (fun s k v -> (s+v)) 0 t' 
-            Assert.Equal(tsum, fsum)
             sw_read.Stop()
+            Assert.Equal(tsum, fsum)
+
+            shuffle' rng a // reorder elements for future reads
+            let trr = Codec.load tc (tf.Stowage) h // fresh cache for random reads
+            let fnAccum acc k = acc + defaultArg (LSMTrie.tryFind (toKey k) trr) 0
+            sw_rread.Start()
+            let rrsum = Array.fold fnAccum 0 a
+            sw_rread.Stop()
+            Assert.Equal(rrsum, fsum)
+            tf.Stowage.Decref h
+
 
         let write_ops_per_loop = Array.length a + Array.length r
         let read_ops_per_loop = Array.length a - Array.length r
+        let rread_ops_per_loop = Array.length a
         let write_usec = 1000.0 * sw_write.Elapsed.TotalMilliseconds
         let read_usec = 1000.0 * sw_read.Elapsed.TotalMilliseconds
+        let rread_usec = 1000.0 * sw_rread.Elapsed.TotalMilliseconds
         let usec_per_write = write_usec / (double (write_ops_per_loop * loopct))
         let usec_per_read = read_usec / (double (read_ops_per_loop * loopct))
+        let usec_per_rread = rread_usec / (double (rread_ops_per_loop * loopct))
         printfn "LSMTrie mixed op write cost: %A" usec_per_write // ~23 on my machine
         printfn "LSMTrie mixed op read cost: %A" usec_per_read   // ~3.1 on my machine
+        printfn "LSMTrie random read cost: %A" usec_per_rread    // ~3.3 on my machine
 
             // Note: I think this performance is not impressive. I want to find
             // the bottlenecks to improve performance. I could try RocksDB for
@@ -767,6 +781,7 @@ type DBTests =
         // resist performance regression
         Assert.True(usec_per_write < 60.0)
         Assert.True(usec_per_read < 10.0)
+        Assert.True(usec_per_read < 12.0)
 
         
 
