@@ -3,11 +3,11 @@
 
 The conventional, mainstream "application model" is a detached process that interacts with shared services and data. Awelon could easily follow convention, e.g. modeling monadic IO or a message-passing process. But my goal for Awelon project is to unify programming and user experiences, to make sharing and composition easy. To that end, the detached process seems a poor fit, being inaccessible and invisible.
 
-An intriguing feature of [Awelon language](AwelonLang.md) is that, due to rewrite semantics, process state corresponds to an Awelon program. We can render a program for debugging, serialize it for distribution, or save it to our dictionary for durability. We can feasibly model active jobs as embedded within a dictionary.
+An intriguing feature of [Awelon language](AwelonLang.md) is that, due to rewrite semantics, process state can always be represented by and recorded as an Awelon program. This provides a foundation for durability, distribution, and debugging. Of course, one needs to also preserve a reference to the associated dictionary. We can feasibly embed application task state within a dictionary:
 
         :job-1123 [process state is recorded here]
 
-Presumably, an external agent would find available jobs, perform requested operations (such as sending e-mail or fetching HTML), then compute the next process state. It might run many steps between saving process states. Besides maintaining the process over time and viewing its state in a debugger, we could capture checkpoints or probe uncommitted sample messages.
+Presumably, an external agent would find available jobs, execute pending IO operations (such as sending e-mail or fetching HTML), then compute the next process state. It might run many steps between saving process states. Besides maintaining the process over time and viewing its state in a debugger, we could capture checkpoints or probe uncommitted sample messages.
 
         :my-view job-1123 [sample message] send
 
@@ -28,13 +28,14 @@ I have several desiderata for application models in Awelon systems:
 * composable: we can systematically embed or integrate applications
 * first-class: we can represent the application model within Awelon
 * accessible: we can render, animate, directly manipulate app state
-* immutable: state is represented by an immutable, non-unique value
 * sharable: can copy or move apps to a new environment and continue
+* live: we can tweak and modify application behavior during runtime
+* immutable: state is represented by an immutable, non-unique value
 * concurrent: model many simultaneous interactions with environment
 * distributed: partition state and computation across many machines
 * deterministic: behavior is fully repeatable up to external inputs
 
-First-class value representation of processes is convenient for composition, immutability, and sharing. However, first-class "object identity" - where we explicitly communicate references to process or state components - is problematic for sharing, composition, determinism, and even memory management. I'll directly exclude models that rely on object identity.
+First-class value representation of processes is convenient for composition, immutability, and sharing. However, first-class "object identity" - where we explicitly communicate references to process or state components - is problematic for sharing, composition, determinism, and even memory management. I'll exclude models that rely on object identity.
 
 Concurrency requires we both represent multiple external requests and receive multiple inputs, and progress incrementally (i.e. such that supplying any requested input may result in new requests, no need to supply all inputs up-front). Distribution, meanwhile, requires long-lived components (relative to latencies), which tends to require incremental communication. Determinism, in context of concurrency, requires that any internal communications between components be confluent.
 
@@ -42,13 +43,11 @@ Transparent representations are accessible. But opaque representations (abstract
 
 ## Monadic Processes
 
-Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type. Of course, this still leaves a big question regarding which effects to model.
+Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type. Of course, this still leaves a big question regarding *which* effects to model. For example, we could support sockets for network access, or limit ourselves to servicing and sending HTTP requests, or focus on distributed queues. 
 
-Concurrency and distribution without first-class channels requires careful consideration. Using a free monad representation, it is feasible to introduce concurrency extension like `fork-join : m a → m b → m (a * b)` that expose both component requests. For remote computations, we could feasibly introduce support for ad-hoc remote requests, e.g. `remote : Location → R a → m a`. But it's unclear how to effectively use *internal* distribution.
+Concurrency and distribution are awkward with a monadic API. Especially so upon rejection of object identity: we cannot "allocate" variables or channels. It is feasible to support tree-structured fork-join concurrency, such as `fork-join :: m a → m b → m (a * b)`. But this doesn't model communication between process components, which is necessary for efficient or distributed concurrency.
 
-The [Do Be Do Be Do](https://arxiv.org/pdf/1611.09259.pdf) paper for the Frank language describes n-ary operators that can process multiple computations simultaneously. This might offer a path towards distributed and concurrent monadic computations, but the model is not clear to me yet.
-
-Nonetheless, monadic processes are a *proven* model for effects with functional programming. It should be worth investing in as a means to quickly get started, implementing user-programmable tasks on Awelon web servers. Distribution isn't essential for many problems, and use of distributed resources is still feasible via accelerated models internally (e.g. accelerated subset of OpenCL). 
+Nonetheless, monadic processes are a *proven* model for effects in context of functional programming. It should be worth investing in as a means to quickly get started, implementing user-programmable tasks on Awelon web servers. For many use cases, concurrency and distribution are not essential. And we could still leverage distributed resources using accelerated functions with cloud computing internally (e.g. for large matrix operations). 
 
 ## Kahn Process Networks
 
@@ -60,12 +59,34 @@ KPNs are essentially a deterministic variant of flow-based programming.
 
 The main weakness of KPNs is that it is difficult to represent a dynamic network structure. We can work around this a little using first-class KPN values, but even then it would be awkward to extract and preserve process state.
 
+## Reactive Demand Programming
+
+Reactive Demand Programming (RDP) allows concurrent behaviors to contribute to shared values, which may change reactively over time. Contributions accumulate in a shared set, such that behaviors (and effects) are commutative and idempotent. This preserves useful equational reasoning properties from functional programming, while enabling useful IO through shared variables. A monadic API might have a few operations:
+
+        get : Label a → m (Set of a)        CURRENT STATE
+        put : Label a → Set of a → m ()     FOR NEXT STATE
+        at  : Label () → m a → m a          HIERARCHICAL STRUCTURE
+
+Unlike conventional monadic request-response loops, with RDP we have a stable monadic behavior that is applied 'continuously', repeating in every time step. This is convenient for live programming: a human could adjust the monadic behavior function over time, applying updates upon the next step.
+
+Additionally, we could support a concept of negation or deletion:
+
+        del  : Label a → Set of a → m ()
+        del' : Label a → (a → bool) → m ()
+
+With either of these, we can additionally support durable data - labels that preserve data with an implicit `get >>= put` behavior. This would have many similarities to functional-relational programming (cf. [Out of the Tarpit](https://github.com/papers-we-love/papers-we-love/blob/master/design/out-of-the-tar-pit.pdf) by Ben Moseley).
+
+The main weakness of RDP is that the data type `a` in the `Set of a` is restricted to comparable value types. This is necessary for both determinism and recognizing when a set of labels have entered a stable state. (We could feasibly relax this constraint by permitting specialized use of single-assignment labels.) We might also introduce specialized functions, such as `each : Label a → (a → m ()) → m ()` and `contains : Label a → a → m bool` to further optimize system stabilization.
+
+RDP integrates most easily with external topic-based publish-subscribe systems. Effectively, labels are fine-grained topics.
+
 ## Machines
 
 The [machines](https://hackage.haskell.org/package/machines) model developed by Edward Kmett and Rúnar Bjarnason attempts to solve several issues with conventional monadic IO. The underlying types:
 
         Step k o r = Stop | Yield o r | Await (k t) ((1+t) → r)
         Machine k o = Step k o (Machine k o)
+        MachineT m k o = m (Step k o (MachineT m k o))
 
 In each step, a machine can either halt, yield an output, or await an input. Awaiting an input allows an explicit request `(k t)` and may fail so we accept a `(1+t)` result. Uniform input failure is convenient for accessibility: it allows us to compute and render a "current" incremental output assuming there are no more inputs.
 
@@ -84,11 +105,13 @@ Process model `P` is naive because it doesn't support waiting for input or proce
         type PR s = s → 1 + (s * PR s)                  P+Retry
         type PRC s = List of (s → 1 + (s * PRC s))      PR+Concurrency
 
-By introducing retry, a process can explicitly await state changes without a busy-wait loop. By modeling concurrent operations via collections of processes, we support non-determinism (scheduling within list is unspecified), and we can model process life cycles (spawning processes, termination via empty list). 
+By introducing retry, a process can explicitly await state changes without a busy-wait loop. By modeling concurrent operations via collections of processes, we support non-determinism (scheduling within list is unspecified), and we can model process life cycles (spawning processes, termination via empty list).
 
 Some other weaknesses can be addressed by focusing on the state model `s`. If our state model is logically monotonic in nature, we can reason more readily about behavior in the face of non-determinism. Use of accelerated state models, such as KPNs, could support distributed and parallel computing. State invariants could be protected by modeling `s` as an abstract data type with a constrained API.
 
 The main weakness is that there is no built-in coordination between processes. Each process obtains exclusive control of the state, and any coordination must be represented within the model itself. Also, there's no effective means to make this system observably deterministic.
+
+Note: For live programming, we might additionally wish to stabilize the `P` value, i.e. such that `P s = s → s` and `PR s = s → 1 + s`. A stable process value simplifies external modification of the step function, between steps. In this case, we cannot fork concurrently.
 
 ## Behavioral Programming
 
@@ -124,23 +147,6 @@ Access to historical information is more convenient in context of live software 
 To support priority explicitly, we could prioritize `alt` by including a number that heuristically indicates how much weight we should associate with the first option above the second. To support scratch-spaces for computations and composition of applications, we could also support a hierarchical state model with subdirectories, e.g. `in : Directory → m a → m a`. For concurrent operations, we can safely add a `fork` operation due to single-assignment restrictions.
 
 Weaknesses of this model are combinatorial explosions of search paths (too many options) and expression of concurrent constraints or contributions to a single value (e.g. no way for individual behaviors to say "render this" then combine all these options).
-
-## Reactive Demand Programming
-
-Reactive Demand Programming (RDP) allows multiple behaviors to contribute to a value explicitly, combining these "contributions" into a shared set (e.g. via union function). RDP is inspired from overlay networks and functional programming. Minimally, a monadic API could might like this:
-
-        get : Label a → m (Set of a)      CURRENT STATE
-        put : Label a → Set of a → m ()   FOR NEXT STATE
-
-The monadic behavior would apply 'continuously' rather than representing a stateful loop. This is very convenient for live programming. We could also borrow from Behavioral Programming (BP) a concept of suppression or deletion:
-
-        suppress : Label a → Set of a → m ()
-
-With suppression, we can additionally support durable data - labels that preserve data with an implicit `get >>= put` behavior. This would have some similarities to functional-relational programming. 
-
-To provide deterministic representations for `Set of a` requires the ability to compare and order the `a` values. Comparable data is also useful to isolate changes for incremental updates, optimizing stable subnets. The cost, however, is that we cannot have arbitrary function value types within our sets.
-
-RDP is a programming model designed for Awelon project. It's a great fit for live programming. The main weakness is that we'll need to write several ad-hoc effects adapters. Adapting to external publish-subscribe systems is perhaps the easiest.
 
 # Second Class Models
 
@@ -212,4 +218,9 @@ This would admit a corresponding set of rewrites:
 Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. However, when a secure hash resource is referenced from an opaque definition, we could rewrite the secure hash to a simplified or evaluated form.
 
 Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo-meta-gc` for elements under `foo`, or we could represent our policies under a global word like `meta-gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
+
+## Content Addressed Network Models
+
+Conventional networks associate a network address (socket, IP, URL, etc.) with a servicing process. This association is external. But an alternative is to associate a network model with *content*. Topic-based publish-subscribe is one example. Another might involve creating an asymmetric encryption key per process, and communicating based on public key (in practice a unique address/channel per process, but logically content addressed). In the latter case, we could leverage distributed hashtables for routing (instead of centralized DNS).
+
 

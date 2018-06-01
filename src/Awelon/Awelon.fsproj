@@ -7,7 +7,11 @@
   <ItemGroup>
     <Compile Include="Cache.fs" />
     <Compile Include="Parse.fs" />
+    <Compile Include="Interpret.fs" />
     <Compile Include="Dictionary.fs" />
+    <Compile Include="Dictionary2.fs" />
+    <Compile Include="WordVersion.fs" />
+    <Compile Include="DictSearch.fs" />
   </ItemGroup>
 
   <ItemGroup>

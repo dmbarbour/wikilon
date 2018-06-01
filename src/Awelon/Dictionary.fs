@@ -3,10 +3,10 @@ open System.Collections.Generic
 open Stowage
 open Data.ByteString
 
-// Awelon language has a simple standard dictionary definition, based
-// on a log-structured merge-tree with radix-tree indexing (LSM-trie).
-// The design is intended for legible import/export with distributed,
-// prefix-oriented sharing and synchronization.
+// Awelon language specifies a standard dictionary representation, based
+// on a log-structured merge-tree with radix-tree indexing (an LSM-trie).
+// This design is intended for legible import/export, distribution, and
+// hierarchical embedding.
 //
 //      /prefix1 secureHash1
 //      /prefix2 secureHash2
@@ -17,20 +17,24 @@ open Data.ByteString
 // A dictionary node is encoded in line-oriented ASCII text. Each line
 // either defines (:) or deletes (~) a symbol, or directs to another 
 // node based on a matching prefix (/). Referenced nodes are identified
-// by their secure hash, but empty string may drop a prefix. A matched
-// prefix is stripped from the referenced node. Only the last update for
-// a symbol or matching prefix is used. Empty prefix is valid and useful
-// for prototype inheritance, overflow buffers, or checkpoints. 
+// by their secure hash, and the matched prefix is stripped from all 
+// symbols and prefixes within the referenced node. The empty symbol or
+// prefix is valid and useful.
 //
-// This representation relies on Awelon symbols and definitions not
-// using arbitrary bytes. In particular, we assume SP is not used in
-// symbols, and LF is not used in definitions or symbols.
+// This dictionary representation is streamable, representing real-time
+// updates in an append-only log. Only the final match for the symbol or
+// prefix is used. In a stream, empty prefix `/ secureHash` can be used
+// for checkpoints or resets because empty prefix matches all symbols.
+// But outside of streams, we'll normalize - erase irrelevant lines then 
+// sort what remains.
+//
+// The dictionary could be used outside of Awelon, but you would need to
+// escape symbols containing SP or definitions containing LF. Performance
+// is worse than Stowage.LSMTrie (currently).
 //
 // Hierarchical dictionaries simply use `dictname/word` symbols. We
 // can use `/dictname/ secureHash` to logically include one dictionary
 // into another.
-//
-// For many problems, we'll also want 
 module Dict =
 
     let cLF = 10uy
@@ -365,10 +369,10 @@ module Dict =
             let mkDef s = Def(s, (ref :> System.Object))
             let mkDir h = VRef.wrap (ref.Codec) (ref.DB) h
             let s = ref.DB.Load(ref.ID)
-            let sz = 200UL + uint64 (BS.length s)
+            let cweight = (200UL + uint64 (BS.length s)) <<< 1 // cache weight
             let d = parseDict mkDef mkDir s
             System.GC.KeepAlive(ref)
-            MCache.tryAdd (ref.ID) d sz (dictLoadCache)
+            MCache.tryAdd (ref.ID) d cweight (dictLoadCache)
 
     /// Load a directory as a dictionary.
     let load (dir:Dir) : Dict =
@@ -388,6 +392,15 @@ module Dict =
             | Some (struct(p,dir)) ->
                 let k' = BS.drop (BS.length p) k
                 tryFind k' (load dir)
+
+    /// Access a dictionary as `Symbol → ByteString option`.
+    ///
+    /// This is useful for modules that require read-only access to
+    /// a Dict and are not concerned with updates or representation.
+    let lookup (d:Dict) (k:Symbol) : ByteString option =
+        match tryFind k d with
+        | Some defOpt -> Some (defOpt.Data)
+        | None -> None
 
     /// Test whether dictionary contains a specified symbol.
     let inline contains (k:Symbol) (d:Dict) : bool = 
@@ -603,6 +616,8 @@ module Dict =
                     diffLoop (struct(m dirA a', m dirB b'))
         Seq.unfold diffLoop (struct(a0,b0))
 
+    // find longest common prefix
+
     // If the node is large enough, flush updates to child nodes.
     // This is achieved by extracting and compacting each prefix
     // independently. The codec provides the strategy for how to
@@ -625,9 +640,10 @@ module Dict =
     // push oversized nodes to stowage via `/ secureHash`
     let private nodeStow (thresh:SizeEst) (c:Codec<Dict>) (db:Stowage) (struct(d0,sz0)) =
         if (sz0 < thresh) then struct(d0,sz0) else
-        let d = fromProto (Some (VRef.stow c db d0))
-        let sz = uint64 (3 + RscHash.size)
-        struct(d,sz)
+        let ref = VRef.stow c db d0
+        //let cweight = (200UL + sz0) <<< 2
+        //MCache.tryAdd (ref.ID) d0 cweight (dictLoadCache) |> ignore
+        struct(fromProto (Some ref), uint64 (3 + RscHash.size))
 
 
     /// LSM-trie based codec for Dictionary nodes.
@@ -671,14 +687,11 @@ module Dict =
     /// Node codec with buffered update LSM-trie compactions. 
     let node_codec = node_codec_config defaultNodeMin defaultUpdBuff
 
-    /// Node codec with history-independent Trie compactions.
-    let node_codec' = node_codec_config defaultNodeMin 0UL
-
     /// Stow a Dict to a Dir.
     ///
     /// This creates a new Stowage node, unless applied to a trivial
     /// dictionary (empty or single `/ secureHash` line). Compaction
-    /// is not implicit! The Dict is stored as is.
+    /// is not implicit! The Dict is stored as-is.
     let stow (db:Stowage) (d:Dict) : Dir = 
         let struct(prior,upd) = splitProto d 
         if isEmpty upd then prior else
@@ -692,23 +705,17 @@ module Dict =
     /// This version uses buffered update LSM-trie compaction.
     let codec = EncSized.codec node_codec
 
-    /// As `codec`, but history-independent Trie compactions.
-    ///
-    /// Writes are a lot more expensive in this case, as they must
-    /// reconstruct every node in the path. But reads are cheaper. 
-    let codec' = EncSized.codec node_codec'
+    // Note: I could provide the trie variants, but the write 
+    // performance is much too slow!
 
     // Performance Note:
     //
-    //  I'm not thrilled about current performance. I'm getting
-    //  reads at 10-15usec, mixed write+compaction at 20-60 
-    //  (depending on compaction frequency), for a simple test.
-    //  For comparison, a similar test under LSMTrie gets 3usec
-    //  reads and 12usec writes. 
+    //  I'm not thrilled about current performance, and suspect we
+    //  could do much better with some adjustments. But I have not
+    //  profiled the performance.
     //
-    //  Use of MCache over raw VRef can save a lot of time for
-    //  random reads, but I'm uncertain whether it would be better
-    //  and simpler to use LVRef for now.
+    //  Using an LSM-tree backed Stowage could probably help, too.
+    //
 
     // TODO: potential extensions
     //

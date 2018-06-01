@@ -60,9 +60,13 @@ let ``basic parser tests`` () =
 
 // TODO: test interpreters
 
-let testDefStr = BS.fromString "this is a volume-filling test definition for awelon dictionaries"
+let testDefStr n = 
+    let s = if (0 = n) then "[zero]" else
+            "[" + string (n - 1) + " succ]"
+    BS.fromString s
+
 let inline bs n = BS.fromString (string n)
-let inline addN (n:int) (d:Dict) : Dict = Dict.add (bs n) (Dict.Def(testDefStr)) d
+let inline addN (n:int) (d:Dict) : Dict = Dict.add (bs n) (Dict.Def(testDefStr n)) d
 let inline remN (n:int) (d:Dict) : Dict = Dict.remove (bs n) d
 let inline flip fn a b = fn b a
 
@@ -161,10 +165,9 @@ type DBTests =
             if (ct' <> ct) then gcLoop ct'
         gcLoop 0UL
 
-    member tf.CompactionTest (alen:int) (rng:System.Random) (c:Codec<Dict>) : unit =
+    member tf.CompactionTest (alen:int) (frac:int) (rng:System.Random) (c:Codec<Dict>) : unit =
         let sw = new System.Diagnostics.Stopwatch()
         let cc d = Codec.compact c (tf.Stowage) d
-        let frac = 3000
         let compactK k d = if (0 <> (k % frac)) then d else cc d
         let add n d = compactK n (addN n d)
         let rem n d = compactK n (remN n d)
@@ -231,9 +234,10 @@ type DBTests =
     [<Fact>]
     member tf.``test dict compaction`` () =
         let rng = new System.Random(1)
-        tf.CompactionTest 70000 rng (Dict.codec)
-        tf.CompactionTest 7000 rng (Dict.codec)
-        tf.CompactionTest 7000 rng (Dict.codec')
+        printfn "size 70k, 10 compactions"
+        tf.CompactionTest 70000 7000 rng (Dict.codec)
+        printfn "size 70k, 100 compactions"
+        tf.CompactionTest 70000 700 rng (Dict.codec)
         
         
         

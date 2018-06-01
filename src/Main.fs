@@ -16,7 +16,7 @@ starts a local web server, which is mostly configured online. Arguments:
     [-ip IP]  bind IP or DNS (default 127.0.0.1)
     [-dir Dir] where to store data (default wiki)
     [-size GB] maximum database size (default 1000)
-    [-cache MB] parse cache for data (default 100)
+    [-cache MB] space-speed tradeoff (default 100)
     [-admin]  print an ephemeral admin password
 
 Configuration of Wikilon is managed online and often requires administrative
@@ -98,7 +98,7 @@ let main argv =
                 let pw = hashStr(getEntropy 64).Substring(0,24)
                 do printfn "admin:%s" pw
                 Some pw
-    Stowage.LVRef.setCacheSize ((uint64 args.cache) * (1024UL * 1024UL))
+    Stowage.Cache.resize (1_000_000UL * (uint64 args.cache))
     use store = new Stowage.LMDB.Storage("data", (1024 * args.size))
     let db = Stowage.DB.fromStorage store
     let app = WS.mkApp db admin
