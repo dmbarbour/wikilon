@@ -1,22 +1,18 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
-
   <ItemGroup>
     <Compile Include="Cache.fs" />
     <Compile Include="Parse.fs" />
-    <Compile Include="Interpret.fs" />
     <Compile Include="Dictionary.fs" />
     <Compile Include="Dictionary2.fs" />
+    <Compile Include="DictRLU.fs" />
     <Compile Include="WordVersion.fs" />
-    <Compile Include="DictSearch.fs" />
+    <Compile Include="Interpret.fs" />
   </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />
     <ProjectReference Include="..\Stowage\Data\Stowage.Data.fsproj" />
   </ItemGroup>
-
 </Project>

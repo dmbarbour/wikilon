@@ -85,11 +85,11 @@ Logically, we operate linearly on abstract row-polymorphic record constructors:
         :a      {R without a} [A] → {R, a=[A]}
         .a      S [{} → {R, a=[A]}] → S [A] [{} → {R}]
 
-A record value `{a=[A],b=[B],c=[C]}` is abstract, never represented syntactically. But the record constructor `[[A]:a [B]:b [C]:c]` can effectively be treated as a record value. Like other functions, the record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring.
+The record value `{a=[A],b=[B],c=[C]}` is abstract, never represented syntactically. But a record constructor function `[[A]:a [B]:b [C]:c]` can effectively be treated as a record value. Like other functions, the record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring.
 
-For variants, the basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer must supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA] :a [OnB] :b [OnC] :c ...]`. Variant values could then have concrete representation like `[.label [Value] case]` or `[[value] [.label] case]`, depending on how we define `case` and which representation is more convenient for projectional editing.
+For variants, the basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer must supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA] :a [OnB] :b [OnC] :c ...]`. Variant values could then have concrete representation like `[.label [Value] case]` or `[[value] [.label] case]` depending on how we define `case`. With projectional editors, labeled variants may be given a more conventional appearance.
 
-*Note:* Labeled data could be modeled in Awelon without a primitive feature, e.g. using a concrete trie for the abstract record value together with accelerators and projectional editing. However, primitive labels significantly simplify static analysis and debugging. 
+*Note:* Labeled data could be modeled in Awelon without a primitive feature, e.g. modeling a concrete trie for the abstract record value together with accelerators and projectional editing. However, primitive labels significantly simplify static analysis, debugging, and error reporting.
 
 ## Annotations
 
@@ -335,7 +335,11 @@ Awelon's explicit copy and drop makes it relatively easy to track dynamically wh
 
 ## Generic Programming in Awelon
 
-An inherent weakness of Awelon is lack of inference for generic programming. We cannot implicitly overload an `add` symbol to use different functions for different types like natural numbers and matrices. Explicit methods are available, via parametric polymorphism, row-polymorphic records, and free algebraic structure. We could model trait parameters, such that function `foo<T>` might use `T.add`. However, the explicit nature of these techniques may hinder legibility of code.
+An inherent weakness of Awelon is lack of type inference for generic programming. For example, we cannot implicitly overload an `add` symbol to use different functions for different types like natural numbers and matrices. 
+
+It is feasible to model trait parameters, e.g. such that we write `foo<T>` that uses `T.add`. We can leverage parametric polymorphism and Awelon's row-polymorphic labeled records and variants. We can represent free algebraic structures. Some of these techniques have a lot of syntactic overhead, so would require effective support from projectional editors.
+
+Explicit methods are available, via parametric polymorphism, row-polymorphic records, and free algebraic structure. We could model trait parameters, such that function `foo<T>` might use `T.add`. However, the explicit nature of these techniques may hinder legibility of code.
 
 Fortunately, legibility can be mitigated by projectional editing. For example, `nat-add` and `matrix-add` and `T.add` could be rendered as `add` using a different color for each common prefixes. Further, an editor might also help clients efficiently input code that is explicitly generic, i.e. so inputting `add` provides interactive edit-time selection of the intended variant.
 

@@ -1,14 +1,36 @@
 namespace Awelon
 
-// DictIndex associates an Awelon Dictionary with two indices:
+// These modules augment an Awelon Dictionary with two primary 
+// indices:
 //
-//  version index: Word → Version
-//  reverse lookup index: Symbol → Clients
+//  reverse lookup index: symbol → client words
+//  version index: word/resource → deep version
 //
-// These two indices will be maintained together with every update
-// to the dictionary. Although, I'm interested in asynchronous or 
-// lazy maintenance of these indices where we can get away with it.
-// So we might further track unprocessed updates.
+// A reverse lookup index can be incrementally computed for each
+// dictionary. A version index may further be computed, but may
+// cascade in some cases (e.g. update initial state of a command
+// pattern or REPL session). It might be worthwhile to simply 
+// compute 
+//
+// These indices can be maintained incrementally with dictionary 
+// updates, and have a predictable overhead (in space and time).
+// The reverse lookup is very useful: it can also be applied to
+// find erroneous (undefined, cyclic, unparseable) words, and as
+// a way for developers to add key-word or tag search.
+//
+// The version identifier can then be used for secondary indices
+// valid across dictionaries, e.g. mapping a version to evaluated
+// definition (perhaps indirectly: version to evaluated version,
+// version to definition). Observations indexed on version would
+// be valid across multiple similar dictionaries, and could also
+// be incremental.
+//
+// Incremental indexing could be made asynchronous by seperately
+// tracking a dictionary and its recent (not yet indexed) updates.
+// This would be valuable for ensuring efficient imports and that
+// 
+// 
+//
 //
 // The two indices chosen would be the most useful for common processing
 // of the dictionaries. Computing a unique version for each definition is

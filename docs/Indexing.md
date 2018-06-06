@@ -4,18 +4,26 @@ I need to index dictionaries for effective use.
 
 Which indices are most useful?
 
-* word → version
+* word (or resource) → version
 * version → evaluated definition
-* version → optimized/compiled forms
-* version → type of word
-* Reverse Lookup: word → client words 
-* Undefined or cyclic words.
-* Type Search for Editing: types → words or word-versions
- * find badly typed words, too
+ * indirectly? version → evaluated version + version → definition
+* version → link optimized or compiled versions
+* version → inferred type
+* Reverse Lookup: symbol → client words 
+ * symbols include annotations
+ * symbols include secure-hash resources
+ * find obviously erroneous (undefined, cyclic, etc.) words
+ * potentially find full-text fragments
 
-A challenge for indexing is that Wikilon will have many versions of dictionaries, both for different users and version histories. It's important (for security and privacy) to ensure our index lookup is specific to a dictionary. Fortunately, our word→version and word→clients indices should have a fixed, predictable overhead per dictionary (in both space and time). We can maintain various indices together with our dictionaries. 
+A challenge for indexing is that Wikilon will have many dictionaries, both for multiple projects/users and histories and hierarchical structure. I assume that dictionaries will be 99% similar, but the differences might be private to a project or user. So we both need to somehow share indices and ensure secure separation thereof. Association of definitions with deep versions based on secure hash should help, since we can securely index from version to many kinds of computed results (like evaluation or type). This may also be treated similarly to memoization! 
 
-Version identifiers - an easy solution is to take a secure hash using Stowage.RscHash, albeit tweaked a little to avoid undesirable interaction with Stowage GC. It would be sufficient to combine the code for a definition with the versions of each dependent word.
+For an interactive development environment, I also want the ability to find type-appropriate words within a dictionary. Maintaining a reverse lookup index for type information is non-trivial because reverse-lookup is always specific to each dictionary. But presumably we could just ask developers or software agents to augment the dictionary with some metadata that can be used in the reverse lookup. E.g. for `foo` we could have `foo-meta-kw` that includes ad-hoc key-words or tags to swiftly discover the word `foo`. 
 
-Undefined or cyclic words could be recorded as similar to adding an `UNDEFINED` symbol for reverse lookup. Or more generally, we could record a set of "problem" words, together with a short description of the problem. But we cannot generally compute cycles locally. It would be most convenient to recognize cycles when computing a version at each word.
+So, I think the primary indices to maintain are for deep-version and a simple reverse-lookup. Fortunately, these two indices can be maintained incrementally. A relevant concern is that a version update for a 'deep' word (e.g. the initial state in a command pattern) could result in a long, cascading chains of version invalidations with high cost. And if we have a lot of updates, we shouldn't recompute all versions after each update. 
+
+This could be ameliorated by making the deep-version index lazier in nature (so we only invalidate once for multiple updates), or otherwise batching our updates.
+
+In most cases, we can assume that the more a word is used, the more stable its definition will be. So eager versioning could also work. Or perhaps we should treat version IDs as a memory cached index, recomputed as needed, rather than a fully durable index.
+
+
 
