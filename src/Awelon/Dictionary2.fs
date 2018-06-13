@@ -92,10 +92,9 @@ module Dict2 =
     /// contained secure hashes (if any).
     let autoDef (db:Stowage) (s:ByteString) : Def =
         let inline mkDep h = VRef.wrap (EncBytesRaw.codec) db h
-        let inline addDep l h = ((mkDep h)::l)
-        let deps = List.toArray (RscHash.foldHashDeps addDep [] s)
-        Def(s, deps :> System.Object)
-
+        let addDep l h = ((mkDep h)::l)
+        let lDeps = RscHash.foldHashDeps addDep (List.empty) s
+        Def(s, lDeps :> System.Object)
 
     /// Rewrite local definition to `$secureHash` remote redirect.
     let externDef (db:Stowage) (def:Def) : Def =
@@ -122,8 +121,53 @@ module Dict2 =
     let ctmax = System.UInt32.MaxValue
     let szmax = System.UInt32.MaxValue
 
+    /// The DictEnt type corresponds to a single line in a dictionary,
+    /// a single update to a symbol or prefix. 
+    type DictEnt =
+        | Direct of Prefix * Dir
+        | Define of Symbol * DefUpd
+
+    let private joinBytes (a:ByteString) (b:byte) (c:ByteString) : ByteString =
+        let mem = Array.zeroCreate (a.Length + 1 + c.Length)
+        do Array.blit a.UnsafeArray a.Offset mem 0 a.Length
+        do mem.[a.Length] <- b
+        do Array.blit c.UnsafeArray c.Offset mem (1 + a.Length) c.Length
+        BS.unsafeCreateA mem
+
+    let inline private isPrefix p s = (p = (BS.take (BS.length p) s))
+
+    // compute size of shared prefix for two strings.
+    let private bytesShared (a:ByteString) (b:ByteString) : int =
+        let limit = min (a.Length) (b.Length)
+        let rec loop ix =
+            if ((ix = limit) || (a.[ix] <> b.[ix])) then ix else
+            loop (ix + 1)
+        loop 0
+
+    // adds contextual prefix to compute entries in dictionary
+    let rec private toSeqEntP (p:Prefix) (d:Dict) : seq<DictEnt> =
+        let spd = 
+            match d.pd with
+            | None -> Seq.empty
+            | Some dir -> Seq.singleton (Direct(p,dir))
+        let svu =
+            match d.vu with
+            | None -> Seq.empty
+            | Some du -> Seq.singleton (Define(p,du))
+        let sc (ix,struct(p',c)) = toSeqEntP (joinBytes p ix p') c
+        let scs = Seq.concat (Seq.map sc (Map.toSeq (d.cs)))
+        Seq.append spd (Seq.append svu scs)
+    
+    /// Translate a dictionary to a sequence of local entries. This
+    /// has a moderate overhead to reconstruct symbols and prefixes.
+    let toSeqEnt (d:Dict) : seq<DictEnt> = toSeqEntP (BS.empty) d
+
     let inline mkDict pd vu cs = 
         { pd = pd; vu = vu; cs = cs; ct = ctmax; sz = szmax }
+
+    // TODO: consider developing a mutable DictBuilder variant for efficient
+    // parsing. This could improve read performance by a moderate degree. 
+    // OTOH, the benefits might not be worth the complexity.
 
     // This operation is inefficient. I've a proposal at fsharp-suggestions 
     // (#673) to support an efficient accessor for singleton maps to fix the
@@ -135,24 +179,6 @@ module Dict2 =
         let r = e.Current
         if e.MoveNext() then None else
         Some r
-
-    let private joinBytes (a:ByteString) (b:byte) (c:ByteString) : ByteString =
-        ByteStream.write (fun dst ->
-            let len = a.Length + 1 + c.Length
-            ByteStream.reserve len dst
-            ByteStream.writeBytes a dst
-            ByteStream.writeByte b dst
-            ByteStream.writeBytes c dst)
-
-    let inline private isPrefix p s = (p = (BS.take (BS.length p) s))
-
-    // compute size of shared prefix for two strings.
-    let private bytesShared (a:ByteString) (b:ByteString) : int =
-        let limit = min (a.Length) (b.Length)
-        let rec loop ix =
-            if ((ix = limit) || (a.[ix] <> b.[ix])) then ix else
-            loop (ix + 1)
-        loop 0
 
     // Smart add-child function, after the child might have had some
     // entries removed. May remove empty child or merge prefixes if
@@ -184,27 +210,6 @@ module Dict2 =
         let cs' = Map.add (BS.unsafeHead p) (struct((BS.unsafeTail p), c)) (Map.empty)
         mkDict None None cs'
 
-    // Logically concatenate dictionary entries, applying entries
-    // from b onto a. Implementation is efficient recursive merge.
-    // Not safe for arbitrary dictionaries (due to erasure of some
-    // deletion entries), but useful for sequencing, compaction.
-    let rec private concatDictEnts (a:Dict) (b:Dict) : Dict =
-        // b.pd potentially overrides `a` entirely
-        if Option.isSome (b.pd) then b else
-        let vu' = if Option.isSome (b.vu) then b.vu else a.vu
-        let cs' = Map.fold concatChildEnts (a.cs) (b.cs)
-        mkDict (a.pd) vu' cs'
-    and private concatChildEnts acs ix (struct(bp,bc)) =
-        match Map.tryFind ix acs with
-        | None -> Map.add ix (struct(bp,bc)) acs // no overlap
-        | Some (struct(ap,ac)) ->
-            // forcibly align prefixes then merge
-            let n = bytesShared ap bp
-            let ac' = prependChildPrefix (BS.drop n ap) ac
-            let bc' = prependChildPrefix (BS.drop n bp) bc
-            let c' = concatDictEnts ac' bc'
-            Map.add ix (struct((BS.take n ap),c') acs
-
     /// Empty dictionary. This should only exist at the tree root.
     let empty : Dict = 
         { pd = None; vu = None; cs = Map.empty; ct = 0u; sz = 0u }
@@ -233,15 +238,6 @@ module Dict2 =
         | Some dir -> struct(dir, { d with pd = None })
         | None -> struct(None, d)
 
-    /// Merge with prototype chain. Transitively eliminates
-    /// the `/ secureHash` entry, preserving definitions.
-    let rec mergeProto (d0:Dict) : Dict =
-        let struct(proto,dLocal) = splitProto d0
-        match proto with
-        | None -> dLocal
-        | Some ref -> 
-            mergeProto (concatDictEnts (LVRef.load' ref) dLocal)
-
     /// Load a directory from Stowage as a Dict.
     ///
     /// This may temporarily cache the Dict in memory.
@@ -255,30 +251,6 @@ module Dict2 =
         match dir with
         | None -> empty
         | Some ref -> LVRef.load' ref
-
-    /// Find the most recent update for a symbol. Returns None if
-    /// there are no relevant entries.
-    let rec tryFindUpd (k:Symbol) (d:Dict) : DefUpd option =
-        if BS.isEmpty k then findWithFallback k (d.pd) (d.vu) else
-        match Map.tryFind (BS.unsafeHead k) (d.cs) with
-        | Some (struct(p,c)) when isPrefix p (BS.unsafeTail k) ->
-            let k' = BS.drop (1 + BS.length p) k
-            findWithFallback k (d.pd) (tryFindUpd k' c)
-        | _ -> None
-    and private findWithFallback k pd vu =
-        if Option.isSome vu then vu else
-        match pd with
-        | None -> None
-        | Some dir -> // found matching directory
-            match tryFindUpd k (load dir) with
-            | None -> Some None // logically deleted
-            | result -> result
-
-    /// Find the definition of a given symbol.
-    let tryFind (k:Symbol) (d:Dict) : Def option =
-        match tryFindUpd k d with
-        | Some result -> result // explicit update or deletion
-        | None -> None // no entry implies no definition
 
     // returns longest matching prefix entry and prefix bytes matched
     let rec private matchDir' (k:Symbol) (d:Dict) : struct(int * Dir option) =
@@ -299,6 +271,28 @@ module Dict2 =
         match pd with
         | Some dir -> Some (struct((BS.take plen k),dir))
         | None -> None
+
+    // search for symbol's definition update in local memory
+    let rec private tryFindLocal (k:Symbol) (d:Dict) : DefUpd option =
+        if BS.isEmpty k then (d.vu) else
+        match Map.tryFind (BS.unsafeHead k) (d.cs) with
+        | Some (struct(p,c)) when isPrefix p (BS.unsafeTail k) ->
+            tryFindLocal (BS.drop (1 + BS.length p) k) c
+        | _ -> None
+
+    /// Find the definition of a given symbol, if any.
+    let rec tryFind (k:Symbol) (d:Dict) : Def option =
+        match tryFindLocal k d with
+        | Some du -> du // definition or deletion found locally
+        | None -> // look in directory of longest matching prefix 
+            let struct(plen,pdir) = matchDir' k d
+            match pdir with
+            | Some (Some ref) -> tryFind (BS.drop plen k) (LVRef.load ref)
+            | _ -> None // symbol is undefined
+
+    /// Test whether dictionary contains a specified symbol.
+    let inline contains (k:Symbol) (d:Dict) : bool = 
+        Option.isSome (tryFind k d)
 
     // Rewrite a Dict node via function at given symbol, potential erasure.
     let rec private rewriteAtKey (k:Symbol) (rw:Dict -> Dict) (d:Dict) : Dict =
@@ -349,29 +343,6 @@ module Dict2 =
     /// Remove all symbols with given prefix from the dictionary.
     let inline dropPrefix (p:Prefix) (d:Dict) : Dict = updPrefix p None d
 
-    /// The DictEnt type corresponds to a single line in a dictionary,
-    /// a single update to a symbol or prefix. 
-    type DictEnt =
-        | Direct of Prefix * Dir
-        | Define of Symbol * DefUpd
-
-    // adds contextual prefix to compute entries in dictionary
-    let rec private toSeqEntP (p:Prefix) (d:Dict) : seq<DictEnt> =
-        let spd = 
-            match d.pd with
-            | None -> Seq.empty
-            | Some dir -> Seq.singleton (Direct(p,dir))
-        let svu =
-            match d.vu with
-            | None -> Seq.empty
-            | Some du -> Seq.singleton (Define(p,du))
-        let sc (ix,struct(p',c)) = toSeqEntP (joinBytes p ix p') c
-        let scs = Seq.concat (Seq.map sc (Map.toSeq (d.cs)))
-        Seq.append spd (Seq.append svu scs)
-    
-    /// Translate dictionary to a sequence of local entries.
-    let toSeqEnt (d:Dict) : seq<DictEnt> = toSeqEntP (BS.empty) d
-
     /// Modify dictionary by logically appending an entry.
     /// Useful for streaming construction of dictionaries.
     let applyEnt (dict:Dict) (upd:DictEnt) : Dict =
@@ -385,6 +356,53 @@ module Dict2 =
 
     /// Compute dictionary from sequence of entries.
     let inline fromSeqEnt s = applySeqEnt empty s
+
+    // here `hr` tracks the `has remote entries` context from the parent.
+    // When false, we can often eliminate deletion entries from `b`.
+    let rec private flushUpdates' (hr:bool) (a:Dict) (b:Dict) : Dict =
+        match b.pd with 
+        | Some dir -> 
+            if hr || Option.isSome dir then b else
+            mkDict None (b.vu) (b.cs) 
+        | None ->
+            let hr' =
+                match a.pd with
+                | None -> hr
+                | Some dir -> Option.isSome dir
+            let vu' = 
+                match b.vu with
+                | None -> a.vu
+                | Some du -> if hr' || Option.isSome du then b.vu else None
+            let fcu = if hr' then flushChildUpdT else flushChildUpdF
+            let cs' = Map.fold fcu (a.cs) (b.cs)
+            mkDict (a.pd) vu' cs'
+        // specializations to resist runtime closure allocation
+    and private flushChildUpdT acs ix pc = flushChildUpd true acs ix pc
+    and private flushChildUpdF acs ix pc = flushChildUpd false acs ix pc
+    and private flushChildUpd hr acs ix (struct(bp,bc)) =
+        match Map.tryFind ix acs with
+        | None -> // may need to erase deletion entries from bc
+            let bc' = if hr then bc else flushUpdates' false empty bc
+            updChild ix bp bc' acs
+        | Some (struct(ap,ac)) -> // align prefixes then merge
+            let n = bytesShared ap bp
+            let apc = prependChildPrefix (BS.drop n ap) ac
+            let bpc = prependChildPrefix (BS.drop n bp) bc
+            let ac' = flushUpdates' hr apc bpc
+            updChild ix (BS.take n ap) ac' acs
+        
+    /// specialized equivalent to `applySeqEnt a (toSeqEnt b)`.
+    /// This is an entry level append, not a union of definitions.
+    let flushUpdates (a:Dict) (b:Dict) : Dict = flushUpdates' false a b
+
+    /// Merge with prototype chain. Transitively eliminates the empty
+    /// prefix entry `/ secureHash` while preserving definitions. In
+    /// normal use cases, our prototype chain should be very short.
+    let rec mergeProto (d0:Dict) : Dict =
+        let struct(proto,dLocal) = splitProto d0
+        match proto with
+        | None -> dLocal
+        | Some ref -> mergeProto (flushUpdates (LVRef.load' ref) dLocal)
 
     // Extract local dictionary entries at specified prefix.
     let rec private extractPrefixLocal (p:Prefix) (d:Dict) : Dict =
@@ -402,41 +420,62 @@ module Dict2 =
         match pd with
         | Some (Some ref) when (l < BS.length p) ->
             let dRemote = extractPrefix (BS.drop l p) (LVRef.load' ref)
-            concatDictEnts dRemote dLocal
+            flushUpdates dRemote dLocal
         | _ -> dLocal
 
     /// Select symbols matching a given prefix from dictionary.
     let inline selectPrefix (p:Prefix) (d:Dict) : Dict = 
         prependPrefix p (extractPrefix p d)
 
-
-
-
+    // sequence definitions in context of prefix
+    let rec private toSeqP (p:Prefix) (d0:Dict) : seq<Symbol * Def> =
+        let d = mergeProto d0 
+        let sv =
+            match (d.vu) with
+            | Some (Some def) -> Seq.singleton (p,def)
+            | _ -> Seq.empty
+        let seqChild (ix,struct(p',c)) = toSeqP (joinBytes p ix p') c
+        let scs = Seq.concat (Seq.map seqChild (Map.toSeq (d.cs)))
+        Seq.append sv scs
+        
     /// Compute a sequence of defined symbols. This will perform
     /// erasures and updates incrementally, as needed.
     let toSeq (d:Dict) : seq<Symbol * Def> = toSeqP (BS.empty) d
 
-    // TODO: 
-    //  - sequence definitions
-    //  - split dictionary lexicographically
-
-
-    // Updates:
-    //  For deletion of a prefix or symbol, we can drop entries if
-    //  they would have been obviously absent. (Testing whether we
-    //  have an entry before deletion should be explicit.)
+    /// Partition the dictionary on a symbol, such that all symbols
+    /// smaller are to the left and symbols equal or greater are to
+    /// the right. Use with toSeq for indexed browsing.
+    let rec splitAtKey (k:Symbol) (d0:Dict) : struct(Dict * Dict) =
+        if BS.isEmpty k then struct(empty,d0) else
+        let d = mergeProto d0 // merge prefixes in path of key
+        let ix = BS.unsafeHead k
+        let lcs = Map.filter (fun k _ -> (k < ix)) (d.cs)
+        let rcs = Map.filter (fun k _ -> (ix < k)) (d.cs)
+        let struct(lcs',rcs') = // split and include ix
+            match Map.tryFind ix (d.cs) with
+            | None -> struct(lcs,rcs)
+            | Some (struct(p,c)) ->
+                let krem = BS.unsafeTail k
+                let n = bytesShared p krem
+                if (n = BS.length p) then
+                    let struct(lc,rc) = splitAtKey (BS.drop n krem) c
+                    struct(updChild ix p lc lcs, updChild ix p rc rcs)
+                else if ((n < BS.length krem) && (p.[n] < krem.[n])) 
+                    then struct(Map.add ix (struct(p,c)) lcs, rcs)
+                    else struct(lcs, Map.add ix (struct(p,c)) rcs)
+        struct(mkDict None (d.vu) lcs', mkDict None None rcs')
 
     
-    /// 
-    /// In this case, we might try to avoid
-    //let rec updSym (k:Symbol) (du:DefUpd) (d:Dict) : Dict =
 
+    // TODO: 
+    //  - efficient difference computation
 
-
-
+    let private isSP c = (c = cSP)
+    let inline private trimSP s = 
+        s |> BS.dropWhile isSP |> BS.dropWhileEnd isSP
     
     /// Parse a single line from a dictionary. May raise ByteStream.ReadError.
-    let parseDictEnt (mkDef:ByteString -> Def) (mkDir:RscHash -> VRef<Dict>) (ln:ByteString) : DictEnt =
+    let parseDictEnt mkDef mkDir ln =
         if BS.isEmpty ln then raise ByteStream.ReadError else
         let c0 = BS.unsafeHead ln
         let struct(sym,spdef) = BS.span ((<>) cSP) (BS.unsafeTail ln)
