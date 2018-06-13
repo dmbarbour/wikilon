@@ -393,15 +393,6 @@ module Dict =
                 let k' = BS.drop (BS.length p) k
                 tryFind k' (load dir)
 
-    /// Access a dictionary as `Symbol → ByteString option`.
-    ///
-    /// This is useful for modules that require read-only access to
-    /// a Dict and are not concerned with updates or representation.
-    let lookup (d:Dict) (k:Symbol) : ByteString option =
-        match tryFind k d with
-        | Some defOpt -> Some (defOpt.Data)
-        | None -> None
-
     /// Test whether dictionary contains a specified symbol.
     let inline contains (k:Symbol) (d:Dict) : bool = 
         Option.isSome (tryFind k d)
@@ -428,23 +419,8 @@ module Dict =
 
     // Concatenate dictionary entries optimized for cases where
     // dictionary `a` is either empty or probably larger than b.
-    let inline private concatDictEnts' (a:Dict) (b:Dict) : Dict =
-        if isEmpty a then b else 
-        applySeqEnt a (toSeqEnt b)
-
-    // Concatenate dictionaries at entry level, optimized for larger b.
-    // That is, we'll iterate entries in `a` instead of `b`. This isn't
-    // safe for the general use case due to how we erase some entries.
-    // But it's useful for merging subdirectories into the root node.
-    let private concatDictEnts (a:Dict) (b:Dict) : Dict =
-        if isEmpty b then a else
-        let inline maskPrefix p = Option.isSome (matchDirT p (b.dirs))
-        let inline maskSymbol s = CritbitTree.containsKey s (b.defs) || maskPrefix s
-        let accumDir p dir t = if maskPrefix p then t else CritbitTree.add p dir t
-        let accumDef s def t = if maskSymbol s then t else CritbitTree.add s def t
-        let dirs' = CritbitTree.foldBack accumDir (a.dirs) (b.dirs)
-        let defs' = CritbitTree.foldBack accumDef (a.defs) (b.defs)
-        { dirs = dirs'; defs = defs' }
+    let inline private concatDictEnts (a:Dict) (b:Dict) : Dict =
+        if isEmpty a then b else applySeqEnt a (toSeqEnt b)
 
     let private extractPrefixT (p:Prefix) (t:CritbitTree<'A>) : CritbitTree<'A> =
         let remP k v t = CritbitTree.add (BS.drop (BS.length p) k) v t
@@ -629,7 +605,7 @@ module Dict =
         let step (ix:byte) (d:Dict) : Dict = 
             let p = BS.singleton ix
             let dp = Codec.compact c db (extractPrefix p d)
-            concatDictEnts' (dropPrefix p d) (prependPrefix p dp)
+            concatDictEnts (dropPrefix p d) (prependPrefix p dp)
         let rec loop ix d =
             let d' = step ix d
             if (ix = (System.Byte.MaxValue)) then d' else
