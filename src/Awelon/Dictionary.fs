@@ -617,7 +617,7 @@ module Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
     let private codec_nodeMin = 1600UL                  // min size for created Stowage
-    let private codec_flush   = codec_nodeMin * 16UL    // buffer for recursive compact
+    let private codec_flush   = codec_nodeMin * 12UL    // buffer for recursive compact
     do assert(codec_nodeMin > (10UL * protoRefSize))    // heuristic for ref efficiency
 
     /// A reasonable default codec for Dict.
@@ -663,9 +663,10 @@ module Dict =
     // PERFORMANCE NOTES
     //
     // The performance I'm getting from this Dict/codec is comparable
-    // to the Stowage.LSMTrie. That is, about 10usec per write, 2.5 
-    // to iterate, and 5usec for random reads on a moderately large
-    // dictionary.
+    // to the Stowage.LSMTrie, albeit a little worse. Writes are near
+    // 15usec, reads around 6usec, for a tree of moderate size and 
+    // ad-hoc write batches. This improves considerably if the Dict is
+    // mostly cached via LVRefs.
 
 type Dict = Dict.Dict
 

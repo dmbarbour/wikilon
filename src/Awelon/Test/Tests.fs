@@ -62,7 +62,7 @@ let ``basic parser tests`` () =
 
 let testDefStr n = 
     let s = if (0 = n) then "[zero]" else
-            "[" + string (n - 1) + " succ]"
+            "[" + string (n - 1) + " succ] (nat)"
     BS.fromString s
 
 let inline bs n = BS.fromString (string n)
@@ -150,9 +150,9 @@ type DBTests =
             if (ct' <> ct) then gcLoop ct'
         gcLoop 0UL
 
-    member tf.CompactionTest (alen:int) (frac:int) (rng:System.Random) (c:Codec<Dict>) : unit =
+    member tf.CompactionTest (alen:int) (frac:int) (rng:System.Random) : unit =
         let sw = new System.Diagnostics.Stopwatch()
-        let cc d = Codec.compact c (tf.Stowage) d
+        let cc d = Codec.compact (Dict.codec) (tf.Stowage) d
         let compactK k d = if (0 <> (k % frac)) then d else cc d
         let add n d = compactK n (addN n d)
         let rem n d = compactK n (remN n d)
@@ -163,29 +163,17 @@ type DBTests =
 
         printfn "building a test dictionary"
         sw.Restart()
-        let d =  Dict.empty
-              |> Array.foldBack add a 
-              |> Array.foldBack rem r
-              |> cc
+        let dRef =  Dict.empty
+                 |> Array.foldBack add a 
+                 |> Array.foldBack rem r
+                 |> cc
+                 |> VRef.stow (Dict.codec) (tf.Stowage) // non-caching ref
         tf.Flush()
         sw.Stop()
         printfn "test dictionary built (%A ms)" (sw.Elapsed.TotalMilliseconds)
-
-        let sz = Dict.sizeBytes d
-        printfn "dict root node size: %A" sz
-        //Assert.True((0UL < sz) && (sz < 4000UL))
-
         let write_op_ct = Array.length a + Array.length r
         let write_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double write_op_ct)
         printfn "usec per write op: %A" write_op_usec
-
-        Assert.False(Dict.contains (bs 1) d)
-        Assert.False(Dict.contains (bs (a.Length / 3)) d)
-        Assert.False(Dict.contains (bs ((a.Length / 3) - 1)) d)
-        Assert.False(Dict.contains (bs (a.Length / 7)) d)
-        Assert.True(Dict.contains (bs a.Length) d)
-        Assert.True(Dict.contains (bs (a.Length - 1)) d)
-        Assert.True(Dict.contains (bs ((a.Length - 1) / 2)) d)
 
         // really doing iteration (sequential read). I might need to test
         // performance of random reads, seperately. But this isn't primarily
@@ -195,8 +183,9 @@ type DBTests =
         let sum_expected = array_sum a - array_sum r
 
         sw.Restart()
-        let len = Dict.toSeq d |> Seq.length
-        let sum = Dict.toSeq d
+        let dR = VRef.load dRef
+        let len = Dict.toSeq dR |> Seq.length
+        let sum = Dict.toSeq dR
                 |> Seq.map (fst >> readNat)
                 |> Seq.fold accum 0UL
         sw.Stop()
@@ -208,21 +197,28 @@ type DBTests =
 
         // random-read performance test
         shuffle rng a
-        let fnAccum acc k = acc + if Dict.contains (bs k) d then uint64 k else 0UL
         sw.Restart()
-        let rsum = Array.fold fnAccum 0UL a
+        let dRR = VRef.load dRef
+        let fnAccum acc k = acc + if Dict.contains (bs k) dRR then uint64 k else 0UL
+        let rsum1 = Array.fold fnAccum 0UL a
         sw.Stop()
-        let rread_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double (Array.length a))
+        shuffle rng a
+        sw.Start()
+        let rsum2 = Array.fold fnAccum 0UL a
+        sw.Stop()
+        let rread_op_ct = 2 * Array.length a
+        let rread_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double rread_op_ct)
         printfn "usec per random read op: %A" rread_op_usec
-        Assert.Equal(rsum,sum_expected)
+        Assert.Equal(rsum1,sum_expected)
+        Assert.Equal(rsum1,rsum2)
 
     [<Fact>]
     member tf.``test dict compaction`` () =
         let rng = new System.Random(1)
         printfn "size 70k, 10 compactions"
-        tf.CompactionTest 70000 7000 rng (Dict.codec)
+        tf.CompactionTest 70000 7000 rng 
         printfn "size 70k, 100 compactions"
-        tf.CompactionTest 70000 700 rng (Dict.codec)
+        tf.CompactionTest 70000 700 rng 
         
         
         
