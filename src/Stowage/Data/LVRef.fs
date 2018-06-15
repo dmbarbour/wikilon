@@ -15,7 +15,11 @@ open Data.ByteString
 /// GC at the .Net layer and avoid unnecessary writes.
 /// 
 /// In context of LVRefs, the `IDisposable` interface only clears
-/// the cached data. I contemplated creating a generic interface
+/// the cached data. I contemplated creating a generic interface.
+///
+/// Note: to improve structure sharing between LVRefs, it may be
+/// useful to create a MemCache with LVRefs that are shared upon
+/// read. 
 type LVRef<'V> =
     val internal lvref : Lazy<VRef<'V>>
     val mutable internal cache : 'V option
