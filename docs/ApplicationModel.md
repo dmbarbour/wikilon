@@ -35,19 +35,21 @@ I have several desiderata for application models in Awelon systems:
 * distributed: partition state and computation across many machines
 * deterministic: behavior is fully repeatable up to external inputs
 
-First-class value representation of processes is convenient for composition, immutability, and sharing. However, first-class "object identity" - where we explicitly communicate references to process or state components - is problematic for sharing, composition, determinism, and even memory management. I'll exclude models that rely on object identity.
+First-class value representation of application state and behavior is convenient for composition, immutability, sharing, and process control. However, first-class "object identity" - whereby we communicate names of processes or state components - is more problematic for sharing, composition, determinism, and even memory management. The basic issue is duplication or forgery of names when we try to replicate things, preserving behavior for these names in a new context.
 
-Concurrency requires we both represent multiple external requests and receive multiple inputs, and progress incrementally (i.e. such that supplying any requested input may result in new requests, no need to supply all inputs up-front). Distribution, meanwhile, requires long-lived components (relative to latencies), which tends to require incremental communication. Determinism, in context of concurrency, requires that any internal communications between components be confluent.
+I'll directly exclude models that rely on object identity such as runtime allocation of 'new' variables or channels. This constrains our choice of concurrency and communication models. Fortunately, we can still model useful concepts, like second-class channels or variables, hierarchical filesystems or state models, and publish-subscribe topics.
 
-Transparent representations are accessible. But opaque representations (abstract data types, closures, etc.) are convenient for protecting assumptions and state invariants. I suspect we'll want something in-between in practice.
+Concurrency requires we both represent multiple external requests and receive multiple inputs, and progress incrementally (i.e. such that supplying any requested input may result in new requests, no need to supply all inputs up-front). Distribution, meanwhile, requires that state can be partitioned across multiple processors, and long-lived state relative to communication latencies. Determinism, in context of concurrency and intra-process communication, requires some form of confluence for many-to-one communications (otherwise, we'll have a bottleneck).
+
+If necessary, I'm reluctantly willing to relax determinism. We could assume an external scheduler, and support arrival-order non-determinism or external interrupts. But our model must enable a purely functional simulated scheduler for testing, hierarchical embeddings, and interactive queries of application state. Preferably without a huge performance loss where the scheduler becomes a bottleneck.
 
 ## Monadic Processes
 
-Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type. Of course, this still leaves a big question regarding *which* effects to model. For example, we could support sockets for network access, or limit ourselves to servicing and sending HTTP requests, or focus on distributed queues. 
+Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type. Of course, this still leaves a big question regarding *which* effects to model. For example, we could support sockets for network access, or limit ourselves to servicing and sending HTTP requests, or focus on distributed queues. Many models, such as RDP, can be given a monadic API.
 
-Concurrency and distribution are awkward with a monadic API. Especially so upon rejection of object identity: we cannot "allocate" variables or channels. It is feasible to support tree-structured fork-join concurrency, such as `fork-join :: m a → m b → m (a * b)`. But this doesn't model communication between process components, which is necessary for efficient or distributed concurrency.
+Concurrency is a little awkward. A monad can generally only present one request at a time, so for concurrent requests we end up spawning lots of small monad processes that require a lot of ad-hoc inter-process communications. This could be ameliorated by a carefully designed API. Blackboard metaphor might help, registering active requests into the environment.
 
-Nonetheless, monadic processes are a *proven* model for effects in context of functional programming. It should be worth investing in as a means to quickly get started, implementing user-programmable tasks on Awelon web servers. For many use cases, concurrency and distribution are not essential. And we could still leverage distributed resources using accelerated functions with cloud computing internally (e.g. for large matrix operations). 
+Since monadic IO is well proven in Haskell, it's not a bad place to get started. We could at least model some simple web services and agents this way.
 
 ## Kahn Process Networks
 
@@ -76,7 +78,7 @@ Additionally, we could support a concept of negation or deletion:
 
 With either of these, we can additionally support durable data - labels that preserve data with an implicit `get >>= put` behavior. This would have many similarities to functional-relational programming (cf. [Out of the Tarpit](https://github.com/papers-we-love/papers-we-love/blob/master/design/out-of-the-tar-pit.pdf) by Ben Moseley).
 
-The main weakness of RDP is that the data type `a` in the `Set of a` is restricted to comparable value types. This is necessary for both determinism and recognizing when a set of labels have entered a stable state. (We could feasibly relax this constraint by permitting specialized use of single-assignment labels.) We might also introduce specialized functions, such as `each : Label a → (a → m ()) → m ()` and `contains : Label a → a → m bool` to further optimize system stabilization.
+The main weakness of RDP is that the data type `a` in the `Set of a` is restricted to comparable value types. (Although, we could use specialized set models in some cases, such as a trie of strings/binaries.) This is necessary for both determinism and recognizing when a set of labels have entered a stable state. (We could feasibly relax this constraint by permitting specialized use of single-assignment labels.) We might also introduce specialized functions, such as `each : Label a → (a → m ()) → m ()` and `contains : Label a → a → m bool` to further optimize system stabilization.
 
 RDP integrates most easily with external topic-based publish-subscribe systems. Effectively, labels are fine-grained topics.
 

@@ -40,38 +40,14 @@ Definitions for `zero` and `succ` are left to the dictionary. However, in practi
 
 ## Embedded Texts
 
-Awelon has limited native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specifically the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters, and there is no Unicode support. Semantically, a text represents an ASCII binary list.
+Awelon has limited native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specifically the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters. Semantically, a text represents an ASCII binary list.
 
         ""      = [null]
         "hello" = [104 "ello" cons]
 
-Embedded texts are suitable for lightweight DSLs, test data, rendering hints, comments, and similar use cases. There are no escape characters. For larger or more sophisticated texts it might be better to treat them as external *Secure Hash Resources*, or structured texts represented by suitable data structure. Like natural numbers, definitions for `null` and `cons` are left to the dictionary.
+Embedded texts are suitable for lightweight DSLs, test data, rendering hints, comments, and similar use cases. Large or sophisticated texts can be represented as external *Secure Hash Resources* or supported by *Editable View*. For example, `["hello\nmulti-line\nworld" literal]` could be presented to a user as an editable multi-line text-box that automatically splices in escapes. Although there are no built-in escape characters, we can effectively define our own in this manner. Like natural numbers, definitions for `null` and `cons` are left to the user, but in practice are guided by available acceleration.
 
-## Secure Hash Resources
-
-It is possible to identify binaries by *secure hash*. Doing so has many nice properties: immutable and acyclic by construction, cacheable, securable, provider-independent, self-authenticating, implicitly shared, automatically named, uniformly sized references, and smaller than full URLs or file paths. Awelon systems widely leverage secure hashes to reference binaries:
-
-* external binary data may be referenced via `%secureHash`
-* code and structured data is referenced via `$secureHash`
-* dictionary tree nodes are referenced using `/prefix secureHash`
-
-Use of `$secureHash` is essentially an anonymous word, whereas `%secureHash` is widely used as an alternative to external data file references. The semantics for `%secureHash` is to expand the binary as a list of bytes, much like embedded texts. Storage of resources is unspecified. We simply assume that Awelon systems have built-in or configurable knowledge about where to seek secure hashes - whether that be fileystem, database, web service, content delivery network, etc.. 
-
-Awelon uses the 320-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash using 64 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet.
-
-        Base32 Alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST
-            encoding 0..31 respectively
-
-        Example hashes, chained from "test":
-
-        rmqJNQQmpNmKlkRtsbjnjdmbLQdpKqNlndkNKKpnGDLkmtQLPNgBBQTRrJgjdhdl
-        cctqFDRNPkprCkMhKbsTDnfqCFTfSHlTfhBMLHmhGkmgJkrBblNTtQhgkQGQbffF
-        bKHFQfbHrdkGsLmGhGNqDBdfbPhnjJQjNmjmgHmMntStsNgtmdqmngNnNFllcrNb
-        qLDGfKtQHhhTthNTDMMqDMDKnrCTpSSBHHBjDNtsKrTdNRGgtmtqQFTdGjsnfJDR
-
-We can safely neglect the theoretical concern of secure hash collisions. If BLAKE2b is cracked in the future, we can address it then by transitively rewriting all secure hashes in our Awelon dictionaries. I won't further belabor the issue. 
-
-*Security Notes:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat each secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should guard against timing attacks that might leak these secure hashes. Favor constant-time comparisons when using hashes as lookup keys, for example. In context of distributed storage, it may prove useful to use the first half of each hash for lookups and the remainder as a key for AES decryption. Finally, for resources with private, low-entropy data (like a phone number or credit card number), embedding a comment with a random string can help resist "does this data exist?" attacks. 
+Structured data, like XML, is better modeled as an Awelon data type to permit flexible abstraction, templating, procedural generation, and large-scale via secure hash resources. 
 
 ## Labeled Data
 
@@ -90,6 +66,34 @@ The record value `{a=[A],b=[B],c=[C]}` is abstract, never represented syntactica
 For variants, the basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer must supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA] :a [OnB] :b [OnC] :c ...]`. Variant values could then have concrete representation like `[.label [Value] case]` or `[[value] [.label] case]` depending on how we define `case`. With projectional editors, labeled variants may be given a more conventional appearance.
 
 *Note:* Labeled data could be modeled in Awelon without a primitive feature, e.g. modeling a concrete trie for the abstract record value together with accelerators and projectional editing. However, primitive labels significantly simplify static analysis, debugging, and error reporting.
+
+## Secure Hash Resources
+
+It is possible to identify binaries by *secure hash*. Doing so has many nice properties: immutable and acyclic by construction, cacheable, securable, provider-independent, self-authenticating, implicitly shared, automatically named, uniformly sized references, and smaller than full URLs or file paths. Awelon systems widely leverage secure hashes to reference binaries:
+
+* external binary data may be referenced via `%secureHash`
+* code and structured data is referenced via `$secureHash`
+* dictionary tree nodes are referenced using `/prefix secureHash`
+
+Use of `$secureHash` is essentially an anonymous word, whereas `%secureHash` is widely used as an alternative to external data file references. The semantics for `%secureHash` is to expand the binary as a list of bytes, much like embedded texts. Storage of resources is unspecified. We simply assume that Awelon systems have built-in or configurable knowledge about where to seek secure hashes - whether that be fileystem, database, web service, content delivery network, etc.. 
+
+In practice, the size for any single secure hash resource may be limited to several megabytes. This maximum block size would be determined by our runtime. Larger binaries should be sliced apart, explicitly represented as a list or tree of smaller binary fragments to permit flexible streaming or efficient update.
+
+Awelon uses the 320-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash using 64 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet.
+
+        Base32 Alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST
+            encoding 0..31 respectively
+
+        Example hashes, chained from "test":
+
+        rmqJNQQmpNmKlkRtsbjnjdmbLQdpKqNlndkNKKpnGDLkmtQLPNgBBQTRrJgjdhdl
+        cctqFDRNPkprCkMhKbsTDnfqCFTfSHlTfhBMLHmhGkmgJkrBblNTtQhgkQGQbffF
+        bKHFQfbHrdkGsLmGhGNqDBdfbPhnjJQjNmjmgHmMntStsNgtmdqmngNnNFllcrNb
+        qLDGfKtQHhhTthNTDMMqDMDKnrCTpSSBHHBjDNtsKrTdNRGgtmtqQFTdGjsnfJDR
+
+We can safely neglect the theoretical concern of secure hash collisions. If BLAKE2b is cracked in the future, we can address it then by transitively rewriting all secure hashes in our Awelon dictionaries. I won't further belabor the issue. 
+
+*Security Note:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat each secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should guard against timing attacks that might leak these secure hashes. Favor constant-time comparisons when using hashes as lookup keys, for example. In context of distributed storage, it may prove useful to use the first half of each hash for lookups and the remainder as a key for AES decryption. Finally, for resources with private, low-entropy data (like a phone number or credit card number), embedding a comment with a random string can help resist "does this data exist?" attacks. 
 
 ## Annotations
 
@@ -138,11 +142,11 @@ Stowage is a simple idea, summarized by rewrite rules:
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
 
-Stowage uses the *Secure Hash Resources* space to offload data from working memory. This actual offload would usually apply lazily, when space is needed. The data will be loaded again when observed. Essentially, this gives us an immutable virtual memory model suitable for persistent data structures. What "large" means is heuristic, but should be simple to understand, predict, and reproduce. A simple rule like "1600 bytes is the lower bound of large" should be sufficient.
+Stowage uses the *Secure Hash Resources* space to offload data from working memory. This actual offload would usually apply lazily, when space is needed. The data will be loaded again when observed. Essentially, this gives us an immutable virtual memory model suitable for persistent data structures. What "large" means is heuristic, but should be simple to understand, predict, and reproduce. A simple rule like "1600 bytes is the lower bound of large" should be sufficient. Configurable variants are feasible, e.g. `(stow-large)` vs. `(stow-small)`. We can also support binary variants.
 
 ## Dictionary
 
-Awelon words are defined in a codebase called a "dictionary". A dictionary is simply an association between words and Awelon encoded functions. However, for Awelon project's goals, we require a standard import/export representation that supports efficient update, sharing, snapshots, versioning, and diffs at scales of many gigabytes or terabytes.
+Awelon words are defined in a codebase called a "dictionary". A dictionary is simply an association between words and Awelon encoded functions. However, for Awelon project's goals, we require a standard import/export representation that supports efficient update, sharing, snapshots, versioning, and diffs at scales of many gigabytes or terabytes. Legibility is also a goal, to simplify debugging or inference of implementation.
 
 The proposed representation:
 
@@ -152,13 +156,13 @@ The proposed representation:
         :symbol2 definition2
         ~symbol3
 
-A dictionary 'node' is represented with dense, line-oriented ASCII text, representing an update log. Most lines will define or delete symbols (`:` or `~` respectively), but we may also index a prefix to a subtree (via `/`). Symbols usually correspond to Awelon words, and definitions to Awelon code. Internal nodes are identified by their secure hash, cf. *Secure Hash Resources*. Symbols for inner nodes are stripped of the matched prefix, hence `:poke` under `/p` becomes `:oke`. For lookup, only the last update for a given symbol or prefix is used. Hence, `/p` will mask all prior updates with prefix `p` such as `/prod` and `:poke`. We can normalize our dictionary nodes by erasing irrelevant updates and sorting whatever remains.
+A dictionary 'node' is represented with dense, line-oriented ASCII text, representing an update log. Each line will define or delete a symbol (`:` or `~` respectively), or index another node (via `/`). Blank lines and comments are not permitted. Symbols usually correspond to Awelon words, definitions to Awelon code. Indexed nodes are identified by secure hash, cf. *Secure Hash Resources*. Symbols for inner nodes are stripped of the matched prefix, hence `:poke` under `/p` becomes `:oke`. For lookup, only the final update for a given symbol or prefix is used. Hence, `/p` will mask all prior updates with prefix `p` such as `/prod` and `:poke`. We normalize a dictionary node by erasing irrelevant entries then sorting what remains.
 
 For oversized definitions, this representation can be inefficient. We can ameliorate this by moving oversized definitions into the resource layer via `$secureHash` redirect.
 
 This representation combines characteristics of the LSM-tree, radix tree, and Merkle tree. It supports deeply immutable structure, structure sharing, lightweight version snapshots, lazy compaction, distributed storage, efficient diffs, and soft real-time streaming updates. The empty prefix `/ secureHash` can be leveraged to represent prototype inheritance or a stream reset. Like other LSM-trees, this does allow capture of multiple definitions for a symbol. But even that can be useful to optimize separate compilation based on relative stability of definitions.
 
-*Note:* Comments are not supported! Instead, embed comments within Awelon definitions (via `"comment"(a2)d`), or define words associated by ad-hoc conventions like `foo-doc` as documentation for `foo`. For dictionary-level metadata, consider defining words with a `meta-` prefix. This allows for documentation to be structured, abstracted, and indexed.
+*Note:* Comments and metadata should be embedded within definitions. We can use forms such as `"remark"(a2)d` for second-class embedded comments. But we can also dedicate volumes of a dictionary using ad-hoc naming conventions, e.g. such that `foo-meta-doc` is widely recognized as a place to put documentation for `foo`. Full dictionary concerns such as bug trackers could also be recorded within the dictionary.
 
 ### Software Packaging and Distribution
 
@@ -204,7 +208,7 @@ Arity awaiting annotations are useful for Awelon, and have simple rewrite rules:
         [C][B][A](a3) == [C][B][A]
         ...
 
-These annotations can be used to defer linking of words where a partial evaluation isn't useful. For example, consider a swap function `w = (a2) [] b a`. Ignoring the arity annotation, we'd rewrite `[A]w => [[A]]a`, which isn't useful progress. With the arity annotation, `[A]w` does not evaluate further, but `[B][A]w` evaluates directly to `[A][B]`. Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior as `[[A]F]`, but the former defers computation until the result is required. 
+These annotations can be used to defer linking of words where a partial evaluation isn't useful. For example, consider a swap function `w = (a2) [] b a`. Ignoring the arity annotation, we'd rewrite `[A]w => [[A]]a`, which isn't useful progress. With the arity annotation, `[A]w` does not evaluate further, but `[B][A]w` evaluates directly to `[A][B]`. Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior as `[[A]F]`, but the former defers computation until the result is required.
 
 ## Loops
 
