@@ -35,7 +35,7 @@ open Stowage
 // Hierarchical dictionaries simply use `dictname/word` symbols. We
 // can use `/dictname/ secureHash` to logically include one dictionary
 // into another.
-module Dict2 =
+module Dict =
     let cLF = 10uy
     let cSP = 32uy
     let cDef = byte ':'
@@ -499,6 +499,7 @@ module Dict2 =
                 | Some vdiff -> Seq.singleton (p,vdiff)
             Seq.append sv (diffCS p a b)
         and diffCS p a b = // diff all possible indexes 
+            // this is the only lazy part of our sequence...
             Seq.concat (Seq.map (diffIX p (a.cs) (b.cs)) seqBytes)
         and diffIX p acs bcs ix = // diff specific index
             match Map.tryFind ix acs, Map.tryFind ix bcs with
@@ -513,7 +514,10 @@ module Dict2 =
         diffP (BS.empty) a0 b0
 
 
-    // Functions for Writing a Dictionary
+
+    // `/` SP secureHash LF
+    let private protoRefSize = uint64 (3 + RscHash.size) 
+
 
     /// Return two sizes for dictionary: (line count * byte count)
     /// based on what would be written to a dictionary node. Each
@@ -525,7 +529,7 @@ module Dict2 =
             match d.pd with
             | None -> struct(0UL,0UL)       // no line
             | Some None -> struct(1UL,2UL)  //  `/` LF
-            | Some (Some _) -> struct(1UL,uint64 (3 + RscHash.size))
+            | Some (Some _) -> struct(1UL,protoRefSize)
         let struct(lnv,szv) =
             match d.vu with
             | None -> struct(0UL,0UL)
@@ -542,6 +546,13 @@ module Dict2 =
         // add child's prefix to every line in the child
         let szp = lnc * (1UL + uint64 (BS.length p)) 
         struct((ln+lnc),(sz+szc+szp))
+
+    let inline sizeBytes d = 
+        let struct(_,sz) = size d 
+        sz
+    let inline sizeEnts d = 
+        let struct(ln,_) = size d 
+        ln
 
     let private entBytes (ent:DictEnt) : struct(byte * ByteString * ByteString) =
         match ent with
@@ -564,14 +575,15 @@ module Dict2 =
             ByteStream.writeBytes d dst
         ByteStream.writeByte cLF dst
 
-    /// Write a dictionary node as a ByteString.
-    let write (d:Dict) : ByteString = 
+    let private writeDst (d:Dict) (dst:ByteDst) : unit =
         let struct(_,sz) = size d
         let szMax = uint64 (System.Int32.MaxValue)
         if (sz > szMax) then raise (System.OutOfMemoryException()) else
-        ByteStream.write (fun dst -> 
-            ByteStream.reserve (int sz) dst 
-            Seq.iter (writeEnt dst) (toSeqEnt d))
+        ByteStream.reserve (int sz) dst
+        Seq.iter (writeEnt dst) (toSeqEnt d)
+
+    /// Write a dictionary node as a ByteString.
+    let write (d:Dict) : ByteString = ByteStream.write (writeDst d)
 
 
     let private isSP c = (c = cSP)
@@ -588,7 +600,7 @@ module Dict2 =
         let h = trimSP def // ignore whitespace for Del and Dir lines.
         if ((c0 = cDel) && (BS.isEmpty h)) then Define (sym, None) else
         if ((c0 = cDir) && (BS.isEmpty h)) then Direct (sym, None) else
-        if ((c0 = cDir) && (RscHash.isValidHash h)) then Direct (sym, Some (LVRef.wrap (mkDir h))) else
+        if ((c0 = cDir) && (RscHash.isValidHash h)) then Direct (sym, Some (mkDir h)) else
         raise ByteStream.ReadError
 
     let private parseLineStep onLine s =
@@ -603,47 +615,49 @@ module Dict2 =
     let inline parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
-    
+    let private codec_nodeMin = 1200UL                  // min size for created Stowage
+    let private codec_flush   = codec_nodeMin * 16UL    // buffer for recursive compact
+    do assert(codec_nodeMin > (10UL * protoRefSize))    // heuristic for ref efficiency
 
-    // Compaction howto?
-    // I can translate the prior compaction algorithm easily enough.
-    // 
-    (*
-    /// Configurable codec for Dictionary nodes.
+    /// A reasonable default codec for Dict.
     ///
-    /// Configuration options:
+    /// After compaction, we can guarantee our dictionary size is
+    /// under two kilobytes. Large dictionaries are moved to a 
+    /// Stowage node. For larger dictionaries, we apply compaction 
+    /// recursively to child nodes. There are a lot of heuristics
+    /// involved. Ultimately, we have LSM-tree behavior. 
     ///
-    /// - nodeMin: minimal size for node allocation
-    /// - updBuff: per node data buffering size
-    ///
-    /// 
-    /// After compaction, we can be certain that our node will be
-    /// smaller than the allocation node size. But we'll flush only
-    /// if 
-    /// Nodes larger than nodeMin are rewritten to `/ secureHash`.
-    /// Smaller nodes will be inlined. The updBuff determines the
-    /// recursive use of compaction: if nodes are larger than the
-    /// buffer, we create or rewrite child nodes to control size.
-    /// This allows recent updates to aggregate near the root of
-    /// the tree.
-    ///
-    /// For worst case nodes (or if updBuff is 0) we reduce to
-    /// Trie based compaction behaviors, which also isn't bad.
-    let node_codec_config (nodeMin:SizeEst) (updBuff:SizeEst) =
+    /// This codec works best if our symbols aren't too large and
+    /// our definitions are also limited in size. It also does not
+    /// look into child nodes, so a large number of deletions might
+    /// not propagate all the way to leaf nodes.
+    let codec =
         { new Codec<Dict> with
-            member __.Write d dst = 
-                writeEnts (toSeqEnt d) dst
-            member c.Read db src = 
-                parseDict (autoDef db) (VRef.wrap c db) (ByteStream.readRem src)
-            member c.Compact db d =
-                let struct(prior,upd) = splitProto d
-                if isEmpty upd then struct(d, sizeDict d) else
-                let d0 = concatDictEnts (load prior) upd
-                (struct(d0, sizeDict d0))
-                    |> nodeFlush updBuff c db 
-                    |> nodeStow nodeMin c db 
+            member __.Write d dst = writeDst d dst
+            member cD.Read db src = 
+                // TODO: consider mem-caching LVRefs to improve sharing.
+                let mkDef s = autoDef db s
+                let mkDir h = LVRef.wrap (VRef.wrap cD db h)
+                parseDict mkDef mkDir (ByteStream.readRem src)
+            member cD.Compact db d0 =
+                let sz0 = sizeBytes d0
+                if (sz0 < (codec_nodeMin >>> 1)) then struct(d0,sz0) else
+                let struct(dM,szM) = // merge updates (if needed)
+                    if Option.isNone (d0.pd) then struct(d0,sz0) else
+                    let dM = mergeProto d0
+                    struct(dM, sizeBytes dM)
+                let struct(dF,szF) = // recursively flush (if very large)
+                    let skip = (szM < codec_flush) || (Map.isEmpty (dM.cs))
+                    if skip then struct(dM,szM) else
+                    let compactChild ix (struct(p,c)) cs  =
+                        updChild ix p (Codec.compact cD db c) cs
+                    let cs' = Map.foldBack compactChild (dM.cs) (Map.empty) 
+                    let dF = mkDict None (dM.vu) cs'
+                    struct(dF, sizeBytes dF)
+                if (szF < codec_nodeMin) then struct(dF,szF) else
+                let dir = Some (LVRef.stow cD db dF (szF <<< 2))
+                struct(fromProto dir, protoRefSize)
         }
 
-
-    *)
+type Dict = Dict.Dict
 

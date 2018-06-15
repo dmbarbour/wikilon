@@ -35,7 +35,7 @@ open Data.ByteString
 // Hierarchical dictionaries simply use `dictname/word` symbols. We
 // can use `/dictname/ secureHash` to logically include one dictionary
 // into another.
-module Dict =
+module Dict1 =
 
     let cLF = 10uy
     let cSP = 32uy
@@ -610,7 +610,7 @@ module Dict =
             let d' = step ix d
             if (ix = (System.Byte.MaxValue)) then d' else
             loop (ix + 1uy) d'
-        let df = loop (System.Byte.MinValue) (mergeProto d0)
+        let df = loop (System.Byte.MinValue) d0
         struct(df, sizeDict df)
 
     // push oversized nodes to stowage via `/ secureHash`
@@ -630,22 +630,23 @@ module Dict =
     /// buffer, we create or rewrite child nodes to control size.
     /// This allows recent updates to aggregate near the root of
     /// the tree.
-    ///
-    /// For worst case nodes (or if updBuff is 0) we reduce to
-    /// Trie based compaction behaviors, which also isn't bad.
     let node_codec_config (nodeMin:SizeEst) (updBuff:SizeEst) =
+        assert(nodeMin > (uint64 (10 * (3 + RscHash.size))))
         { new Codec<Dict> with
             member __.Write d dst = 
                 writeEnts (toSeqEnt d) dst
             member c.Read db src = 
                 parseDict (autoDef db) (VRef.wrap c db) (ByteStream.readRem src)
             member c.Compact db d =
-                let struct(prior,upd) = splitProto d
-                if isEmpty upd then struct(d, sizeDict d) else
-                let d0 = concatDictEnts (load prior) upd
-                (struct(d0, sizeDict d0))
-                    |> nodeFlush updBuff c db 
-                    |> nodeStow nodeMin c db 
+                let sz = sizeDict d
+                if (sz < nodeMin) then struct(d,sz) else
+                let dsz' = 
+                    let hasProto = CritbitTree.containsKey (BS.empty) (d.dirs)
+                    if not hasProto then struct(d,sz) else
+                    let d' = mergeProto d
+                    struct(d',sizeDict d')
+                dsz' |> nodeFlush updBuff c db 
+                     |> nodeStow nodeMin c db
         }
 
     // Note: compaction by node_codec doesn't leverage prototype 
@@ -654,10 +655,10 @@ module Dict =
     // of lookups. But I lack simple, efficient heuristics for
     // deciding when to use chaining.
 
-    // Limit reference overheads to about 4% (~1.6kB)
-    let private defaultNodeMin = 25UL * uint64 (RscHash.size)
+    // Limit reference overheads 
+    let private defaultNodeMin = 1600UL
 
-    // Flush nodes if they're larger than 25 small nodes (~40kB).
+    // Flush nodes if they're very large
     let private defaultUpdBuff = 25UL * defaultNodeMin
 
     /// Node codec with buffered update LSM-trie compactions. 
@@ -701,6 +702,6 @@ module Dict =
     // - three-way diffs?
     // - cached evaluations and dictionaries
 
-type Dict = Dict.Dict
+type Dict1 = Dict1.Dict
 
 
