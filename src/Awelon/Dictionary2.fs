@@ -107,19 +107,17 @@ module Dict2 =
 
     /// A dictionary node in-memory is represented as a trie with
     /// injected references to remote nodes (for /prefix entries).
-    /// Size estimates are remembered for incremental compaction.
     type Dict = 
         { pd : Dir option     // optional empty prefix entry
           vu : DefUpd option  // optional empty symbol entry
           cs : Children       // nodes with larger prefixes
-            // ct,sz are computed incrementally upon compaction
-          ct : uint32         // visible entry count (or max value)
-          sz : uint32         // serialization size (or max value)
         }
     and Children = Map<byte,struct(Prefix * Dict)>
     and Dir = LVRef<Dict> option  // secureHash (Some) or blank (None)
-    let ctmax = System.UInt32.MaxValue
-    let szmax = System.UInt32.MaxValue
+
+        // TODO: consider keeping a size-estimate per Dict node to
+        // help with compaction algorithms. Whether this is worthwhile
+        // will depend on the compaction algorithm.
 
     /// The DictEnt type corresponds to a single line in a dictionary,
     /// a single update to a symbol or prefix. 
@@ -162,8 +160,7 @@ module Dict2 =
     /// has a moderate overhead to reconstruct symbols and prefixes.
     let toSeqEnt (d:Dict) : seq<DictEnt> = toSeqEntP (BS.empty) d
 
-    let inline mkDict pd vu cs = 
-        { pd = pd; vu = vu; cs = cs; ct = ctmax; sz = szmax }
+    let inline mkDict pd vu cs = { pd = pd; vu = vu; cs = cs }
 
     // TODO: consider developing a mutable DictBuilder variant for efficient
     // parsing. This could improve read performance by a moderate degree. 
@@ -211,8 +208,7 @@ module Dict2 =
         mkDict None None cs'
 
     /// Empty dictionary. This should only exist at the tree root.
-    let empty : Dict = 
-        { pd = None; vu = None; cs = Map.empty; ct = 0u; sz = 0u }
+    let empty : Dict = mkDict None None (Map.empty)
 
     /// Test for obviously empty dictionary - no entries. This does
     /// not recognize whether a dictionary is empty due to pending
@@ -224,13 +220,7 @@ module Dict2 =
     let fromProto (dir:Dir) : Dict =
         match dir with
         | None -> empty
-        | Some _ -> 
-            { pd = Some dir 
-              vu = None 
-              cs = Map.empty 
-              ct = 1u 
-              sz = uint32 (3 + RscHash.size) // 3 for '/' SP LF
-            }
+        | Some _ -> mkDict (Some dir) None (Map.empty)
 
     // Split empty prefix entry from given dictionary.
     let private splitProto (d:Dict) : struct(Dir * Dict) =
@@ -465,10 +455,124 @@ module Dict2 =
                     else struct(lcs, Map.add ix (struct(p,c)) rcs)
         struct(mkDict None (d.vu) lcs', mkDict None None rcs')
 
-    
 
-    // TODO: 
-    //  - efficient difference computation
+    // translate options to VDiff
+    let private diffOpt optA optB =
+        match optA, optB with
+        | Some a, Some b ->
+            if (a = b) then None else
+            Some (InB (a,b))
+        | Some a, None -> Some (InL a)
+        | None, Some b -> Some (InR b)
+        | None, None -> None
+
+    // trivial sequence 0uy .. 255uy
+    let private seqBytes : seq<byte> = 
+        Seq.ofArray [|0uy..255uy|]
+    
+    // helper for diff
+    let inline private getDefFB p d d0 =
+        match d.vu with
+        | Some du -> du
+        | None -> tryFind p d0
+
+    /// Compute an efficient difference of two dictionaries.
+    ///
+    /// The efficiency goal is to avoid iterating nodes when we have
+    /// obvious reference equality. Of course, we might still need to
+    /// read nodes beyond those we iterate to look up old definitions.
+    /// This implementation assumes short `/ secureHash` chains, and 
+    /// does not check for a latest common ancestor. 
+    let diff (a0:Dict) (b0:Dict) : seq<Symbol * VDiff<Def>> =
+        let rec diffP p a b =
+            if System.Object.ReferenceEquals(a,b) then Seq.empty else
+            if (a.pd = b.pd) then diffV p a b else
+            diffV p (mergeProto a) (mergeProto b)
+        and diffV p a b =
+            // avoid lookup when no local difference
+            if (a.vu = b.vu) then diffCS p a b else
+            let adu = getDefFB p a a0
+            let bdu = getDefFB p b b0
+            let sv = 
+                match diffOpt adu bdu with
+                | None -> Seq.empty
+                | Some vdiff -> Seq.singleton (p,vdiff)
+            Seq.append sv (diffCS p a b)
+        and diffCS p a b = // diff all possible indexes 
+            Seq.concat (Seq.map (diffIX p (a.cs) (b.cs)) seqBytes)
+        and diffIX p acs bcs ix = // diff specific index
+            match Map.tryFind ix acs, Map.tryFind ix bcs with
+            | None,None -> Seq.empty // no differences
+            | None,Some(struct(bp,bc)) -> diffP (joinBytes p ix bp) empty bc
+            | Some(struct(ap,ac)),None -> diffP (joinBytes p ix ap) ac empty
+            | Some(struct(ap,ac)),Some(struct(bp,bc)) ->
+                let n = bytesShared ap bp // prefix alignment
+                let ac' = prependChildPrefix (BS.drop n ap) ac
+                let bc' = prependChildPrefix (BS.drop n bp) bc
+                diffP (joinBytes p ix (BS.take n ap)) ac' bc' 
+        diffP (BS.empty) a0 b0
+
+
+    // Functions for Writing a Dictionary
+
+    /// Return two sizes for dictionary: (line count * byte count)
+    /// based on what would be written to a dictionary node. Each
+    /// line corresponds to one entry, and lines are as compact as
+    /// feasible (avoiding unnecessary whitespace).
+    let rec size (d:Dict) : struct(SizeEst * SizeEst) =
+        let struct(lnp,szp) =
+            // We should avoid forcing the lazy reference ID.
+            match d.pd with
+            | None -> struct(0UL,0UL)       // no line
+            | Some None -> struct(1UL,2UL)  //  `/` LF
+            | Some (Some _) -> struct(1UL,uint64 (3 + RscHash.size))
+        let struct(lnv,szv) =
+            match d.vu with
+            | None -> struct(0UL,0UL)
+            | Some None -> struct(1UL,2UL)  // `~` LF
+            | Some (Some def) -> 
+                let len = def.Data.Length
+                if (0 = len) 
+                    then struct(1UL,2UL)    // `:` LF
+                    else struct(1UL,3UL + uint64 len) // `:` SP def LF
+        let struct(lncs,szcs) = Map.fold sizeChild (struct(0UL,0UL)) (d.cs)
+        struct((lnp+lnv+lncs),(szp+szv+szcs))
+    and private sizeChild (struct(ln,sz)) ix (struct(p,c)) =
+        let struct(lnc,szc) = size c
+        // add child's prefix to every line in the child
+        let szp = lnc * (1UL + uint64 (BS.length p)) 
+        struct((ln+lnc),(sz+szc+szp))
+
+    let private entBytes (ent:DictEnt) : struct(byte * ByteString * ByteString) =
+        match ent with
+        | Direct (p, dirOpt) ->
+            match dirOpt with
+            | Some ref -> struct(cDir, p, ref.ID)
+            | None -> struct(cDir, p, BS.empty)
+        | Define (s, defOpt) ->
+            match defOpt with
+            | Some def -> struct(cDef, s, def.Data)
+            | None -> struct(cDel, s, BS.empty)
+
+    // write entry, including LF
+    let private writeEnt (dst:ByteDst) (e:DictEnt) : unit =
+        let struct(c,s,d) = entBytes e
+        ByteStream.writeByte c dst
+        ByteStream.writeBytes s dst
+        if (not (BS.isEmpty d)) then
+            ByteStream.writeByte cSP dst
+            ByteStream.writeBytes d dst
+        ByteStream.writeByte cLF dst
+
+    /// Write a dictionary node as a ByteString.
+    let write (d:Dict) : ByteString = 
+        let struct(_,sz) = size d
+        let szMax = uint64 (System.Int32.MaxValue)
+        if (sz > szMax) then raise (System.OutOfMemoryException()) else
+        ByteStream.write (fun dst -> 
+            ByteStream.reserve (int sz) dst 
+            Seq.iter (writeEnt dst) (toSeqEnt d))
+
 
     let private isSP c = (c = cSP)
     let inline private trimSP s = 
@@ -499,4 +603,47 @@ module Dict2 =
     let inline parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
+    
+
+    // Compaction howto?
+    // I can translate the prior compaction algorithm easily enough.
+    // 
+    (*
+    /// Configurable codec for Dictionary nodes.
+    ///
+    /// Configuration options:
+    ///
+    /// - nodeMin: minimal size for node allocation
+    /// - updBuff: per node data buffering size
+    ///
+    /// 
+    /// After compaction, we can be certain that our node will be
+    /// smaller than the allocation node size. But we'll flush only
+    /// if 
+    /// Nodes larger than nodeMin are rewritten to `/ secureHash`.
+    /// Smaller nodes will be inlined. The updBuff determines the
+    /// recursive use of compaction: if nodes are larger than the
+    /// buffer, we create or rewrite child nodes to control size.
+    /// This allows recent updates to aggregate near the root of
+    /// the tree.
+    ///
+    /// For worst case nodes (or if updBuff is 0) we reduce to
+    /// Trie based compaction behaviors, which also isn't bad.
+    let node_codec_config (nodeMin:SizeEst) (updBuff:SizeEst) =
+        { new Codec<Dict> with
+            member __.Write d dst = 
+                writeEnts (toSeqEnt d) dst
+            member c.Read db src = 
+                parseDict (autoDef db) (VRef.wrap c db) (ByteStream.readRem src)
+            member c.Compact db d =
+                let struct(prior,upd) = splitProto d
+                if isEmpty upd then struct(d, sizeDict d) else
+                let d0 = concatDictEnts (load prior) upd
+                (struct(d0, sizeDict d0))
+                    |> nodeFlush updBuff c db 
+                    |> nodeStow nodeMin c db 
+        }
+
+
+    *)
 
