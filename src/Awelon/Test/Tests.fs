@@ -102,21 +102,6 @@ let ``simple dict tests`` () =
     Assert.False(has 200 d30)
     Assert.Equal(11, Seq.length (Dict.toSeq d30)) // 30,300,301,302,..309
 
-[<Fact>]
-let ``trivial dict parsing`` () =
-    let d1 = seq { for i = 1 to 2000 do yield i }
-            |> Seq.fold (flip addN) (Dict.empty)
-            |> Dict.dropPrefix (bs 10)   // drops 111 items
-    let s1 = Dict.write d1
-    let mkDef def = Dict.Def(def)
-    let mkDir h = raise (System.NotImplementedException()) // no directories!
-    let d2 = Dict.parseDict mkDef mkDir s1
-    let s2 = Dict.write d2
-    Assert.Equal(BS.toString s1, BS.toString s2)
-    Assert.Equal(d1,d2)    
-
-
-
 // a fixture is needed to load the database
 type TestDB =
     val s : LMDB.Storage
