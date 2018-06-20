@@ -317,8 +317,21 @@ module Dict =
         let rw d = mkDict (d.pd) vu (d.cs)
         rewriteAtKey k rw dict 
 
+    /// Define a symbol in the dictionary. This returns a new Dict
+    /// with the symbol defined as specified. It will overwrite a
+    /// prior definition, if any.
     let inline add sym def d = updSym sym (Some def) d
+
+    /// Remove a symbol from the dictionary. This does not test if
+    /// the symbol is present; if not, it can perform unnecessary
+    /// rewrites. See remove' variant.
     let inline remove sym d = updSym sym None d
+
+    /// remove variant, which tests for presence of symbol before
+    /// deleting it. This is better for performance if the symbol
+    /// has a high chance of not being defined in the dictionary.
+    let inline remove' sym d = 
+        if contains sym d then remove sym d else d 
 
     /// Update directory node at a given prefix. This will overwrite
     /// all existing entries with the same prefix. Will avoid adding
@@ -616,55 +629,86 @@ module Dict =
     let inline private parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
-    let private codec_nodeMin = 1600UL                  // min size for created Stowage
-    let private codec_flush   = codec_nodeMin * 12UL    // buffer for recursive compact
-    do assert(codec_nodeMin > (10UL * protoRefSize))    // heuristic for ref efficiency
-
-    /// A reasonable default codec for Dict.
-    ///
-    /// After compaction, we can guarantee our dictionary size is
-    /// under two kilobytes. Large dictionaries are moved to a 
-    /// Stowage node. For larger dictionaries, we apply compaction 
-    /// recursively to child nodes. There are a lot of heuristics
-    /// involved. Ultimately, we have LSM-tree behavior. 
-    ///
-    /// This codec works best if our symbols aren't too large and
-    /// our definitions are also limited in size. It also does not
-    /// look into child nodes, so a large number of deletions might
-    /// not propagate all the way to leaf nodes.
-    let codec =
+    /// heuristic codec with some configurable parameters for benchmarking
+    let codec_config (flushThresh:SizeEst) (nodeMin:SizeEst) : Codec<Dict> =
+        assert(nodeMin > (10UL * protoRefSize))
         { new Codec<Dict> with
-            member __.Write d dst = writeDst d dst
+            member __.Write d dst = 
+                writeDst d dst
             member cD.Read db src = 
                 // TODO: consider mem-caching LVRefs to improve sharing.
                 let mkDef s = autoDef db s
                 let mkDir h = LVRef.wrap (VRef.wrap cD db h)
                 parseDict mkDef mkDir (ByteStream.readRem src)
             member cD.Compact db d0 =
-                let sz0 = sizeBytes d0
-                if (sz0 < (codec_nodeMin >>> 1)) then struct(d0,sz0) else
-                let struct(dM,szM) = // merge updates (if needed)
-                    if Option.isNone (d0.pd) then struct(d0,sz0) else
-                    let dM = mergeProto d0
-                    struct(dM, sizeBytes dM)
-                let struct(dF,szF) = // recursively flush (if very large)
-                    let skip = (szM < codec_flush) || (Map.isEmpty (dM.cs))
-                    if skip then struct(dM,szM) else
-                    let compactChild ix (struct(p,c)) cs  =
-                        updChild ix p (Codec.compact cD db c) cs
-                    let cs' = Map.foldBack compactChild (dM.cs) (Map.empty) 
+                let bTrivial = (Map.isEmpty (d0.cs) && Option.isNone (d0.vu))
+                if bTrivial then struct(d0, sizeBytes d0) else
+                let dM = mergeProto d0
+                let szM = sizeBytes dM
+
+                // compact child nodes recursively, if necessary. We'll go
+                // ahead and simply compact each child independently.
+                let struct(dF,szF) =
+                    let skipFlush = (szM < flushThresh) || (Map.isEmpty (dM.cs))
+                    if skipFlush then struct(dM,szM) else
+                    let compactChild ix (struct(p,c)) cs =
+                        let k = 31 // break up huge symbols or prefixes
+                        let pc = prependChildPrefix (BS.drop k p) c
+                        updChild ix (BS.take k p) (Codec.compact cD db pc) cs
+                    let cs' = Map.foldBack compactChild (dM.cs) (Map.empty)
                     let dF = mkDict None (dM.vu) cs'
                     struct(dF, sizeBytes dF)
-                if (szF < codec_nodeMin) then struct(dF,szF) else
-                let dir = Some (LVRef.stow cD db dF (szF <<< 2))
-                struct(fromProto dir, protoRefSize)
+
+                // create remote node for entry, if necessary
+                if (szF < nodeMin) then struct(dF,szF) else
+                let ref = LVRef.stow cD db dF (szF <<< 2)
+                let dR = fromProto (Some ref)
+                struct(dR, sizeBytes dR)
         }
+
+    // Compaction notes:
+    //
+    // The current codec always applies updates upon compaction,
+    // even if only one symbol has changed from the prototype.
+    // Updates are only buffered for recursive application. I have
+    // experimented with delaying small updates, but it actually 
+    // cost me more in the end.
+    // 
+    // We also break down long prefixes into chunks upon flush, to
+    // limit prefix amplification in the worst-case. In practice, 
+    // this should almost never trigger for Awelon systems. But it
+    // might if we use URL-based prefixes, like Java libraries.
+    //
+    // Profiling and analysis are needed to decide where performance
+    // improvements should be targeted. We could also try to use 
+    // C# ImmutableDictionary instead of F# maps, which might offer
+    // some benefits.
+
+    /// A reasonable default codec for Dict.
+    ///
+    /// After compaction, we can guarantee our dictionary size is
+    /// less than two kilobytes. Large dictionaries are moved to a 
+    /// Stowage node. For larger dictionaries, we apply compaction 
+    /// recursively to child nodes. There are a lot of heuristics
+    /// involved. Ultimately, we have LSM-tree behavior. 
+    ///
+    /// This codec works best if our symbols aren't too large and
+    /// our definitions are also limited in size.
+    let codec =
+        let nodeMin = 25UL * uint64 (RscHash.size)
+        let flushThresh = 12UL * nodeMin
+        codec_config flushThresh nodeMin
+        // TODO: consider adjusting the flush operation to consider
+        // how much data is rewritten, not just size of update. This
+        // would ensure deletions propagate further.
+
+
 
     // PERFORMANCE NOTES
     //
     // The performance I'm getting from this Dict/codec is comparable
     // to the Stowage.LSMTrie, albeit a little worse. Writes are near
-    // 15usec, reads around 6usec, for a tree of moderate size and 
+    // 15usec, reads around 7usec, for a tree of moderate size and 
     // ad-hoc write batches. This improves considerably if the Dict is
     // mostly cached via LVRefs.
 

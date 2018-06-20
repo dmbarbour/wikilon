@@ -4,29 +4,38 @@ namespace Awelon
 // index, such that we can find the clients for each word in the 
 // dictionary. This does require parsing every definition.
 //
-// This is represented using a companion dictionary, with a :word.client
-// entry for each client of a word. This allows for stripping the prefix
-// to find all clients.
+// Basically, this is represented using a meta dictionary with one
+// :word.client entry for each client of a word. This allows for 
+// `extractPrefix` to find all clients of a word.
 //
-// Hierarchical dictionaries require special attention. We want distinct
-// prefixes for internal vs. external clients of a word, such that we can
-// index internal clients independently of context. Proposal: 
+// To deal with the hierarchical dictionaries, it's sufficient to 
+// include the entries at the appropriate hierarchical layer. Like:
 //
-// - dict/word.client   is internal, dict/client depends on dict/word
-// - ^dict/word.client  is external, client depends on dict/word
+// - RLU/word.client        word has client in same dictionary
+// - dict/RLU/word.client   dict internally has word as client
+// - RLU/dict/word.client   dict/word has an external client
 //
-// In this manner the ^ carrot acts as a cursor, indicating where our
-// client is in context of the hierarchical namespace. We could make
-// this more uniform, using a :^word.client entry in the base case. 
-// To find all clients of `foo/bar/baz` requires looking at prefixes
-// `^foo/bar/baz.`, `foo/^bar/baz.`, and `foo/bar/^baz.`. 
+// To find all clients of foo/bar/baz, we look at three prefixes:
+// 
+// - foo/bar/RLU/baz.       internal clients of baz
+// - foo/RLU/bar/baz.       clients of bar/baz within foo
+// - RLU/foo/bar/baz.       clients of foo/bar/baz
 //
-// Besides words, we'll also want to index annotations like (par), 
-// record and accessor labels, and potentially data - natural numbers
-// and words within text. Errors might also be tracked, e.g. treating
-// undefined words as clients of `ERROR`. Secure hash resources also
-// should be tracked, with special handling for GC when there are no
-// more clients.
+// For implementations, we could either try to maintain our RLU index
+// within our primary Awelon dictionary, or separately as a companion
+// dictionary. The former option is convenient for sharing, but also
+// introduces risk that there are errors in the index, and hinders
+// some extensions of the reverse lookup.
+//
+// The `RLU/` could be represented as another `.` without ambiguity.
+//
+// Besides words, we can index annotations like (par), natural numbers,
+// text fragments or words within texts, and so on. With some care, we
+// can also provide fast lookup for words that are referenced but not
+// defined, and words whose definitions fail to parse. 
+//
+// 
+// 
 //
 // 
 //
