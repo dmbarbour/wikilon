@@ -92,7 +92,40 @@ module DB =
     type Key = ByteString
     type Val = ByteString option
     type KVMap = CritbitTree<Val>
-    type Sync = Lazy<unit>
+    type Sync = unit -> unit
+
+    // DB wrapper that adds a prefix to every registered key.
+    type private PDB =
+        val P : ByteString
+        val DB : DB
+        new(p,db) = { P = (BS.trimBytes p); DB = db } 
+        member inline pdb.Stowage with get() = (pdb.DB :> Stowage)
+        interface DB with
+            member pdb.Register k c = pdb.DB.Register (BS.append (pdb.P) k) c
+            member pdb.Allocate v = pdb.DB.Allocate v
+            member pdb.Read r = pdb.DB.Read r
+            member pdb.Write r v = pdb.DB.Write r v
+            member pdb.Flush () = pdb.DB.Flush ()
+            member pdb.Transact withTX =
+                let withTX' tx = withTX (PDB(pdb.P,tx))
+                pdb.DB.Transact withTX'
+        interface Stowage with
+            member pdb.Load h = pdb.Stowage.Load h
+            member pdb.Stow v = pdb.Stowage.Stow v
+            member pdb.Incref h = pdb.Stowage.Incref h
+            member pdb.Decref h = pdb.Stowage.Decref h
+
+    /// Wrap DB to add a prefix upon registering durable TVars. This
+    /// is useful to isolate subprograms to subdirectories within a
+    /// database, and to resist naming conflicts between components.
+    /// 
+    /// Note: we will optimize a series of `withPrefix` wrappers to 
+    /// concatenate the prefixes and avoid unnecessary indirection.
+    let withPrefix (p:Key) (db:DB) : DB =
+        if BS.isEmpty p then db else 
+        match db with
+            | :? PDB as pdb -> PDB((BS.append (pdb.P) p), pdb.DB) :> DB
+            | _ -> PDB(p,db) :> DB
 
     /// Storage represents a simple key-value database with Stowage,
     /// such that values serve as durable stowage roots. Assuming we
@@ -111,13 +144,13 @@ module DB =
     type Storage =
         inherit Stowage
         abstract member Mangle     : ByteString -> Key
-        abstract member Read       : Key -> Val     
+        abstract member Read       : Key -> Val
         abstract member WriteBatch : KVMap -> Sync
 
     /// Flush storage (via writing empty batch). 
     let flushStorage (s:Storage) : unit =
         let sync = s.WriteBatch (CritbitTree.empty)
-        sync.Force()
+        sync ()
 
     module private StorageDB =
         // GOAL: Create a DB from a Storage!
@@ -295,7 +328,7 @@ module DB =
                   ss = new Snapshot()
                   roots = CritbitTree.empty
                   buffer = Map.empty
-                  flushing = lazy(lazy())
+                  flushing = lazy(id)
                   tm_clean = 0
                 }
 
@@ -400,7 +433,7 @@ module DB =
                         sync)
                     db.flushing)
                 let sync = write.Force()
-                sync.Force()  
+                sync ()  
                 db.Cleanup()     // potential cleanup of roots cache
             
             interface DB with

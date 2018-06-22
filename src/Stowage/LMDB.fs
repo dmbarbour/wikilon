@@ -293,7 +293,7 @@ module LMDB =
                 db.write <- leftBiasedUnion wb (db.write)
                 db.sync <- (tcs :: db.sync)
                 Monitor.PulseAll(db))
-            lazy(tcs.Task.Result)
+            (fun () -> tcs.Task.Result)
 
         // signal DB to write, return immediately
         let signal (db:Database) : unit =
