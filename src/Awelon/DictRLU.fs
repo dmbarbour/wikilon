@@ -1,4 +1,5 @@
 namespace Awelon
+open Data.ByteString
 
 // The DictRLU module augments a dictionary with a reverse lookup
 // index, such that we can find the clients for each word in the 
@@ -30,25 +31,40 @@ namespace Awelon
 // The `RLU/` could be represented as another `.` without ambiguity.
 //
 // Besides words, we can index annotations like (par), natural numbers,
-// text fragments or words within texts, and so on. With some care, we
-// can also provide fast lookup for words that are referenced but not
-// defined, and words whose definitions fail to parse. 
+// text fragments or words within texts, and so on. We'll also track any
+// words whose definitions fail to parse. Secure hash resources are also
+// tracked as dependencies, but are not locally indexed as clients.
 //
-// 
-// 
-//
-// 
-//
-// Secure hash resources can also be tracked, but may need special
-// attention to erase the entry when no more clients exist. 
-//
-// A reverse lookup index can be computed incrementally with updates
-// to a dictionary. In general, the total size of the index is not 
-// much larger or smaller than the original dictionary including its
-// secure hash resource dependencies.
-//
-// 
+// Note: I should table this for now - priority is relatively low. And
+// it might be necessary to support lazy indexing.
+module DictRLU =
 
+    let parseErrorDep = BS.fromString "ERROR"
+    let natPrefix = BS.fromString "NAT-"
+    let litPrefix = BS.fromString "LIT-"
+
+    type private NS = Parser.Word list
+    type private TokDep = (struct(NS * Parser.Token))
+
+    // utility functions to unfold dependencies in Program
+    let rec private stepTokDep nsp =
+        match nsp with
+        | (struct(ns,p)::nsp') -> stepTokDepP ns p nsp'
+        | [] -> None
+    and private stepTokDepP ns p nsp' =
+        match p with
+        | (a::p') -> stepTokDepA ns a (struct(ns,p')::nsp')
+        | [] -> stepTokDep nsp'
+    and private stepTokDepA ns a nsp' =
+        match a with
+        | Parser.Block b -> stepTokDepP ns b nsp'
+        | Parser.NS (w,a') -> stepTokDepA (w::ns) a' nsp'
+        | Parser.Atom tok -> Some (struct(ns,tok),nsp')
+    let private seqTokDeps (p:Parser.Program) : seq<TokDep> =
+        Seq.unfold stepTokDep (struct([],p)::[])
+
+
+    
 
 
 

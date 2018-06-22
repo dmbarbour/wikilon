@@ -1,19 +1,16 @@
 namespace Awelon
 open Data.ByteString
 
-// This `Awelon.Interpret` module aims to provide a simple interpreter
-// or pseudo-compiler with not-too-terrible performance. This likely 
-// won't scale very well, but support from accelerators should help.
-//
-// 
-// 
-// Ultimately, I'd like to experiment with performance via rewriting
-// to intermediate language layers, perhaps an STG machine.
-module Interpreter =
-    type Word = Parser.Word
+// This interpreter module provides a simplistic evaluation for Awelon
+// code. It isn't strictly an "interpreter" - there may be optimization
+// and compilation to a small degree. A main goal is to keep it simple.
+// For example, we'll make relatively little effort to integrate with
+// durable cache results, or support reactive update.
+module Interpret =
 
-    /// Trivial Dict model used by the Interpreter.
-    type Dict = Word -> ByteString option
+    type Word = Parser.Word
+    type Defs = Word → Parser.Program option
+    
     
     
 

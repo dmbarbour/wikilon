@@ -77,39 +77,6 @@ module Parser =
     and Program = Action list   // Action*
         // TODO: consider a vector (immutable array) type
 
-    /// view each token in the program
-    let rec seqTokens (p:Program) : seq<Token> =
-        seq {
-            match p with
-            | (a :: p') -> 
-                yield! seqActionTokens a
-                yield! seqTokens p'
-            | [] -> ()
-        }
-    and private seqActionTokens (a:Action) : seq<Token> =
-        match a with
-        | Block b -> seqTokens b
-        | NS (_,a') -> seqActionTokens a'
-        | Atom t -> Seq.singleton t
-
-    /// view each word in the program, in order of appearance.
-    let seqWords (p:Program) : seq<Word> =
-        seq {
-            for (struct(tt,w)) in seqTokens p do
-                match tt with
-                | TT.Word -> yield w
-                | _ -> ()
-        }
-
-    /// view each RscHash in the program, in order of appearance.
-    let seqRefs (p:Program) : seq<RscHash> =
-        seq {
-            for (struct(tt,h)) in seqTokens p do
-                match tt with
-                | TT.CodeRef | TT.BinRef -> yield h
-                | _ -> ()
-        }
-
     /// Awelon uses characters in ASCII minus C0 and DEL. Most
     /// of these are permitted only within embedded texts. For
     /// embedding Unicode, you might try binary resoures.

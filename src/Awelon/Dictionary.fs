@@ -682,7 +682,7 @@ module Dict =
     // Profiling and analysis are needed to decide where performance
     // improvements should be targeted. We could also try to use 
     // C# ImmutableDictionary instead of F# maps, which might offer
-    // some benefits.
+    // some benefits. 
 
     /// A reasonable default codec for Dict.
     ///
@@ -701,8 +701,6 @@ module Dict =
         // TODO: consider adjusting the flush operation to consider
         // how much data is rewritten, not just size of update. This
         // would ensure deletions propagate further.
-
-
 
     // PERFORMANCE NOTES
     //

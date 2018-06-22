@@ -219,6 +219,8 @@ type DBTests =
         tf.CompactionTest 70000 7000 rng 
         printfn "size 70k, 100 compactions"
         tf.CompactionTest 70000 700 rng 
+        printfn "size 70k, 1 compactions"
+        tf.CompactionTest 70000 700000 rng 
         
         
         
