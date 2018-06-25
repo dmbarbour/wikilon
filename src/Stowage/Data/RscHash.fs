@@ -111,15 +111,16 @@ module RscHash =
             then fn h
         iterHashDeps fn v'
 
-    let rec seqHashDeps (v:ByteString) : seq<RscHash> =
-        if (v.Length < size) then Seq.empty else
-        seq {
-            let hv' = BS.dropWhile (not << isHashByte) v
-            let struct(h,v') = BS.span isHashByte hv'
-            if (size = h.Length) 
-                then yield h
-            yield! seqHashDeps v'
-        }
+    // for Seq.unfold, which is more efficient than seq {}. 
+    let rec private stepHashDeps (v:ByteString) : (RscHash * ByteString) option =
+        if (v.Length < size) then None else
+        let hv' = BS.dropWhile (not << isHashByte) v
+        let struct(h,v') = BS.span isHashByte hv'
+        if (size = BS.length h) then Some(h,v') else
+        stepHashDeps v'
+
+    let seqHashDeps (v:ByteString) : seq<RscHash> =
+        Seq.unfold stepHashDeps v
 
     /// Test whether a ByteString matches format of RscHash.
     let isValidHash (h:ByteString) : bool =
