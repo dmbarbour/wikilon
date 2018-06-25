@@ -183,7 +183,7 @@ In the dictionary representation, we simply define the extended symbols. For exa
 
 Common functions and types will frequently be replicated between hierarchical dictionaries. The space overhead is mitigated by structure sharing. But writing out `d/42` is just ugly and inefficient if it has the same meaning as `42`. So we permit localization: an evaluator may rewrite a hierarchical qualifier whenever doing so does not affect behavior.
 
-*Note:* It may be useful to encode a developer's primary dictionary under a prefix such as `d/word`. This enables embedding of metadata (such as timestamps or access control) via associated sibling dictionaries. 
+*Note:* It may be useful to encode a developer's primary dictionary under a prefix such as `d/word`. This enables embedding of metadata (such as timestamps or access control) via associated sibling dictionaries.
 
 ## Evaluation
 
@@ -291,7 +291,7 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Relative to built-in number support, there is some storage overhead - but it's relatively minor at larger scales (and compresses well). Besides numeric towers, editable views could feasibly support lists and matrices, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors, or other graphical expression of meaning.
+This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Relative to built-in number support, there is some storage overhead - but it's relatively minor at larger scales (and compresses well). Besides numeric towers, editable views could feasibly support lists and matrices, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Problem specific languages can frequently be modeled as data-structures that we evaluate statically. Comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors, or other graphical expression of meaning.
 
 We can also project edit sessions that view and edit multiple words together. In simplest form, we might have `my-session = [foo][bar][baz]` so we can 'open' the session then edit those three words together.
 
@@ -326,16 +326,17 @@ It makes sense to record variable names as comments - that's how we use them.
             becomes
         "lambda X"(a2)d T(X,EXPR)
 
-Named local variables hint at how to build higher level languages above Awelon. 
+Named local variables offer a useful proof-of-concept for *Editable Views* as a viable alternative to built-in syntax extensions. But, in most cases, language extensions are more easily expressed as views of intermediate data structures, which may be statically processed.
 
-## Arrays and In-place Updates
+## Arrays
 
-Awelon doesn't have an array data type, but we can use annotations and accelerators to insist on array representation where beneficial for lists. In-place mutation of arrays is also valuable for efficiency, avoiding unnecessary intermediate copies. We can support these in-place updates assuming two conditions:
+Awelon doesn't have an array data type. But use annotations and accelerators could impose an array representation for some lists, i.e. such that offset-indexed access is O(1)<sup>1</sup>. In context of a purely functional language, *modifying* an array is naively O(N) - copy the array with the modification in place. However, if we hold the only reference to an array's representation, the runtime could simply modify the representation in-place without violating observable purity.
 
-* we hold the unique reference to the array
-* we accelerate indexed access to the array
+Awelon's explicit copy and drop on a stack makes it easy for a runtime to track dynamically whether it holds a unique reference to a representation, at least compared to to variable environment models used in lambda calculus. Copy-on-write could be performed as needed, so developers need only to ensure arrays are rarely copied between updates. Static analysis could often remove dynamic checks within tight update loops.
 
-Awelon's explicit copy and drop makes it relatively easy to track dynamically whether we hold a unique reference to an array. We can leverage copy-on-write techniques if necessary, to obtain a unique reference upon the first update. Then further updates (until we copy the array to share it again) could update in place. This feature would enable Awelon systems to effectively work with arrays for many algorithms.
+*Note:* Persistent data structures (finger-trees, int-maps, ropes, etc.) are still very useful - more flexible than arrays in their application, more scalable due to potential use of *Stowage* for deep structure, etc.. These data structures may benefit from use of small array fragments for tree fanout or leaf values.
+
+<sup>1</sup>: Arrays are not truly O(1). They're O(N^(1/3)) for physical memory surrounding a central processor in three dimensions. In practice, this shows up in cache levels, or even network access for truly large arrays. See [*Myth of RAM*](http://www.ilikebigbits.com/blog/2014/4/21/the-myth-of-ram-part-i). Nonetheless, arrays tend to be more efficient than persistent data structures.
 
 ## Generic Programming in Awelon
 

@@ -63,24 +63,20 @@ The main weakness of KPNs is that it is difficult to represent a dynamic network
 
 ## Reactive Demand Programming
 
-Reactive Demand Programming (RDP) allows concurrent behaviors to contribute to shared values, which may change reactively over time. Contributions accumulate in a shared set, such that behaviors (and effects) are commutative and idempotent. This preserves useful equational reasoning properties from functional programming, while enabling useful IO through shared variables. A monadic API might have a few operations:
+Reactive Demand Programming (RDP) allows concurrent behaviors to contribute to shared values, which may change reactively over time. Contributions accumulate in a shared set, such that behaviors (and effects) are commutative and continuous. This preserves useful equational reasoning properties from functional programming, while enabling useful IO through shared variables. A monadic API might have a few operations:
 
-        get : Label a → m (Set of a)        CURRENT STATE
-        put : Label a → Set of a → m ()     FOR NEXT STATE
-        at  : Label () → m a → m a          HIERARCHICAL STRUCTURE
+        dir : Dir m → String → m (Dir m) 
+        var : (Bag a, Typeable a) ⇒ Dir m → String → m (Var m a)
+        get : Var m a → m a        CURRENT STATE
+        put : Var m a → a → m ()   FOR NEXT STATE
 
-Unlike conventional monadic request-response loops, with RDP we have a stable monadic behavior that is applied 'continuously', repeating in every time step. This is convenient for live programming: a human could adjust the monadic behavior function over time, applying updates upon the next step.
+We obtain variables from an implicit filesystem-like directory structure, allowing local state. And we can get and put to those variables, with all puts contributing to the state at the next step. Unlike conventional monadic loops, we'll recompute the entire monad in each time step (but we can try to optimize this for stable data, memoizing our behaviors). Further extensions might support durable variables, which provide some implicit persistence behavior, or optimized API functions to simplify memoization in common use cases.
 
-Additionally, we could support a concept of negation or deletion:
-
-        del  : Label a → Set of a → m ()
-        del' : Label a → (a → bool) → m ()
-
-With either of these, we can additionally support durable data - labels that preserve data with an implicit `get >>= put` behavior. This would have many similarities to functional-relational programming (cf. [Out of the Tarpit](https://github.com/papers-we-love/papers-we-love/blob/master/design/out-of-the-tar-pit.pdf) by Ben Moseley).
-
-The main weakness of RDP is that the data type `a` in the `Set of a` is restricted to comparable value types. (Although, we could use specialized set models in some cases, such as a trie of strings/binaries.) This is necessary for both determinism and recognizing when a set of labels have entered a stable state. (We could feasibly relax this constraint by permitting specialized use of single-assignment labels.) We might also introduce specialized functions, such as `each : Label a → (a → m ()) → m ()` and `contains : Label a → a → m bool` to further optimize system stabilization.
+A weakness of RDP is that the variable types are restricted, but I think we can usually work around this restriction.
 
 RDP integrates most easily with external topic-based publish-subscribe systems. Effectively, labels are fine-grained topics.
+
+*Aside:* Idempotence is not essential and could easily be relaxed, allowing us to work with bags instead of sets, or perhaps even weighted demands. 
 
 ## Machines
 
@@ -170,7 +166,7 @@ An Awelon dictionary is essentially a filesystem with spreadsheet-like character
         :foo-3-a "hello"
         :foo-4-a foo-3-a foo-2-a concat
 
-To be useful as a spreadsheet, the main requirement is a sufficiently dense encoding of rows and columns. If everything is sparsely distributed, we'd be better off favoring an ad-hoc dependency lattice layout.
+To be useful as a spreadsheet, the main requirement is a sufficiently dense encoding of rows and columns. (If words were sparsely defined, we'd be better off favoring an ad-hoc layout, perhaps recording entries in an edit session or using progressive disclosure.)
 
 Awelon does not provide any automatic mechanisms to access collections or tables encoded this way, but it is feasible for agents or projectional editors to additionally maintain records and lists based on which words are defined in the dictionary. This would allow full-table access, while preserving the acyclic structure between individual "cells".
 
@@ -188,6 +184,18 @@ A command pattern might be represented as:
 Essentially, we represent a stream of commands manipulating a state. We could render the state after each command, like a REPL or notebook application. The explicit representation simplifies historical views, forking, undo, and similar. In general, keeping the entire history of commands may cost too much in some cases, so we may need to occasionally checkpoint the state. But for many use cases, the number of commands won't be too large and checkpoints may be managed explicitly.
 
 *Aside:* This could also be viewed as a specialized 1D spreadsheet.
+
+## Edit Sessions as Scratchpads
+
+Where command patterns or spreadsheets use structured words, we could more generally just model an edit-session of arbitrary words (perhaps under a prefix, `foo-`) such that clients can easily add and define new words.
+
+## Stable Dictionaries
+
+Rather than mutating dictionaries, we could try to keep the dictionary mostly constant, and instead leverage secure hash resources and stowage to a much greater extent. The dictionary would define a lot of standard functions, accelerators, etc.. but data would be kept in the stowage layer, and almost never manipulated directly. This is convenient for standardization and sharing of the dictionary, and can be combined easily with other ideas.
+
+## Monotonic Dictionaries
+
+It is feasible to model Awelon systems that never redefine a word. Words may instead serve as single-assignment variables. Allocation of fresh words, and garbage collection of irrelevant words, would be managed by a central authority. The main benefit of monotonic structure is that it's much easier to reason about system behavior and caching. OTOH, deep updates are a hassle to express.
 
 ## Publish Subscribe
 
