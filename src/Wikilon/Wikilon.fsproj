@@ -3,6 +3,8 @@
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="History.fs" />
+    <Compile Include="User.fs" />
     <Compile Include="WS.fs" />
   </ItemGroup>
   <ItemGroup>

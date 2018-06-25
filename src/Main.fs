@@ -15,16 +15,16 @@ starts a local web server, which is mostly configured online. Arguments:
     [-p Port] bind specified port (default 3000)
     [-ip IP]  bind IP or DNS (default 127.0.0.1)
     [-dir Dir] where to store data (default wiki)
-    [-size GB] maximum database size (default 1000)
+    [-size GB] maximum database size (default 100)
     [-cache MB] space-speed tradeoff (default 100)
-    [-admin]  print an ephemeral admin password
+    [-admin]  print a temporary admin password
 
-Configuration of Wikilon is managed online and often requires administrative
-authority. Requesting an `-admin` password makes the admin account available
-until process reset. The admin can control authorities for other accounts.
+Configuration of Wikilon is managed online. Requesting an `-admin` password
+makes the admin account available until process reset. The admin can create
+other accounts with administrative authorities.
 
-Wikilon does not support TLS. Instead, favor a reverse proxy (like NGINX) to 
-wrap the local HTTP service with SSL/TLS/HTTPS.
+Wikilon does not have built-in support for TLS. Try a reverse proxy, such as
+NGINX, to add the TLS layer if needed.
 """
 
 type Args = {
@@ -43,7 +43,7 @@ let defaultArgs : Args = {
   port = 3000;
   ip = "127.0.0.1";
   home = "wiki";
-  size = 1000
+  size = 100
   cache = 100
   admin = false;
   bad = [];
@@ -89,21 +89,26 @@ let main argv =
     let bad = not (List.isEmpty args.bad)
     if bad then printfn "Unrecognized args (try -help): %A" args.bad; (-1) else
     do setAppWorkingDir args.home
-    let svc = { defaultConfig with 
-                 hideHeader = true
-                 bindings = [ HttpBinding.createSimple HTTP args.ip args.port
-                            ]
-               }
-    let admin = if not args.admin then None else
-                let pw = hashStr(getEntropy 64).Substring(0,24)
-                do printfn "admin:%s" pw
-                Some pw
+    let adminPass =
+        if not args.admin then None else
+        let pw = getEntropy 64 |> Stowage.RscHash.hash |> BS.take 20
+        do printfn "admin:%s" (BS.toString pw)
+        Some pw
     Stowage.Cache.resize (1_000_000UL * (uint64 args.cache))
-    use store = new Stowage.LMDB.Storage("data", (1024 * args.size))
-    let db = Stowage.DB.fromStorage store
-    let app = WS.mkApp db admin
+    use dbStore = new Stowage.LMDB.Storage("data", (1024 * args.size))
+    printfn "Initial DB Statistics: %A" (dbStore.Stats())
+    let dbRoot = Stowage.DB.fromStorage dbStore
+    let dbWiki = DB.withPrefix (BS.fromString "wikilon/") dbRoot
+    let wsParams : WS.Params = { db = dbWiki; admin = adminPass }
+    let app = WS.mkApp wsParams
+    let svc = 
+        { defaultConfig with 
+            hideHeader = true
+            bindings = [ HttpBinding.createSimple HTTP args.ip args.port
+                       ]
+        }
     startWebServer svc app
+    printfn "Final DB Statistics: %A" (dbStore.Stats())
     0 // return an integer exit code
-
 
 
