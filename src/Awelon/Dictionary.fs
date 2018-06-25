@@ -285,6 +285,9 @@ module Dict =
     let inline contains (k:Symbol) (d:Dict) : bool = 
         Option.isSome (tryFind k d)
 
+    // TODO: potential variant for incomplete dictionaries?
+    // TODO: discover missing resources within a dictionary
+
     // Rewrite a Dict node via function at given symbol, potential erasure.
     let rec private rewriteAtKey (k:Symbol) (rw:Dict -> Dict) (d:Dict) : Dict =
         if BS.isEmpty k then rw d else
@@ -630,7 +633,7 @@ module Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
     /// heuristic codec with some configurable parameters for benchmarking
-    let codec_config (flushThresh:SizeEst) (nodeMin:SizeEst) : Codec<Dict> =
+    let node_codec_config (flushThresh:SizeEst) (nodeMin:SizeEst) : Codec<Dict> =
         assert(nodeMin > (10UL * protoRefSize))
         { new Codec<Dict> with
             member __.Write d dst = 
@@ -684,7 +687,7 @@ module Dict =
     // C# ImmutableDictionary instead of F# maps, which might offer
     // some benefits. 
 
-    /// A reasonable default codec for Dict.
+    /// A reasonable default codec for Dict nodes.
     ///
     /// After compaction, we can guarantee our dictionary size is
     /// less than two kilobytes. Large dictionaries are moved to a 
@@ -692,15 +695,18 @@ module Dict =
     /// recursively to child nodes. There are a lot of heuristics
     /// involved. Ultimately, we have LSM-tree behavior. 
     ///
-    /// This codec works best if our symbols aren't too large and
-    /// our definitions are also limited in size.
-    let codec =
+    /// This codec assumes full control of the Stowage node.
+    let node_codec =
         let nodeMin = 25UL * uint64 (RscHash.size)
         let flushThresh = 12UL * nodeMin
-        codec_config flushThresh nodeMin
+        node_codec_config flushThresh nodeMin
         // TODO: consider adjusting the flush operation to consider
         // how much data is rewritten, not just size of update. This
         // would ensure deletions propagate further.
+
+    /// A Dictionary codec. Prefixes node_codec with size metadata, such
+    /// that we can use the Dict type within other data structures.
+    let codec = Stowage.EncSized.codec codec
 
     // PERFORMANCE NOTES
     //
