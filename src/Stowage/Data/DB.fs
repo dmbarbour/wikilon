@@ -6,6 +6,8 @@ open System.Threading.Tasks
 ///
 /// Variables are obtained from a DB, and may only be read or written
 /// in context of the originating DB and its transactional hierarchy.
+/// Note: in some contexts, use of Lazy<'V> value types may be useful
+/// to delay computation of a value until after it has been committed.
 type TVar<'V> = interface end
 
 /// Abstract, transactional key-value Stowage Database.
@@ -27,6 +29,8 @@ type DB =
     ///
     /// Writes to durable TVars are not automatically durable. Instead,
     /// the DB must be explicitly flushed to serialize writes to disk.
+    /// Also, compaction is not implicit. Data is saved as written, and
+    /// only the Read and Write codec operations are used.
     abstract member Register : ByteString -> Codec<'V> -> TVar<'V option>
 
     /// Allocate an ephemeral TVar.

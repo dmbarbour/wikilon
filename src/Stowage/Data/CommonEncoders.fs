@@ -129,10 +129,12 @@ module EncSized =
 
     let codec (c:Codec<'V>) =
         { new Codec<'V> with
-            member __.Write v dst = 
-                EncBytes.write (Codec.writeBytes c v) dst
-            member __.Read db src = 
-                Codec.readBytes c db (EncBytes.read src)
+            member __.Write v dst =
+                let s = Codec.writeBytes c v
+                EncBytes.write s dst
+            member __.Read db src =
+                let s = EncBytes.read src
+                Codec.readBytes c db s
             member __.Compact db v =
                 let struct(v',szV) = c.Compact db v
                 struct(v', (EncVarNat.size szV) + szV)
@@ -302,6 +304,7 @@ module EncArray =
 
     let read (cV:Codec<'V>) (db:Stowage) (src:ByteSrc) : 'V array =
         let len = int (EncVarNat.read src)
+        if (0 = len) then Array.empty else
         let arr = Array.zeroCreate len
         for ix = 0 to arr.Length - 1 do
             arr.[ix] <- Codec.read cV db src
