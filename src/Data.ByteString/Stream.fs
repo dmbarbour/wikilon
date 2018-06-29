@@ -19,20 +19,23 @@ module ByteStream =
         val mutable internal Pos : int      // current writer head
         internal new() = { Data = Array.empty; Pos = 0 }
 
-    let private grow (minGrowth:int) (d:Dst) : unit =
-        let maxGrowth = (System.Int32.MaxValue - d.Pos)
-        if (minGrowth > maxGrowth)
-            then raise (new System.OutOfMemoryException())
-        // heuristically, favor a geometric growth rate, and start with
-        // enough of a buffer for common use cases.
-        let heuristicGrowth = max minGrowth (min maxGrowth (max 200 d.Pos))
-        let mem = Array.zeroCreate (d.Pos + heuristicGrowth)
+    let inline private resize (sz:int) (d:Dst) : unit =
+        assert(sz >= d.Pos)
+
+    // reallocate array with sufficient space relative to Pos
+    let private alloc (amt:int) (d:Dst) : unit =
+        let maxAmt = System.Int32.MaxValue - d.Pos
+        if (amt > maxAmt)
+            then raise (new System.OutOfMemoryException("ByteStream reserve"))
+        // adjust for geometric growth
+        let newSize = d.Pos + max amt (min maxAmt (max 200 d.Pos))
+        let mem = Array.zeroCreate newSize
         Array.blit (d.Data) 0 mem 0 (d.Pos)
         d.Data <- mem
 
     let inline private requireSpace (amt:int) (dst:Dst) : unit =
         let avail = dst.Data.Length - dst.Pos
-        if (amt > avail) then grow (amt - avail) dst
+        if (amt > avail) then alloc amt dst
 
     /// Reserve space for writing. 
     ///
