@@ -123,17 +123,15 @@ Some annotations, such as `(type)` may require an additional argument:
 
         [Type Descriptor](type)d
 
-Awelon does not constrain annotations beyond requirement for identity semantics.
+Awelon does not constrain annotations beyond requirement for identity semantics. 
 
 ## Acceleration
 
-Acceleration is a performance assumption for Awelon.
+Accelerators are essentially "built-in" functions with reference implementation provided in the Awelon dictionary. For example, if we accelerate 32-bit or 64-bit modulo arithmetic for natural numbers, then we could leverage CPU-native words and operations. Accelerators may further be supported by annotations such as `(nat)` or `(nat-32)` that suggest optimized representations for common value types.
 
-An obvious target for acceleration is natural numbers and arithmetic. We should be able to add or multiply two numbers in a small constant time, and represent big numbers in a small space. A more sophisticated example might involve representations for matrices and functions for linear algebra, enabling use of SIMD or GPGPU. Accelerated evaluation for a safe subset of OpenCL or Kahn process networks could support cloud computing.
+Acceleration of collection-oriented operations and data structures (for matrices, vectors, streams, etc.) could support high levels of SIMD parallelism. But more sophisticated accelerators might embed DSLs within Awelon. For example, to support GPGPU processing, it is feasible to accelerate a pure subset of OpenCL. Large scale cloud computing could be supported by accelerating evaluation of Kahn Process Networks.
 
-Accelerators are essentially "built-in" functions with a reference implementation in Awelon. They extend the set of "performance primitives" for an Awelon interpreter or compiler. In general, accelerated functions should be indicated explicitly by annotation: `[reference impl](accel)`. The annotation documents our performance assumption and provides an opportunity for feedback - a warning message - if the assumption does not hold. This can help resist invisible performance rot upon porting to another version of the compiler or adjusting definitions.
-
-Development and standardization of accelerators is a long term project and performance path for Awelon systems. Once we have enough of them, much Awelon code will be viewed as glue code between accelerators.
+For robust, predictable performance, accelerated subprograms should always be indicated by annotation, e.g. `[reference impl](accel)`. An explicit annotation makes it easy to warn developers when the assumption fails, due to deprecation or porting of code between systems. Further, it simplifies recognition of accelerated code by an interpreter or compiler.
 
 ## Stowage
 
@@ -187,7 +185,7 @@ Common functions and types will frequently be replicated between hierarchical di
 
 ## Evaluation
 
-Evaluation of an Awelon program simply rewrites it to an equivalent program. An external agent will presumably extract data from the evaluated result, then potentially modify the program and continue. Awelon is a pure language, but interactions with external agents provides a basis for effects. 
+Evaluation of an Awelon program simply rewrites it to an equivalent program. An external agent will presumably extract data from the evaluated result, then potentially modify the program and continue. Awelon is a pure language, but interactions with external agents provides a basis for effects.
 
 Primitives rewrite by simple pattern matching:
 
@@ -198,7 +196,7 @@ Primitives rewrite by simple pattern matching:
 
 Words rewrite into their evaluated definitions. If a word is undefined, it will not rewrite further. However, words will not rewrite unless doing so leads to further progress. There is no benefit in rewriting a word if it only leads to the inlined definition. This rule is called lazy linking. Lazy linking also ensures words denoting first-class values, such as `true = [a d]`, should be bound and moved directly, e.g. `true [] b => [true]`. 
 
-Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore valid computations should reach the same result regardless of strategy. If evaluation halts early (e.g. on breakpoint or quota) thena runtime's evaluation strategy and optimizations may be exposed. Annotations may guide evaluation strategy explicitly, influencing the rendered result (but not its meaning).
+Evaluation strategy is unspecified, and the default may be a heuristic mix of lazy, eager, and parallel. Awelon's primitives are confluent, therefore *valid* computations should reach the same result regardless of strategy. For *invalid* computations (such as `"2" 1 nat-add` or `3 0 nat-div`), or in case of quotas or breakpoints, partial evaluation is at discretion of the runtime and may expose implementation or optimization details.
 
 ### Arity Awaiting Annotations
 

@@ -70,11 +70,13 @@ module Parser =
     let inline tokBinRef h = tok TT.BinRef h
     let inline tokCodeRef h = tok TT.CodeRef h
 
-    type Action =
+    /// At this Parser layer, a Program is simply a legal parse. There
+    /// is no association with the dictionary context.
+    type Program = Action list  // Action*
+    and Action =
         | Block of Program      // [Program]
         | NS of Word * Action   // ns/Action
         | Atom of Token         // simple action
-    and Program = Action list   // Action*
         // TODO: consider a vector (immutable array) type
 
     /// Awelon uses characters in ASCII minus C0 and DEL. Most

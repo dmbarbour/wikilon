@@ -5,6 +5,8 @@
   <ItemGroup>
     <Compile Include="History.fs" />
     <Compile Include="User.fs" />
+    <Compile Include="Database.fs" />
+    <Compile Include="AppContext.fs" />
     <Compile Include="WS.fs" />
   </ItemGroup>
   <ItemGroup>
@@ -13,5 +15,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />
     <ProjectReference Include="..\Stowage\Data\Stowage.Data.fsproj" />
+    <ProjectReference Include="..\Awelon\Awelon.fsproj" />
   </ItemGroup>
 </Project>

@@ -152,7 +152,7 @@ type DBTests =
 
     member tf.CompactionTest (alen:int) (frac:int) (rng:System.Random) : unit =
         let sw = new System.Diagnostics.Stopwatch()
-        let cc d = Codec.compact (Dict.codec) (tf.Stowage) d
+        let cc d = Codec.compact (Dict.node_codec) (tf.Stowage) d
         let compactK k d = if (0 <> (k % frac)) then d else cc d
         let add n d = compactK n (addN n d)
         let rem n d = compactK n (remN n d)
@@ -167,7 +167,7 @@ type DBTests =
                  |> Array.foldBack add a 
                  |> Array.foldBack rem r
                  |> cc
-                 |> VRef.stow (Dict.codec) (tf.Stowage) // non-caching ref
+                 |> VRef.stow (Dict.codec) (tf.Stowage)
         tf.Flush()
         sw.Stop()
         printfn "test dictionary built (%A ms)" (sw.Elapsed.TotalMilliseconds)

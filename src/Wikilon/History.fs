@@ -1,5 +1,6 @@
 
 namespace Wikilon
+open Stowage
 
 /// A time-stamp. Alias to .Net System Ticks. 
 type TimeStamp = int64
@@ -8,7 +9,8 @@ module TimeStamp =
     let toDateTime (tm:TimeStamp) : System.DateTime = System.DateTime(tm,System.DateTimeKind.Utc)
     let fromDateTime (dt:System.DateTime) : TimeStamp = dt.ToUniversalTime().Ticks
 
-module History =
+// A snapshot-based history model.
+module Snapshot =
 
     /// A history modeled as a list of time-stamped snapshots,
     /// ordered so the latest times are near the head. We will
@@ -16,12 +18,24 @@ module History =
     /// trying to keep entries well distributed over time.
     type H<'V> = (struct(TimeStamp * 'V)) list
 
-    /// Add an entry to the history. Adds to best location.
+    /// Add an entry to the history. Adds to best location. Under
+    /// normal circumstances, it's assumed you'll add timestamps
+    /// near the head (i.e. for more recent entries), so this would
+    /// be O(1).
     let rec add (tm:TimeStamp) (v:'V) (h:H<'V>) : H<'V> =
         match h with
-        | (struct(tmHd,vHd):h') when (tmHd > tm) ->
-            (struct(tmHd,vHd)) : (add tm v h')
-        | _ -> (struct(tm,v):h)
+        | (struct(tmHd,vHd)::h') when (tmHd > tm) ->
+            struct(tmHd,vHd) :: (add tm v h')
+        | _ -> (struct(tm,v)::h)
+
+    /// Find historical entry most relevant to a given timestamp.
+    /// May return None, if no entry exists for the given time.
+    let rec tryFind (tm:TimeStamp) (h:H<'V>) : 'V option =
+        match h with
+        | (struct(tmHd,vHd)::h') ->
+            if (tm >= tmHd) then Some vHd else
+            tryFind tm h'
+        | [] -> None
 
     let inline private tmDiff tm tm' = abs (tm - tm')
 
@@ -41,8 +55,8 @@ module History =
             struct(tm',v)::(delTimeDiff tm' ltd hst')
         | [] -> []
 
-    // remove one entry from the history, selecting the one
-    // with the least timestamp difference. 
+    // remove one entry from history based on least time difference.
+    // Does not remove head entry from chunk.
     let private decayChunk hst =
         match hst with
         | (struct(tm0,v0)::hst') ->
@@ -51,109 +65,74 @@ module History =
             struct(tm0,v0)::(delTimeDiff tm0 ltd hst')
         | [] -> []
 
-    /// Decay a history by removing about 1/K snapshots.
-    /// Uses an exponential decay model with fairness.
-    /// Never deletes the most recent entry.
+    // exact sized split-list (may failwith insufficient data).
+    // I assume `n` is relatively small, so I can use the stack.
+    let rec private splitListAt n lst =
+        if (0 = n) then struct([],lst) else
+        match lst with
+        | (hd::lst') ->
+            let struct(tl,rem) = splitListAt (n-1) lst'
+            struct(hd::tl,rem)
+        | [] -> failwith "insufficient data"
+
+    // take fair-sized chunks of size at least k. Fair-size means
+    // the smallest chunk and largest chunk are at most one element
+    // different in size. When our list is large compared to k, the
+    // size of our chunks will swiftly approach k (from above).
+    let private fairChunks (k:int) (lst0:'V list) : ('V list) seq =
+        assert(k > 0)
+        let n = List.length lst0
+        if (0 = n) then Seq.empty else
+        let ct = n / k // ct chunks of at least size k
+        if (ct < 2) then Seq.singleton lst0 else
+        let szMin = (n/ct) // minimum size for each chunk
+        assert(szMin >= k) // our contract assumption
+        let rem = (n%ct) // first rem chunks have sz = szMin+1
+        let step (struct(idx,lst)) =
+            if (idx = ct) then (assert(List.isEmpty lst); None) else
+            let sz = szMin + if (idx < rem) then 1 else 0
+            let struct(chunk,lst') = splitListAt sz lst
+            Some(chunk, struct(idx+1,lst'))
+        Seq.unfold step (struct(0,lst0))
+
+    /// Decay a history by removing about 1/K snapshots, for k at 
+    /// least 3. Based on an exponential decay model with fairness.
     let decay (k:int) (hst:H<'V>) : H<'V> =
-        // Note: chunkBySize isn't "fair" in the sense that it
-        // can result in a leftover chunks of one or two items.
-        // Ideally, I'd use a fair chunking algorithm, but that
-        // is surprisingly painful to write. For now, I'm using 
-        // a simplistic reversal before chunking to ensure our
-        // historically last chunk is full sized, and thus that
-        // the final element can be deleted. 
-        hst |> List.rev 
-            |> List.chunkBySize k 
-            |> List.map (List.rev >> decayChunk)
-            |> List.rev 
-            |> List.concat 
+        assert(k >= 3)
+        hst |> fairChunks k |> Seq.map decayChunk |> List.concat
 
-    // Break a collection size N into chunks of size near K,
-    // of roughly even size. (Modulo when N < K). We'll 
-    let private chunkSizes n k =
-        assert(k > 1)
-        if (n < k) then [n] else
-        let c1 = (n / k)
-        let b1 = n / c1
-        
-        let chunkRem1 = n / chunk
+    // incremental decay until quota is reached (elim 1/K per step)
+    let rec private decayToQuota (q:int) (k:int) (h:H<'V>) : H<'V> =
+        if (q >= (List.length h)) then h else 
+        decayToQuota q k (decay k h)
 
-        if (n % k
-        
-        assert(k > 1)
-        let chunkCount = 
-            
-        let ct = n / k
-        let rem = n % k
-        if (ct > rem) then // add 1 to each of rem chunks.
-            let mem = Array.create ct k
-            for i = 1 to rem do
-                mem.[i
-                 
-            // we can simply add 1 to rem chunks.
-        else // try a smaller chunk size
-            if 
-            let ct' = 1 + ct
-            let rem
-        
-        let minChunks = n / (k + 1)
-        let maxChunks = n / k
-        
-
-    let decay (k:int) (h:H<'V>) : H<'V> =
-        
-
-
-    /// Delete roughly 10% of the historical entries. Always
-    /// preserves the most recent entry. Distributes deletions
-    /// more or 
-    let decimate (h:H<'V>) : H<'V> =
-        List.map decayChunk (List.chunkBySize 7 h)
-
-    // compute reasonable chunk sizes near `n` for a given k.
-    let private chunkSizes n k = 
-        assert(k > 1)
-        if (1 > n) then [] else
-        if (k >= n) then [n] else
-        
-
-        if (k >= n) then [n] else
-        let chunkCt = (n + ((2*k)/3)) / k
-        let base = n / chunkCt
-        let rem = 
-
-        let 
-        if (0 = (n % k)) then 
-        let minChunks 
-        // say we have k=10, so we mostly want chunks of 10-11.
-        // 
-        // if n < 11, then we can simply return one chunk.
-        // if n > 10, we want to split the elements evenly in 2 chunks
-
-        let maxChunks = n / (k + 1)
-
-        let maxFullChunks = n / k
-        let maxLargeChunks = n / (k+1)
-        if (maxFullChunks < 1) then [n] else
-        if  
-        if (k >= n) then [n] else
-        if (k >= (n/2)) then [(n/2); n - (n/2)] else
-        
-
-    // Split a list into chunks of roughly size K.
-    let chunk
-
-    /// Exponential Decay Model.
+    /// Codec with lossy, exponential-decay inspired compaction model.
     ///
-    /// This will delete some snapshots to help control storage costs.
-    /// Precisely, we'll drop 1 in K values for a given K, distributed
-    /// evenly over the history, preferring to drop entries that have
-    /// not been 
+    /// With this codec, you choose an approximate number of snapshots
+    /// to retain. Upon compaction, snapshots will incrementally erase
+    /// until quota is met, using a fair exponential decay algorithm
+    /// that results in snapshots of the past being further temporally
+    /// distributed compared to snapshots of recent changes. This will
+    /// ensure deep history is robust against large numbers of "recent"
+    /// updates, while keeping size constant (modulo changes in size 
+    /// of individual snapshots). 
+    let codec (entryQuota:int) (cV:Codec<'V>) : Codec<H<'V>> =
+        let cTV = EncPair.codec' (EncVarInt.codec) cV
+        { new Codec<H<'V>> with
+            member __.Write h dst = EncArray.write cTV (List.toArray h) dst
+            member __.Read db src = List.ofArray (EncArray.read cTV db src)
+            member __.Compact db h0 =
+                let hQ = decayToQuota entryQuota 9 h0
+                let struct(hQA',sz) = EncArray.compact' cTV db (List.toArray hQ)
+                struct(List.ofArray hQA', sz)
+        }
 
- eliminating snapshots that are near each other
+// TODO: snapshot histories are useful for dictionaries, but an alternative
+// is an event-based update history. In that case, we would want to merge
+// updates during the decay step - i.e. a monoidal update-event type. This
+// might be worth developing for some other parts of Wikilon. Eventually.
+        
+        
+        
 
     
-
-
-
-

@@ -2,6 +2,7 @@ module Wikilon.Main
 
 open System
 open System.IO
+open System.Threading
 open System.Security.Cryptography
 open Stowage
 open Suave
@@ -96,19 +97,23 @@ let main argv =
         Some pw
     Stowage.Cache.resize (1_000_000UL * (uint64 args.cache))
     use dbStore = new Stowage.LMDB.Storage("data", (1024 * args.size))
-    printfn "Initial DB Statistics: %A" (dbStore.Stats())
     let dbRoot = Stowage.DB.fromStorage dbStore
-    let dbWiki = DB.withPrefix (BS.fromString "wikilon/") dbRoot
+    let dbWiki = DB.withPrefix (BS.fromString "wiki/") dbRoot
     let wsParams : WS.Params = { db = dbWiki; admin = adminPass }
     let app = WS.mkApp wsParams
+    let cts = new CancellationTokenSource()
     let svc = 
         { defaultConfig with 
             hideHeader = true
             bindings = [ HttpBinding.createSimple HTTP args.ip args.port
                        ]
+            cancellationToken = cts.Token
         }
-    startWebServer svc app
-    printfn "Final DB Statistics: %A" (dbStore.Stats())
+    let (_,serve) = startWebServerAsync svc app
+    Async.Start(serve, cts.Token) 
+    printfn "Press any key to halt."
+    Console.ReadKey true |> ignore<ConsoleKeyInfo>
+    cts.Cancel()
     0 // return an integer exit code
 
 

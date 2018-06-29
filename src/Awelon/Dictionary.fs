@@ -398,8 +398,9 @@ module Dict =
             let ac' = flushUpdates' hr apc bpc
             updChild ix (BS.take n ap) ac' acs
         
-    /// specialized equivalent to `applySeqEnt a (toSeqEnt b)`.
-    /// This is an entry level append, not a union of definitions.
+    /// specialized equivalent to `applySeqEnt a (toSeqEnt b)`, with
+    /// much better performance. This is an entry-level append, NOT 
+    /// a union of definitions.
     let flushUpdates (a:Dict) (b:Dict) : Dict = flushUpdates' false a b
 
     /// Merge with prototype chain. Transitively eliminates the empty
@@ -409,7 +410,7 @@ module Dict =
         let struct(proto,dLocal) = splitProto d0
         match proto with
         | None -> dLocal
-        | Some ref -> mergeProto (flushUpdates (LVRef.load' ref) dLocal)
+        | Some ref -> mergeProto (flushUpdates (LVRef.load ref) dLocal)
 
     // Extract local dictionary entries at specified prefix.
     let rec private extractPrefixLocal (p:Prefix) (d:Dict) : Dict =
@@ -426,7 +427,7 @@ module Dict =
         let struct(l,pd) = matchDir' p d
         match pd with
         | Some (Some ref) when (l < BS.length p) ->
-            let dRemote = extractPrefix (BS.drop l p) (LVRef.load' ref)
+            let dRemote = extractPrefix (BS.drop l p) (LVRef.load ref)
             flushUpdates dRemote dLocal
         | _ -> dLocal
 
@@ -531,38 +532,42 @@ module Dict =
         diffP (BS.empty) a0 b0
 
 
+    // TODO: efficient unions and intersections.
+
 
     // `/` SP secureHash LF
     let private protoRefSize = uint64 (3 + RscHash.size) 
 
+    let inline private sizePD (pd : Dir option) =
+        match pd with
+        | None -> struct(0UL,0UL)       // no line
+        | Some None -> struct(1UL,2UL)  //  `/` LF
+        | Some (Some _) -> struct(1UL,protoRefSize) // `/` SP secureHash LF
+            // Don't want to serialize ref ID.
+
+    let inline private sizeVU (vu : DefUpd option) =
+        match vu with
+        | None -> struct(0UL,0UL)
+        | Some None -> struct(1UL,2UL)  // `~` LF
+        | Some (Some def) -> 
+            let len = BS.length (def.Data)
+            if (0 = len) 
+                then struct(1UL,2UL)    // `:` LF
+                else struct(1UL,3UL + uint64 len) // `:` SP def LF
 
     /// Return two sizes for dictionary: (line count * byte count)
     /// based on what would be written to a dictionary node. Each
     /// line corresponds to one entry, and lines are as compact as
     /// feasible (avoiding unnecessary whitespace).
     let rec size (d:Dict) : struct(SizeEst * SizeEst) =
-        let struct(lnp,szp) =
-            // We should avoid forcing the lazy reference ID.
-            match d.pd with
-            | None -> struct(0UL,0UL)       // no line
-            | Some None -> struct(1UL,2UL)  //  `/` LF
-            | Some (Some _) -> struct(1UL,protoRefSize)
-        let struct(lnv,szv) =
-            match d.vu with
-            | None -> struct(0UL,0UL)
-            | Some None -> struct(1UL,2UL)  // `~` LF
-            | Some (Some def) -> 
-                let len = def.Data.Length
-                if (0 = len) 
-                    then struct(1UL,2UL)    // `:` LF
-                    else struct(1UL,3UL + uint64 len) // `:` SP def LF
+        let struct(lnp,szp) = sizePD (d.pd)
+        let struct(lnv,szv) = sizeVU (d.vu)
         let struct(lncs,szcs) = Map.fold sizeChild (struct(0UL,0UL)) (d.cs)
         struct((lnp+lnv+lncs),(szp+szv+szcs))
     and private sizeChild (struct(ln,sz)) ix (struct(p,c)) =
         let struct(lnc,szc) = size c
-        // add child's prefix to every line in the child
-        let szp = lnc * (1UL + uint64 (BS.length p)) 
-        struct((ln+lnc),(sz+szc+szp))
+        let szp = uint64 (1 + BS.length p) 
+        struct((ln+lnc),(sz+szc+(lnc*szp)))
 
     let inline sizeBytes d = 
         let struct(_,sz) = size d 
@@ -632,9 +637,61 @@ module Dict =
     let inline private parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
-    /// heuristic codec with some configurable parameters for benchmarking
-    let node_codec_config (flushThresh:SizeEst) (nodeMin:SizeEst) : Codec<Dict> =
-        assert(nodeMin > (10UL * protoRefSize))
+
+    // Heuristic compaction algorithm. 
+    let rec private nodeCompact (cD:Codec<Dict>) (db:Stowage) (d0:Dict) =
+        // heuristic constants
+        let thresh = 25UL * uint64 (RscHash.size)
+        let flushThresh = 9UL * thresh
+        if Map.isEmpty (d0.cs) && Option.isNone (d0.vu) then
+            match (d0.pd) with
+            | Some (Some _) -> struct(d0,1UL,protoRefSize)
+            | _ -> struct(empty,0UL,0UL)
+        else
+            // always merge updates at this step, even if there's just one.
+            // We'll buffer updates only based on our flush threshold.
+            let dM = mergeProto d0
+            let struct(ctM,szM) = size dM
+            let struct(dF,ctF,szF) =
+                let skipFlush = (szM < flushThresh) || (Map.isEmpty (dM.cs))
+                if skipFlush then struct(dM,ctM,szM) else
+                let compactChild (struct(cs,ct,sz)) ix (struct(p,c)) =
+                    // compact initially ignoring the shared prefix
+                    let struct(c',ctC,szC) = nodeCompact cD db c
+                    let szP = uint64 (1 + BS.length p) // includes ix
+                    let szPS = szP * ctC
+                    if (szPS < (thresh + szP)) then
+                        // acceptable worst-case prefix redundancy
+                        let cs' = updChild ix p c' cs
+                        let ct' = ct + ctC
+                        let sz' = sz + szC + szPS
+                        struct(cs',ct',sz')
+                    else // create Stowage node for prefix sharing
+                        let ref = LVRef.stow cD db c' (szC <<< 2)
+                        let cref = fromProto (Some ref)
+                        let cs' = Map.add ix (struct(p,cref)) cs
+                        let ct' = ct + 1UL // /prefix secureHash
+                        let sz' = sz + protoRefSize + szP 
+                        struct(cs',ct',sz')
+                let struct(cs',ctCS,szCS) = // compact and compute sizes
+                    Map.fold compactChild (struct(Map.empty,0UL,0UL)) (dM.cs)
+                let vu' = dM.vu // empty prefix cannot be flushed to child node 
+                let struct(ctVU,szVU) = sizeVU vu'
+                let dF = mkDict None vu' cs'
+                let ctF = ctVU + ctCS
+                let szF = szVU + szCS
+                struct(dF,ctF,szF)
+
+            // small nodes do not require a remote reference
+            if (szF < thresh) then struct(dF,ctF,szF) else
+            let ref = LVRef.stow cD db dF (szF <<< 2)
+            struct(fromProto (Some ref), 1UL, protoRefSize)
+
+    /// A reasonable default codec for Dictionary nodes. Heuristic.
+    /// Root size is limited to a few kilobytes after compaction.
+    /// Assumes full control of Stowage nodes (no prefixes or other
+    /// metadata).
+    let node_codec : Codec<Dict> =
         { new Codec<Dict> with
             member __.Write d dst = 
                 writeDst d dst
@@ -643,70 +700,28 @@ module Dict =
                 let mkDef s = autoDef db s
                 let mkDir h = LVRef.wrap (VRef.wrap cD db h)
                 parseDict mkDef mkDir (ByteStream.readRem src)
-            member cD.Compact db d0 =
-                let bTrivial = (Map.isEmpty (d0.cs) && Option.isNone (d0.vu))
-                if bTrivial then struct(d0, sizeBytes d0) else
-                let dM = mergeProto d0
-                let szM = sizeBytes dM
-
-                // compact child nodes recursively, if necessary. We'll go
-                // ahead and simply compact each child independently.
-                let struct(dF,szF) =
-                    let skipFlush = (szM < flushThresh) || (Map.isEmpty (dM.cs))
-                    if skipFlush then struct(dM,szM) else
-                    let compactChild ix (struct(p,c)) cs =
-                        let k = 31 // break up huge symbols or prefixes
-                        let pc = prependChildPrefix (BS.drop k p) c
-                        updChild ix (BS.take k p) (Codec.compact cD db pc) cs
-                    let cs' = Map.foldBack compactChild (dM.cs) (Map.empty)
-                    let dF = mkDict None (dM.vu) cs'
-                    struct(dF, sizeBytes dF)
-
-                // create remote node for entry, if necessary
-                if (szF < nodeMin) then struct(dF,szF) else
-                let ref = LVRef.stow cD db dF (szF <<< 2)
-                let dR = fromProto (Some ref)
-                struct(dR, sizeBytes dR)
+            member cD.Compact db d0 = 
+                let struct(d',_,sz') = nodeCompact cD db d0
+                struct(d',sz')
         }
 
-    // Compaction notes:
-    //
-    // The current codec always applies updates upon compaction,
-    // even if only one symbol has changed from the prototype.
-    // Updates are only buffered for recursive application. I have
-    // experimented with delaying small updates, but it actually 
-    // cost me more in the end.
-    // 
-    // We also break down long prefixes into chunks upon flush, to
-    // limit prefix amplification in the worst-case. In practice, 
-    // this should almost never trigger for Awelon systems. But it
-    // might if we use URL-based prefixes, like Java libraries.
-    //
-    // Profiling and analysis are needed to decide where performance
-    // improvements should be targeted. We could also try to use 
-    // C# ImmutableDictionary instead of F# maps, which might offer
-    // some benefits. 
-
-    /// A reasonable default codec for Dict nodes.
-    ///
-    /// After compaction, we can guarantee our dictionary size is
-    /// less than two kilobytes. Large dictionaries are moved to a 
-    /// Stowage node. For larger dictionaries, we apply compaction 
-    /// recursively to child nodes. There are a lot of heuristics
-    /// involved. Ultimately, we have LSM-tree behavior. 
-    ///
-    /// This codec assumes full control of the Stowage node.
-    let node_codec =
-        let nodeMin = 25UL * uint64 (RscHash.size)
-        let flushThresh = 12UL * nodeMin
-        node_codec_config flushThresh nodeMin
-        // TODO: consider adjusting the flush operation to consider
-        // how much data is rewritten, not just size of update. This
-        // would ensure deletions propagate further.
+    /// Obtain a Directory representation for a Dictionary. This will
+    /// just use the existing `/ secureHash` directory if it's a single
+    /// entry, otherwise will allocate a directory in Stowage. 
+    let stow (db:Stowage) (d:Dict) : Dir =
+        if Map.isEmpty (d.cs) && Option.isNone (d.vu) then
+            match d.pd with
+            | Some dir -> dir
+            | None -> None
+        else 
+            let sz = sizeBytes d
+            Some (LVRef.stow node_codec db d (sz <<< 2))
 
     /// A Dictionary codec. Prefixes node_codec with size metadata, such
-    /// that we can use the Dict type within other data structures.
-    let codec = Stowage.EncSized.codec codec
+    /// that we can use the Dict type within other data structures. This
+    /// is not suitable for creating dictionary nodes for sharing.
+    let codec = Stowage.EncSized.codec node_codec
+
 
     // PERFORMANCE NOTES
     //
