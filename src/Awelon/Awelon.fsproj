@@ -6,7 +6,6 @@
     <Compile Include="Cache.fs" />
     <Compile Include="Parse.fs" />
     <Compile Include="Dictionary.fs" />
-    <Compile Include="DictRLU.fs" />
     <Compile Include="WordVersion.fs" />
     <Compile Include="Interpret.fs" />
   </ItemGroup>

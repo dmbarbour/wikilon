@@ -2,7 +2,8 @@
 namespace Wikilon
 open Stowage
 
-/// A time-stamp. Alias to .Net System Ticks. 
+/// A time-stamp. Alias to .Net System Ticks. This is mostly for
+/// internal use within applications.
 type TimeStamp = int64
 module TimeStamp =
     let now () : TimeStamp = System.DateTime.UtcNow.Ticks

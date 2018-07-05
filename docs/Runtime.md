@@ -9,23 +9,15 @@ To leverage .NET JIT, I'll start by reimplementing in F#. This should enable acc
 
 I'll need to implement ByteStrings, since CLR's UTF-16 strings aren't very appropriate for Awelon.
 
-## Stowage
+## Wikilon Database
 
-To support a large-scale runtime supporting massive filesystem-sized dictionaries, I must implement *Stowage* and several data structures such as tries. Stowage will use secure hashes to reference binary resources, and reference-counting GC. 
+As a RESTful system, all persistent state should be kept in a database (modulo regenerable cached computations).
 
-My current implementation uses an LMDB backend. This is pretty good, but assumes a read-heavy load that might not be optimal for frequent real-time inputs (like time series), and also doesn't support compression. However, it's implemented and tested, and LMDB is much simpler than most other databases - e.g. avoiding background threads and caching, minimal cleanup requirements on power failure, etc.. I'll stick to LMDB for now.
+I'm tempted to simply use an Awelon *dictionary* as the database. This would give me scalability, hierarchical structure, etc.. A benefit is that the implementation is simple, import/export is simplified, and even histories can be maintained easily. A cost is that updates may become overly synchronized. This cost could be ameliorated via a transactional update model, i.e. so concurrent updates can be analyzed and merged if they do not conflict (conflicts should be very rare).
 
-## Dictionary Representation
+I could create a dedicated data structure, e.g. such that we can improve prefix sharing near the tree root and have dedicated space for indices, but it's a lot of extra work for marginal benefits and would certainly hinder full-system import/export and legibility.
 
-I've now spent a lot of time on this. I eventually developed a specialized LSM trie variant for dictionaries - mostly to ensure legibility and simplicity for export/import and tooling. Format:
-
-        /prefix1 secureHash1
-        /prefix2 secureHash2
-        :symbol1 definition1
-        :symbol2 definition2
-        ~symbol3
-
-We have directories, definitions, and deletions. Basically an LSM radix tree. Empty prefix is useful for prototype inheritance.
+An important consideration is how indices should be maintained. Many indices should be maintained asynchronously, such that they don't interfere with the commit/update operations. We might explicitly manage a collection of "recent updates" separately from our primary dictionary with indices. 
 
 ## Cache Management
 
@@ -34,7 +26,7 @@ I need a lot of caching for my goals with Wikilon. Consequently, these caches mu
 Each dictionary might be associated with multiple cached observations. Examples:
 
 * reverse lookup index (word to client set)
-* word definition version hashes (word to hash)
+* word definition version hashes (word to version hash)
 * version hashes to evaluated definitions
 * version hashes to type descriptors
 * version hashes to link-optimized definitions
@@ -78,6 +70,7 @@ An interesting point with Awelon's current definition is that I don't really nee
 For uploads, it might be best to immediately root every upload by binding it to a word or dictionary.
 
 I'm not going to worry about security or user tracking quite yet.
+
 
 ## Accelerators and Intermediate Language
 

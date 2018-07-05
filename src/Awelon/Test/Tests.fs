@@ -184,15 +184,13 @@ type DBTests =
 
         sw.Restart()
         let dR = VRef.load dRef
-        let len = Dict.toSeq dR |> Seq.length
         let sum = Dict.toSeq dR
                 |> Seq.map (fst >> readNat)
                 |> Seq.fold accum 0UL
         sw.Stop()
-        let read_op_ct = 2 * len
+        let read_op_ct = (Array.length a) - (Array.length r)
         let read_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double read_op_ct)
         printfn "usec per read op: %A" read_op_usec
-        Assert.Equal(len, Array.length a - Array.length r)
         Assert.Equal(sum, sum_expected)
 
         // random-read performance test
@@ -202,28 +200,27 @@ type DBTests =
         let fnAccum acc k = acc + if Dict.contains (bs k) dRR then uint64 k else 0UL
         let rsum1 = Array.fold fnAccum 0UL a
         sw.Stop()
-        shuffle rng a
-        sw.Start()
-        let rsum2 = Array.fold fnAccum 0UL a
-        sw.Stop()
-        let rread_op_ct = 2 * Array.length a
+        let rread_op_ct = Array.length a
         let rread_op_usec = (1000.0 * sw.Elapsed.TotalMilliseconds) / (double rread_op_ct)
         printfn "usec per random read op: %A" rread_op_usec
         Assert.Equal(rsum1,sum_expected)
-        Assert.Equal(rsum1,rsum2)
 
     [<Fact>]
     member tf.``test dict compaction`` () =
         let rng = new System.Random(1)
+
         printfn "size 70k, 10 compactions"
         tf.CompactionTest 70000 7000 rng 
         printfn "size 70k, 100 compactions"
         tf.CompactionTest 70000 700 rng 
         printfn "size 70k, 1 compactions"
-        tf.CompactionTest 70000 700000 rng 
+        tf.CompactionTest 70000 700000 rng
+
+        // following test takes about 30 seconds on my machine 
+        //printfn "size 700k, 100 compactions"
+        //tf.CompactionTest 700000 7000 rng 
         
-        
-        
+    // TODO: test splitAtKey, etc.        
         
 
 

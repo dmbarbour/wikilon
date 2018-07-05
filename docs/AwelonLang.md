@@ -248,7 +248,7 @@ Awelon doesn't depend on types. There is no type-driven dispatch or overloading.
         :label      ({R/label} * x) → {label:x | R}
         .label      (s * ({} → {label:x | R})) → ((s * x) * ({} → {R}))
 
-Type annotations can be expressed using Awelon annotations, we only need some conventions. Obviously, we can use specific annotations such as `(nat)` or `(bool)`. Lightweight annotations could describe function arity, such that `[F](t21)` indicates `F` receives two arguments and returns one result. For more sophisticated or precise types, we may eventually support `[Type Descriptor](type)d`, enabling flexible type descriptions.
+Type annotations can be expressed using Awelon annotations, we only need some conventions. Obviously, we can use specific annotations such as `(nat)` or `(bool)`. Lightweight annotations could describe function arity, such that `[F](t21)` indicates `F` receives two arguments and returns one result. For more sophisticated or precise types, we may eventually support `[Type Descriptor](type)d`, enabling flexible type descriptions. Debugging with structured types is usually a hassle because types can become very large, but annotations can also help here - enabling human-meaningful metadata to be lifted into the type analysis.
 
 Unfortunately, simple static types are sometimes too simplistic and restrictive. For example, the `pick` function from Forth isn't amenable to static typing without sophisticated dependent types:
 
@@ -334,15 +334,11 @@ Awelon's explicit copy and drop on a stack makes it easy for a runtime to track 
 
 *Note:* Persistent data structures (finger-trees, int-maps, ropes, etc.) are still very useful - more flexible than arrays in their application, more scalable due to potential use of *Stowage* for deep structure, etc.. These data structures may benefit from use of small array fragments for tree fanout or leaf values.
 
-<sup>1</sup>: Arrays are not truly O(1). They're O(N^(1/3)) for physical memory surrounding a central processor in three dimensions. In practice, this shows up in cache levels, or even network access for truly large arrays. See [*Myth of RAM*](http://www.ilikebigbits.com/blog/2014/4/21/the-myth-of-ram-part-i). Nonetheless, arrays tend to be more efficient than persistent data structures.
+<sup>1</sup>: Arrays are not truly O(1). They're at best O(N^(1/3)) for physical memory surrounding a central processor in three dimensions. In practice, this shows up in cache levels, or even network access for truly large arrays. See [*Myth of RAM*](http://www.ilikebigbits.com/blog/2014/4/21/the-myth-of-ram-part-i). Nonetheless, arrays and in-place mutations tend to be much more efficient than persistent data structures.
 
 ## Generic Programming in Awelon
 
-An inherent weakness of Awelon is lack of type inference for generic programming. For example, we cannot implicitly overload an `add` symbol to use different functions for different types like natural numbers and matrices. 
+A weakness of Awelon is lack of built-in support for generic programming. For example, we cannot implicitly overload an `add` word to use different functions for different types, such as natural numbers versus matrices. We can use explicit overloads, but such mechanisms are often syntactically awkward and difficult to integrate with type systems. Deferred typing and projectional editing should help, but we still require a model with concrete constructors and predictable behavior to project above.
 
-It is feasible to model trait parameters, e.g. such that we write `foo<T>` that uses `T.add`. We can leverage parametric polymorphism and Awelon's row-polymorphic labeled records and variants. We can represent free algebraic structures. Some of these techniques have a lot of syntactic overhead, so would require effective support from projectional editors.
-
-Explicit methods are available, via parametric polymorphism, row-polymorphic records, and free algebraic structure. We could model trait parameters, such that function `foo<T>` might use `T.add`. However, the explicit nature of these techniques may hinder legibility of code.
-
-Fortunately, legibility can be mitigated by projectional editing. For example, `nat-add` and `matrix-add` and `T.add` could be rendered as `add` using a different color for each common prefixes. Further, an editor might also help clients efficiently input code that is explicitly generic, i.e. so inputting `add` provides interactive edit-time selection of the intended variant.
+My intuition is to generalize generic programming as a constraint or search problem. For example, the choice of which `add` function to use is based on constraints in future input and result types, which may be provided later. It seems feasible to develop a monad with an implicit environment of constraints, then evaluate a monad to a program result at compile-time, i.e. staged metaprogramming. But I have not verified this intuition in practice.
 

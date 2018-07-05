@@ -383,7 +383,7 @@ type DBTests =
         let sync = t.Storage.WriteBatch (CritbitTree.ofList kvs)
         let rd1 = List.map (fst >> t.Storage.Read) kvs
         Assert.Equal<DB.Val list>(rd1,vs)
-        sync.Force() 
+        do sync()
         let rd2 = List.map (fst >> t.Storage.Read) kvs
         Assert.Equal<DB.Val list>(rd2,vs)
 

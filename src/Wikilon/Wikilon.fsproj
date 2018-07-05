@@ -6,7 +6,6 @@
     <Compile Include="History.fs" />
     <Compile Include="User.fs" />
     <Compile Include="Database.fs" />
-    <Compile Include="AppContext.fs" />
     <Compile Include="WS.fs" />
   </ItemGroup>
   <ItemGroup>

@@ -55,16 +55,19 @@ module Dict =
     /// A directory is represented by a symbol prefix.
     type Prefix = Symbol
     
-    /// A definition should consist of valid Awelon code, but we do
-    /// not parse it at this layer. Minimally, it must not contain
-    /// LF, which is used to separate definitions.
+    /// A definition should consist of valid Awelon code, but we
+    /// do not parse it at this layer. Minimally, a definition 
+    /// must be a one-liner, not containing LF, but it's better
+    /// to avoid any control characters.
+    /// 
+    /// Definitions should not be very large. Within a dictionary,
+    /// a definition cannot be divided across nodes and will always
+    /// be copied when there's an update to the associated node. So
+    /// it's preferable to keep definitions small, leveraging those 
+    /// $secureHash references if necessary.
     ///
-    /// Because definitions may contain secure hash references, we
-    /// also provide a dependency slot to interact with Stowage GC.
-    ///
-    /// Overly large definitions can degrade performance, so it is 
-    /// recommended to externalize large definitions before adding
-    /// them to the dictionary, e.g. using `$secureHash` in Awelon.
+    /// To integrate Stowage GC with .Net GC, each Def has a slot for
+    /// Stowage dependencies with .Net finalizers.
     [<Struct; CustomEquality; CustomComparison>]
     type Def = 
         val Data : ByteString
@@ -370,7 +373,7 @@ module Dict =
         match b.pd with 
         | Some dir -> 
             if hr || Option.isSome dir then b else
-            mkDict None (b.vu) (b.cs) 
+            mkDict None (b.vu) (b.cs) // drop prefix deletion entry
         | None ->
             let hr' =
                 match a.pd with
@@ -562,8 +565,9 @@ module Dict =
     let rec size (d:Dict) : struct(SizeEst * SizeEst) =
         let struct(lnp,szp) = sizePD (d.pd)
         let struct(lnv,szv) = sizeVU (d.vu)
-        let struct(lncs,szcs) = Map.fold sizeChild (struct(0UL,0UL)) (d.cs)
+        let struct(lncs,szcs) = sizeCS (d.cs)
         struct((lnp+lnv+lncs),(szp+szv+szcs))
+    and private sizeCS cs = Map.fold sizeChild (struct(0UL,0UL)) (cs)
     and private sizeChild (struct(ln,sz)) ix (struct(p,c)) =
         let struct(lnc,szc) = size c
         let szp = uint64 (1 + BS.length p) 
@@ -637,13 +641,22 @@ module Dict =
     let inline private parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
+    // divide huge prefixes into manageable fragments. Mostly, this is
+    // to handle the worst-case behavior for super-long symbols. In the
+    // normal use cases, it should have no impact.
+    let inline private limitPrefix lim struct(p,c) =
+        struct(BS.take lim p, prependChildPrefix (BS.drop lim p) c)
 
-    // Heuristic compaction algorithm. 
+    // Heuristic compaction algorithm. Upon compaction, updates propagate
+    // down the tree and large nodes are rewritten to `/ secureHash`. The
+    // log-structured merge tree aspect is from buffering updates near to
+    // the root node until sufficient updates are available. 
     let rec private nodeCompact (cD:Codec<Dict>) (db:Stowage) (d0:Dict) =
         // heuristic constants
         let thresh = 25UL * uint64 (RscHash.size)
         let flushThresh = 9UL * thresh
         if Map.isEmpty (d0.cs) && Option.isNone (d0.vu) then
+            // trivial case, no updates buffered at this node
             match (d0.pd) with
             | Some (Some _) -> struct(d0,1UL,protoRefSize)
             | _ -> struct(empty,0UL,0UL)
@@ -655,12 +668,12 @@ module Dict =
             let struct(dF,ctF,szF) =
                 let skipFlush = (szM < flushThresh) || (Map.isEmpty (dM.cs))
                 if skipFlush then struct(dM,ctM,szM) else
-                let compactChild (struct(cs,ct,sz)) ix (struct(p,c)) =
-                    // compact initially ignoring the shared prefix
+                let compactChild (struct(cs,ct,sz)) ix pc0 =
+                    let struct(p,c) = limitPrefix (int (thresh >>> 1)) pc0 
                     let struct(c',ctC,szC) = nodeCompact cD db c
-                    let szP = uint64 (1 + BS.length p) // includes ix
-                    let szPS = szP * ctC
-                    if (szPS < (thresh + szP)) then
+                    let szP = uint64 (1 + BS.length p)
+                    let szPS = ctC * szP
+                    if (szPS < thresh) then
                         // acceptable worst-case prefix redundancy
                         let cs' = updChild ix p c' cs
                         let ct' = ct + ctC
@@ -668,10 +681,9 @@ module Dict =
                         struct(cs',ct',sz')
                     else // create Stowage node for prefix sharing
                         let ref = LVRef.stow cD db c' (szC <<< 2)
-                        let cref = fromProto (Some ref)
-                        let cs' = Map.add ix (struct(p,cref)) cs
+                        let cs' = Map.add ix (struct(p,fromProto (Some ref))) cs
                         let ct' = ct + 1UL // /prefix secureHash
-                        let sz' = sz + protoRefSize + szP 
+                        let sz' = sz + protoRefSize + szP
                         struct(cs',ct',sz')
                 let struct(cs',ctCS,szCS) = // compact and compute sizes
                     Map.fold compactChild (struct(Map.empty,0UL,0UL)) (dM.cs)
@@ -687,10 +699,14 @@ module Dict =
             let ref = LVRef.stow cD db dF (szF <<< 2)
             struct(fromProto (Some ref), 1UL, protoRefSize)
 
+    // Thoughts: it might be useful to support a prototype chain as
+    // an append-only update log for recent updates. Also, it might
+    // be useful to treat the tree root differently, e.g. require a
+    // larger update at the root before we flush.
+
     /// A reasonable default codec for Dictionary nodes. Heuristic.
-    /// Root size is limited to a few kilobytes after compaction.
-    /// Assumes full control of Stowage nodes (no prefixes or other
-    /// metadata).
+    /// After compaction, dictionary size is no more than 2kB, with
+    /// larger nodes moving to a `/ secureHash` reference.
     let node_codec : Codec<Dict> =
         { new Codec<Dict> with
             member __.Write d dst = 
@@ -705,9 +721,15 @@ module Dict =
                 struct(d',sz')
         }
 
+    /// Compact a dictionary via the default codec. 
+    let inline compact (db:Stowage) (d:Dict) : Dict =
+        Codec.compact node_codec db d
+
     /// Obtain a Directory representation for a Dictionary. This will
     /// just use the existing `/ secureHash` directory if it's a single
-    /// entry, otherwise will allocate a directory in Stowage. 
+    /// entry, otherwise will allocate a directory in Stowage. Does not
+    /// compact the dictionary, and can result in very small nodes. It 
+    /// is usually better to compact a dictionary, than to stow it.
     let stow (db:Stowage) (d:Dict) : Dir =
         if Map.isEmpty (d.cs) && Option.isNone (d.vu) then
             match d.pd with
@@ -717,19 +739,17 @@ module Dict =
             let sz = sizeBytes d
             Some (LVRef.stow node_codec db d (sz <<< 2))
 
-    /// A Dictionary codec. Prefixes node_codec with size metadata, such
-    /// that we can use the Dict type within other data structures. This
-    /// is not suitable for creating dictionary nodes for sharing.
+    /// A Dictionary codec for Dict values in context of Stowage data
+    /// structures. Adds a size prefix to the root node!
     let codec = Stowage.EncSized.codec node_codec
-
 
     // PERFORMANCE NOTES
     //
     // The performance I'm getting from this Dict/codec is comparable
-    // to the Stowage.LSMTrie, albeit a little worse. Writes are near
-    // 15usec, reads around 7usec, for a tree of moderate size and 
-    // ad-hoc write batches. This improves considerably if the Dict is
-    // mostly cached via LVRefs.
+    // to the Stowage.LSMTrie when caching is in effect, considerably 
+    // worse otherwise, likely due to the coarse grained Stowage node
+    // decisions. But it's within acceptable limits, I think. I will
+    // assume we can usually 
 
 type Dict = Dict.Dict
 

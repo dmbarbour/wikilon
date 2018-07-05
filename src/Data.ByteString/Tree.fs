@@ -211,6 +211,7 @@ module CritbitTree =
         | Root(kl,n) -> Root(kl, mapN fn kl n)
         | Empty -> Empty
 
+    let inline private isPrefix p s = (p = (BS.take (BS.length p) s))
 
     let rec selectPrefixN (p:ByteString) (kl:Key) (node:Node<'V>) : Tree<'V> =
         match node with
@@ -218,7 +219,7 @@ module CritbitTree =
             if testCritbit cb p 
                 then selectPrefixN p kr r
                 else selectPrefixN p kl l
-        | _ -> if (p = (BS.take p.Length kl)) then Root(kl,node) else Empty
+        | _ -> if isPrefix p kl then Root(kl,node) else Empty
             
     /// Obtain subset of tree where all keys match a specified prefix.
     let selectPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
@@ -237,13 +238,42 @@ module CritbitTree =
                 match dropPrefixN p kl l with
                 | Root(kl',l') -> Root(kl', Inner(cb, l', kr, r))
                 | Empty -> Root(kr,r)
-        | _ -> if (p = (BS.take p.Length kl)) then Empty else Root(kl,node)
+        | _ -> if isPrefix p kl then Empty else Root(kl,node)
 
     /// Remove all keys matching the given prefix. 
     let dropPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Root(kl,n) -> dropPrefixN p kl n
         | Empty -> Empty
+
+    // extract lefmost value from a Critbit tree node.
+    let rec private leftmostValN (node:Node<'V>) : 'V =
+        match node with
+        | Inner(_,l,_,_) -> leftmostValN l
+        | Leaf v -> v
+
+    // Any prefix for a key will be in the normal search-path for that key,
+    // but not all keys in the search-path will be valid prefixes due to not
+    // testing every critbit. So we'll just test every key in the search path
+    // from longer (a deeper match in right) to shorter.  
+    let rec private tryFindPrefixN (k:Key) (kl:Key) (node:Node<'V>) : (Key * 'V) option =
+        match node with
+        | Inner(cb, l, kr, r) ->
+            let inR = testCritbit cb k 
+            if not inR then tryFindPrefixN k kl l else
+            let foundInR = tryFindPrefixN k kr r
+            if Option.isSome foundInR then foundInR else
+            if isPrefix kl k then Some(kl, leftmostValN l) else None
+        | Leaf v -> if isPrefix kl k then Some(kl,v) else None
+
+    /// Find the largest key in tree that is a prefix of requested key,
+    /// with byte-level granularity. For example, if we search for "food"
+    /// then potential matches are "food", "foo", "fo", "f", or "". We 
+    /// would return the longest match that is found in the tree (if any).
+    let tryFindPrefixOf (k:Key) (t:Tree<'V>) : (Key * 'V) option =
+        match t with
+        | Root(kl,n) -> tryFindPrefixN k kl n
+        | Empty -> None
 
     // pKR assumes k > least-key starting at mb
     let rec private pKR (mb:Critbit) (k:Key) (node:Node<'V>) : struct(Node<'V> * Tree<'V>) =

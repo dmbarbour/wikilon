@@ -8,7 +8,7 @@ open System.Threading.Tasks
 /// and a 'usage' heuristic - usually a touch count or time stamp -
 /// to delay release of a recently used resource.
 type Cached =
-    abstract member Usage : int
+    abstract member Usage : int with get
     abstract member Clear : unit -> unit
 
 /// Stowage Cache
