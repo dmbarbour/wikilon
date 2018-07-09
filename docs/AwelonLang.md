@@ -49,24 +49,6 @@ Embedded texts are suitable for lightweight DSLs, test data, rendering hints, co
 
 Structured data, like XML, is better modeled as an Awelon data type to permit flexible abstraction, templating, procedural generation, and large-scale via secure hash resources. 
 
-## Labeled Data
-
-Most modern programming languages have built-in support for labeled products and sums - aka records and variants. Labeled data is extensible, weakly commutative, and human meaningful. Awelon introduces label functions of form `:label` and `.label`. Each label must also be syntactically valid as a word. Effectively, a record works like this:
-
-        [[A] :a [B] :b [C] :c] .c == [C] [[A] :a [B] :b]
-        [A] :a [B] :b == [B] :b [A] :a      (labels commute)
-
-Logically, we operate linearly on abstract row-polymorphic record constructors:
-
-        :a      {R without a} [A] → {R, a=[A]}
-        .a      S [{} → {R, a=[A]}] → S [A] [{} → {R}]
-
-The record value `{a=[A],b=[B],c=[C]}` is abstract, never represented syntactically. But a record constructor function `[[A]:a [B]:b [C]:c]` can effectively be treated as a record value. Like other functions, the record constructor is subject to ad-hoc composition, abstraction, and factoring. Unlike other functions, we can easily leverage commutativity of labels when refactoring.
-
-For variants, the basic sum type `(A+B)` has a Church encoding `∀r.(A→r)→(B→r)→r`. That is, an observer must supply a "handler" for each case, and the value itself selects and applies one handler, dropping the others. For labeled sums, we simply need a labeled product of handlers - `[[OnA] :a [OnB] :b [OnC] :c ...]`. Variant values could then have concrete representation like `[.label [Value] case]` or `[[value] [.label] case]` depending on how we define `case`. With projectional editors, labeled variants may be given a more conventional appearance.
-
-*Note:* Labeled data could be modeled in Awelon without a primitive feature, e.g. modeling a concrete trie for the abstract record value together with accelerators and projectional editing. However, primitive labels significantly simplify static analysis, debugging, and error reporting.
-
 ## Secure Hash Resources
 
 It is possible to identify binaries by *secure hash*. Doing so has many nice properties: immutable and acyclic by construction, cacheable, securable, provider-independent, self-authenticating, implicitly shared, automatically named, uniformly sized references, and smaller than full URLs or file paths. Awelon systems widely leverage secure hashes to reference binaries:
@@ -245,8 +227,6 @@ Awelon doesn't depend on types. There is no type-driven dispatch or overloading.
         c           (s * x) → ((s * x) * x)
         d           (s * x) → s
         [F]         s → (s * type(F))
-        :label      ({R/label} * x) → {label:x | R}
-        .label      (s * ({} → {label:x | R})) → ((s * x) * ({} → {R}))
 
 Type annotations can be expressed using Awelon annotations, we only need some conventions. Obviously, we can use specific annotations such as `(nat)` or `(bool)`. Lightweight annotations could describe function arity, such that `[F](t21)` indicates `F` receives two arguments and returns one result. For more sophisticated or precise types, we may eventually support `[Type Descriptor](type)d`, enabling flexible type descriptions. Debugging with structured types is usually a hassle because types can become very large, but annotations can also help here - enabling human-meaningful metadata to be lifted into the type analysis.
 
@@ -328,13 +308,17 @@ Named local variables offer a useful proof-of-concept for *Editable Views* as a 
 
 ## Arrays
 
-Awelon doesn't have an array data type. But use annotations and accelerators could impose an array representation for some lists, i.e. such that offset-indexed access is O(1)<sup>1</sup>. In context of a purely functional language, *modifying* an array is naively O(N) - copy the array with the modification in place. However, if we hold the only reference to an array's representation, the runtime could simply modify the representation in-place without violating observable purity.
+Awelon doesn't have an array data type. But use annotations and accelerators could impose an array representation for some lists, such that we can access data in near-constant time. In context of a purely functional language, *modifying* an array is naively O(N) - copy the array with the small modification in place. However, if we hold the only reference to an array's representation, the runtime could simply modify the representation in-place without violating observable purity.
 
 Awelon's explicit copy and drop on a stack makes it easy for a runtime to track dynamically whether it holds a unique reference to a representation, at least compared to to variable environment models used in lambda calculus. Copy-on-write could be performed as needed, so developers need only to ensure arrays are rarely copied between updates. Static analysis could often remove dynamic checks within tight update loops.
 
 *Note:* Persistent data structures (finger-trees, int-maps, ropes, etc.) are still very useful - more flexible than arrays in their application, more scalable due to potential use of *Stowage* for deep structure, etc.. These data structures may benefit from use of small array fragments for tree fanout or leaf values.
 
-<sup>1</sup>: Arrays are not truly O(1). They're at best O(N^(1/3)) for physical memory surrounding a central processor in three dimensions. In practice, this shows up in cache levels, or even network access for truly large arrays. See [*Myth of RAM*](http://www.ilikebigbits.com/blog/2014/4/21/the-myth-of-ram-part-i). Nonetheless, arrays and in-place mutations tend to be much more efficient than persistent data structures.
+## Labeled Data
+
+Labeled data is weakly commutative, human meaningful, and extensible compared to spatially structured data such as `(A*B)` pairs and `(A+B)` sums. Most programming languages support for labeled products and sums (aka records and variants). Awelon does not have built-in support, but it's still feasible to leverage sorted association lists to model records, and we can encode variants as functions that select a labeled handler from a record.
+
+This design benefits from appropriate annotations and accelerators. Records can be given specialized representation and operators in the runtime, specialized types for static analysis. Similarly, projectional editors can provide convenient views for construction and manipulation of labeled data. But the details haven't been worked out.
 
 ## Generic Programming in Awelon
 
