@@ -19,7 +19,8 @@ module EncCByteString =
     //  0 for remote
     //  EncVarNat (1 + Length) for local.
     //
-    // Suffix is: 0 for remote, nothing for local.
+    // Suffix is: 0 for remote, nothing for local. This is
+    // used to simplify recognition of remote references.
 
     let write (ref:CByteString) (dst:ByteDst) : unit =
         match ref with
@@ -28,7 +29,7 @@ module EncCByteString =
             ByteStream.writeBytes s dst
         | Remote vref -> 
             EncVarNat.write (0UL) dst
-            ByteStream.writeBytes (vref.ID) dst
+            ByteStream.writeBytes (vref.Addr) dst
             ByteStream.writeByte 0uy dst
 
     let read (db:Stowage) (src:ByteSrc) : CByteString =

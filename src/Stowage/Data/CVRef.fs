@@ -1,7 +1,7 @@
 namespace Stowage
 open Data.ByteString
 
-/// Compacting Value Reference
+/// Compacting Value References
 ///
 /// The overhead for secure hash resources is relatively high, so we don't
 /// want to use them for small values. Instead, keep small values inline.
@@ -30,7 +30,7 @@ module EncCVRef =
         | Local (v,_) ->
             ByteStream.writeByte cLocal dst
             Codec.write cV v dst
-        | Remote vref -> EncRscHash.write (vref.ID) dst
+        | Remote vref -> EncVRef.write (vref) dst
             
     let read (cV:Codec<'V>) (db:Stowage) (src:ByteSrc) : CVRef<'V> =
         let b0 = ByteStream.readByte src
