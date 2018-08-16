@@ -11,7 +11,71 @@ I'll need to implement ByteStrings, since CLR's UTF-16 strings aren't very appro
 
 ## Wikilon Database
 
-As a RESTful system, all persistent state should be kept in a database (modulo regenerable cached computations).
+As a RESTful system, all persistent state should be kept in a database, excepting only regenerable, cached computations and some weak session-like features for real-time server push (which must be easily restarted). 
+
+### The Dictionary
+
+Our primary database will simply be one big dictionary. This is an important center of Wikilon, and so must not be coupled with other data - excepting, perhaps, a long-running history. We can leverage some features of Awelon dictionaries:
+
+* hierarchical dictionaries can simplify user-level or project-level sandboxes
+* dictionaries can use `meta-*` fields to track geneology, origin, and so on
+* dictionaries can keep tagged snapshots via further hierarchical dictionaries
+
+We can feasibly model subscriptions, such that some dictionaries are copied from a different branch automatically, but it isn't a critical feature for now. We can also have a convention to model web-services that allow external clients to post/put/get.
+
+### Search?
+
+I'm uncertain about how to approach search. Complicating factors include the hierarchical dictionary structure, security concerns, and secure hash resources.
+
+Minimally, I can provide an index to find all clients of any given word. But full-text search that might cross dictionaries or require concept analysis is quite beyond the level I can support for now. (Reverse lookup for clients, however, might be useful indirectly, e.g. for embedding keywords.)
+
+### The Users
+
+Additionally, I need to keep user data - sessions, clipboards, authorities, etc.. It might prove convenient (for import, export, history, etc.) to represent each user via dictionary, perhaps even within the global dictionary. User activities might be generally modeled similar to inventory tracking, of sorts.
+
+Each user should perhaps have a dedicated sandbox dictionary, or at least the ability to create one.
+
+## Caching
+
+Design for cached computation is cause for some frustrations at the moment. 
+
+My current proposed design is this:
+
+* compute a global reverse-lookup index
+* compute a deep behavior version index
+* cache from version to evaluation, etc
+
+A global reverse-lookup index is useful for search, discovery, and other purposes. Further, it can be maintained in real-time with updates to a dictionary. Stowage resources will requires some special attention.
+
+A behavior version hash is useful. It can map to evaluated definitions, which might have their own version hashes (to further improve sharing). The main issue with version hashes is that I cannot compute them in real-time: a change to the dictionary can result in a cascading change to version hashes. Fortunately, I can compute version hashes lazily without too much difficulty, and it not difficult to model a queue of versions to invalidate incrementally.
+
+This design seems very promising, but it's still rather expensive in nature. And the implementation is more complicated than I'd prefer for just getting started swiftly.
+
+For a fast start, I propose a simplified ephemeral cache model:
+
+* Develop an evaluation environment with caching and invalidation.
+* Memoize recently evaluated (compiled) definitions, only. 
+
+In this case, we can use ad-hoc stateful means for invalidation. We don't need durability. Instead, we update the source and we'll automatically invalidate all definitions with changed code.
+
+## Web Services
+
+Just a general set of goals for Wikilon.
+
+* ability to view and edit definitions
+* ability to store binary data, like text files (via `%secureHash`)
+* ability to work with basic sessions, view and edit multiple definitions
+* ability to access, download, and browse resources, given full secure hash
+* import and export of dictionaries + resources (via .tgz/.tar, perhaps?)
+* ability to access historical definitions
+
+## Paths
+
+For URL paths, we can treat dictionary names as a directory structure (such that `/foo/` refers to the foo dictionary) and words as files (such as `/foo/word`). But I'm uncertain this will work, we might need a suffix like `word.w` for a word or perhaps `foo/Dict` as a suffix for the dictionary-as-a-resource. 
+
+Our root page should enable logging in, finding the dictionaries for which the user is authorized, and also provide some news and other metadata. Dictionary pages should support import-export of the dictionary, access to history, etc.. Since we don't want the root to be a dictionary page.
+
+It should be feasible to view definitions as pages, in many cases. And to support stateful definitions that can receive POST requests.
 
 I'm tempted to simply use an Awelon *dictionary* as the database. This would give me scalability, hierarchical structure, etc.. A benefit is that the implementation is simple, import/export is simplified, and even histories can be maintained easily. A cost is that updates may become overly synchronized. This cost could be ameliorated via a transactional update model, i.e. so concurrent updates can be analyzed and merged if they do not conflict (conflicts should be very rare).
 

@@ -1,209 +1,113 @@
 
-# Application Models for Awelon Project
+# Application Models for Awelon
 
-The conventional, mainstream "application model" is a detached process that interacts with shared services and data. Awelon could easily follow convention, e.g. modeling monadic IO or a message-passing process. But my goal for Awelon project is to unify programming and user experiences, to make sharing and composition easy. To that end, the detached process seems a poor fit, being inaccessible and invisible.
+## Goals
 
-An intriguing feature of [Awelon language](AwelonLang.md) is that, due to rewrite semantics, process state can always be represented by and recorded as an Awelon program. This provides a foundation for durability, distribution, and debugging. Of course, one needs to also preserve a reference to the associated dictionary. We can feasibly embed application task state within a dictionary:
+My goal for Awelon project is to integrate the programmer and user experiences. 
 
-        :job-1123 [process state is recorded here]
+Today, using conventional application models and programming languages, the programmer exists "above" the program and "before" its execution. In contrast, the user exists "within" living seas of data, shared with other users. Programmers have flexible and fine-grained control over how data is integrated or analyzed. In contrast, users have coarse-grained "user interfaces" that are inflexible and it's awkward to share results.
 
-Presumably, an external agent would find available jobs, execute pending IO operations (such as sending e-mail or fetching HTML), then compute the next process state. It might run many steps between saving process states. Besides maintaining the process over time and viewing its state in a debugger, we could capture checkpoints or probe uncommitted sample messages.
+If successfully integrated, the programmer-user lives within the program, which is also a living sea of data shared with other programmer-users. The programmer-user can integrate and analyze data in a flexible, fine-grained manner. Yet, for aesthetics and convenience, it must be possible to use attractive interfaces with coarse-grained views and manipulations of a system.
 
-        :my-view job-1123 [sample message] send
+## Quick Start via Conventional Models
 
-Thus, even for a relatively conventional process model, we could improve visibility and accessibility. However, I believe we can do even better by representing 'applications' as structured objects within a dictionary. This results in very RESTful applications with deeply accessible state. For example, REPLs and iPython-inspired "notebook" applications could be encoded in a dictionary using a word per logical line: 
+Although I have some lofty goals, I believe it's best to get started swiftly with conventional application models. In purely functional languages, conventional applications can be modeled using simple functions with continuations. For example:
 
-        :repl-1473-0 initial-state
-        :repl-1473-1 repl-1473-0 command2
-        :repl-1473-2 repl-1473-1 command2
-        :repl-1473-3 repl-1473-l2 command2
-        :repl-1473 repl-1473-l3
+        -- imperative process with synchronous effects
+        type Imperative eff r = ((eff a) * (a → Imperative eff r)) + r
 
-This REPL corresponds closely to a *command pattern* from OOP. It enables access to and editing of prior lines, rendering an output per line, infinite undo, branching the REPL, or embedding its current value (via the head) into other programs. In general, this document is just brainstorming patterns that might be suitable for modeling application state within a dictionary.
+        -- blackboard system, concurrent shared state rewriting
+        type BB st = st * List of (st → (1 + BB st))
 
-## Application Model Desiderata
+Besides these, we can model anonymous mobile processes that navigate a shared map-like environment; multi-threaded imperative systems that communicate by taking, modifying, and returning entire volumes of shared memory; stream processing pipelines or Kahn process networks; component entity systems or simulations that model periodic update behaviors over large tables of data; publish-subscribe environments; and so on. In all cases, "effects" are modeled in terms of incremental output and input of values by the environment.
 
-I have several desiderata for application models in Awelon systems:
+By starting with conventional models, we can develop useful software artifacts right away. It's feasible to compile programs for conventional operating systems. Further, because these models are first-class values, it isn't difficult to simulate or checkpoint a process within the dictionary by either rewriting state in-place or recording the incremental inputs and computing the current state. 
 
-* composable: we can systematically embed or integrate applications
-* first-class: we can represent the application model within Awelon
-* accessible: we can render, animate, directly manipulate app state
-* sharable: can copy or move apps to a new environment and continue
-* live: we can tweak and modify application behavior during runtime
-* immutable: state is represented by an immutable, non-unique value
-* concurrent: model many simultaneous interactions with environment
-* distributed: partition state and computation across many machines
-* deterministic: behavior is fully repeatable up to external inputs
+The main disadvantage is that most conventional models don't remain attached to the user very well. Fortunately, multi-agent systems (like the blackboard, mobile processes, or a publish-subscribe environment) can help, since we can treat the users as some of the agents.
 
-First-class value representation of application state and behavior is convenient for composition, immutability, sharing, and process control. However, first-class "object identity" - whereby we communicate names of processes or state components - is more problematic for sharing, composition, determinism, and even memory management. The basic issue is duplication or forgery of names when we try to replicate things, preserving behavior for these names in a new context.
+*Aside:* Object identity is semantically awkward in purely functional languages. It isn't difficult to represent, e.g. using natural numbers. But it requires fine-grained effects, manual memory management, and a relatively 'flat' namespace. I would not favor application models or effect APIs that rely heavily on object identity. But an exception can be made for component entity systems and similar data-driven designs, which are a pretty good fit for purely functional computations.
 
-I'll directly exclude models that rely on object identity such as runtime allocation of 'new' variables or channels. This constrains our choice of concurrency and communication models. Fortunately, we can still model useful concepts, like second-class channels or variables, hierarchical filesystems or state models, and publish-subscribe topics.
+## Foundation
 
-Concurrency requires we both represent multiple external requests and receive multiple inputs, and progress incrementally (i.e. such that supplying any requested input may result in new requests, no need to supply all inputs up-front). Distribution, meanwhile, requires that state can be partitioned across multiple processors, and long-lived state relative to communication latencies. Determinism, in context of concurrency and intra-process communication, requires some form of confluence for many-to-one communications (otherwise, we'll have a bottleneck).
+The dictionary can serve as a spreadsheet-like filesystem or database, with structured data and transparent procedural generation of data. Its representation is a persistent LSM-trie, which allows for efficient writing, sharing, scaling, and versioning. It's feasible to shove both code and data into the dictionary, and to freely compose computed data with source data.
 
-If necessary, I'm reluctantly willing to relax determinism. We could assume an external scheduler, and support arrival-order non-determinism or external interrupts. But our model must enable a purely functional simulated scheduler for testing, hierarchical embeddings, and interactive queries of application state. Preferably without a huge performance loss where the scheduler becomes a bottleneck.
+With *Stowage* and *Memoization*, it's feasible to support large-scale computations and spreadsheet-like incremental updates without requiring an external database and explicit caching. These features stretch the limits of what purely functional languages can do without explicit side-effects.
 
-## Monadic Processes
+The lightweight syntax, local rewriting semantics, and lazy linking of words will simplify projectional editing, rendering of results, debugging, and immediate reuse of results for further computation. These properties allow us to treat code as a user interface, for example.
 
-Monadic computations match several desiderata. Especially the [Free and Freer (operational) monads](http://okmij.org/ftp/Computation/free-monad.html), i.e. modeling all monads with an extensible, interpreted "effects" type. Of course, this still leaves a big question regarding *which* effects to model. For example, we could support sockets for network access, or limit ourselves to servicing and sending HTTP requests, or focus on distributed queues. Many models, such as RDP, can be given a monadic API.
+The concatenative structure of both Awelon and the dictionary allows us to conveniently model programs or user-inputs as streams, append-only logs. It's feasible to treat the user actions as continuously extending a program or editing a dictionary.
 
-Concurrency is a little awkward. A monad can generally only present one request at a time, so for concurrent requests we end up spawning lots of small monad processes that require a lot of ad-hoc inter-process communications. This could be ameliorated by a carefully designed API. Blackboard metaphor might help, registering active requests into the environment.
+Awelon's features offer a foundation to build upon, but not a complete model.
 
-Since monadic IO is well proven in Haskell, it's not a bad place to get started. We could at least model some simple web services and agents this way.
+## Multi-Agent Systems and Partitioning
 
-## Kahn Process Networks
+Too many cooks spoil the broth! 
 
-I am interested in leveraging [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) in Awelon. KPNs support multiple input and output channels. The order with which messages for separate input channels are provided does not matter, which provides a simple basis for concurrency on input. Messages may be pending on multiple output channels, which provides a simple basis for concurrency on output. Gluing outputs to inputs provides a simple basis for composition of KPNs. Importantly, it is feasible to *accelerate* the evaluation of KPNs such that we avoid explicit routing of messages. This would be useful for large scale applications, distributing computations across multiple machines. 
+At large scales, we have too many users, projects, bots, etc.. This leads to various naming conflicts and information security concerns. Awelon provides a limited tool to mitigate this: hierarchical embedding of dictionaries via qualified `dictname/` prefixes. How we should wield this tool is a relevant question. 
 
-We can model reactive KPNs by adding explicit time-step message to every channel. This enables us to express either "no input until later" or "no input this time" to a process waiting on that channel. (The subtle difference is whether we permit streaming of many inputs within a time-step.) Each process would send similar messages on the appropriate output channels. With this, we can model real-time systems with asynchronous, interleaved inputs. We can also model acknowledgement channels to create network "back pressure", i.e. so an upstream process doesn't push more than K messages before prior messages are acknowledged as received. 
+There are two basic ways we can embed things: 
 
-KPNs are essentially a deterministic variant of flow-based programming.
+1. embed world into agent: system data is 'mounted' into agent dictionary
+1. embed agent into world: agent controls a prefix under world dictionary
 
-The main weakness of KPNs is that it is difficult to represent a dynamic network structure. We can work around this a little using first-class KPN values, but even then it would be awkward to extract and preserve process state.
+In the first case, I allude to Linux file-system mounting. For example, we may have a dictionary under `sys/` or `weather/` that contains data automatically synchronized from external sources. Mounts are normally read-only, but it's feasible to intercept write operations and translate them to HTTP POST or PUT on a remote source. Authorities associated with the mount are easily recorded within the agent dictionary, e.g. under `mount-sys` and `mount-weather`. Conversely, we may publish locally maintained dictionaries so other agents may mount them. For example, we could have a `db/` and a `share-db` word to specify how it's shared.
 
-## Reactive Demand Programming
+In the second case, agents would operate under some sort of `agent-home/` subdirectory, but only have limited authority to view and manipulate the host dictionary. Applications that integrate data from multiple sources can only be represented in the host dictionary. It's feasible to record a value into a shared registry or environment, or model applications in the host, but it's unclear which agents should be responsible for maintaining applications, controlling type safety problems, or managing the registration, or how much authority any given agent should have over the host.
 
-Reactive Demand Programming (RDP) allows concurrent behaviors to contribute to shared values, which may change reactively over time. Contributions accumulate in a shared set, such that behaviors (and effects) are commutative and continuous. This preserves useful equational reasoning properties from functional programming, while enabling useful IO through shared variables. A monadic API might have a few operations:
+Between these options, the first - embedding world into agent - is by far the better fit for Awelon's goals. It gives each agent the greatest control over its codebase, and integration with the world. It's easy to create useful views of living systems on a per-agent basis. Agents run their own 'applications' to maintain, compute, and share data, and may freely tweak the application models. Responsibility and trust are relatively clear.
 
-        dir : Dir m → String → m (Dir m) 
-        var : (Bag a, Typeable a) ⇒ Dir m → String → m (Var m a)
-        get : Var m a → m a        CURRENT STATE
-        put : Var m a → a → m ()   FOR NEXT STATE
+*Aside:* There may be some issues with cyclic mounts forming continuous update cycles. But this could be corrected if we normally exclude mounted data when sharing dictionaries. That is, drop `sys/` when we have `mount-sys` and instead require the recipient to process the mount. Mounting could also be lazy, to avoid unnecessary mount efforts.
 
-We obtain variables from an implicit filesystem-like directory structure, allowing local state. And we can get and put to those variables, with all puts contributing to the state at the next step. Unlike conventional monadic loops, we'll recompute the entire monad in each time step (but we can try to optimize this for stable data, memoizing our behaviors). Further extensions might support durable variables, which provide some implicit persistence behavior, or optimized API functions to simplify memoization in common use cases.
+*Note:* Besides mounting under `env/` it's also feasible to mount under `env-`. In the latter case, we'd be giving the mount full access to the rest of our dictionary, so it would essentially model a dataflow component.
 
-A weakness of RDP is that the variable types are restricted, but I think we can usually work around this restriction.
+## Stateful Applications
 
-RDP integrates most easily with external topic-based publish-subscribe systems. Effectively, labels are fine-grained topics.
+There are basically two ways to model stateful applications:
 
-*Aside:* Idempotence is not essential and could easily be relaxed, allowing us to work with bags instead of sets, or perhaps even weighted demands. 
+* recompute state: from initial state and input history
+* save state: write or checkpoint value into dictionary
 
-## Machines
+Recomputing state has some nicer properties for working with decentralized input sources (such as time-series databases), system extension (adding new applications to the existing system), and debugging (rewind, replay). In contrast, saving state gives us better control over space requirements, avoids huge recompute efforts, and integrates conveniently with synchronous effects models. Also, if we change definitions a little after saving state, we could simply continue with the new definitions.
 
-The [machines](https://hackage.haskell.org/package/machines) model developed by Edward Kmett and Rúnar Bjarnason attempts to solve several issues with conventional monadic IO. The underlying types:
+In context of Awelon systems where data is provided through mounted dictionaries, much data is decentralized. Further, with agents going online and offline, system extensibility is a relevant feature. It seems to me that recomputing state must be the normal modus operandi for modeling stateful applications in Awelon. 
 
-        Step k o r = Stop | Yield o r | Await (k t) ((1+t) → r)
-        Machine k o = Step k o (Machine k o)
-        MachineT m k o = m (Step k o (MachineT m k o))
+Unfortunately, recomputing state interacts awkwardly with incremental effects and the potential to change inputs or program definitions. We cannot change which effects we've performed in the past. This issue can be mitigated if we avoid synchronous effects models, such that our inputs don't need to correspond directly to past outputs. Application models with highly asynchronous effects APIs, such as publish-subscribe, are the best option if we're going to regularly recompute state.
 
-In each step, a machine can either halt, yield an output, or await an input. Awaiting an input allows an explicit request `(k t)` and may fail so we accept a `(1+t)` result. Uniform input failure is convenient for accessibility: it allows us to compute and render a "current" incremental output assuming there are no more inputs.
+Careful use of *Memoization* can mitigate recompute efforts. And gradually forgetting or summarizing past inputs can help constrain space costs.
 
-Effectively, this is a model of streams with incremental inputs. It's more rigidly structured than KPNs, yet close in nature to monadic computations. 
+## Effects and Environments
 
-## State Sharing Processes
+If our world is modeled as embedded dictionaries, then the basic effect is to observe changes in the world or to cause changes to it. The former is simply a natural consequence of updates to a mounted partition. The latter requires writing to a partition we share with other agents, which they may mount. We basically have a publish-subscribe system where reading a mount corresponds to a subscription, and writing to a shared dictionary corresponds to publishing a topic.
 
-Awelon project's goals include visibility, accessibility, and extensibility. A shared state model is convenient for these goals: the state value is something we can render, animate, directly manipulate, debug, extend with concurrent processes. Purely functional programming forbids ad-hoc aliasing of shared state, but we can easily model time-sharing with one writer at a time. Naively, a simple state sharing process model is:
+If we pursue this application model, then we'll need to model software agents to maintain our shared data and so on. 
 
-        type P s = s → (s * P s)
+## Spreadsheet-like Applications
 
-Each process step returns the next state and next step function. We assume the state value of type `s` will be observed and manipulated by other processes between steps. Human users or external software agents also act as processes in this respect: they view and manipulate state, and update their own memory while doing so. Processes are anonymous. Communication between processes is indirect, via state. The state model `s` can provide message queues, tables, registries, tuple spaces, or other concepts as needed for communications. 
+Spreadsheets are among the most natural applications to express in Awelon. For example, we can define a word per cell, perhaps using a simple naming convention like using `foo-3-c` to represent the definition of row 3 column c in spreadsheet foo. A spreadsheet-based editable view could then render hundreds of cells in a compact manner.
 
-Process model `P` is naive because it doesn't support waiting for input or process life cycles. We can extend our model to fix these issues. Consider:
+A read-eval-print-loop (REPL) can also be modeled as a spreadsheet-like application, such that each line starts with the prior line:
 
-        type PR s = s → 1 + (s * PR s)                  P+Retry
-        type PRC s = List of (s → 1 + (s * PRC s))      PR+Concurrency
+        :repl-foo-0 repl-init
+        :repl-foo-1 repl-foo-0 command-1
+        :repl-foo-2 repl-foo-1 command-2
+        ...
+        :repl-foo-42 repl-foo-41 command-42
+        :repl-foo-hd repl-foo-42
 
-By introducing retry, a process can explicitly await state changes without a busy-wait loop. By modeling concurrent operations via collections of processes, we support non-determinism (scheduling within list is unspecified), and we can model process life cycles (spawning processes, termination via empty list).
+This could then be rendered as a REPL session, with outputs rendered after each line. We can recompute outputs whenever the dictionary or underlying data changes. Adding a new line only requires two changes to our dictionary: add a definition for the new line, and modify the head entry. If outputs are rendered graphically (based on our *Editable Views*), this might be better compared to a matlab session or [jupyter notebook](http://jupyter.org/).
 
-Some other weaknesses can be addressed by focusing on the state model `s`. If our state model is logically monotonic in nature, we can reason more readily about behavior in the face of non-determinism. Use of accelerated state models, such as KPNs, could support distributed and parallel computing. State invariants could be protected by modeling `s` as an abstract data type with a constrained API.
+In practice, we may prefer to accompany our spreadsheet-like application with a first-class value representation, e.g. a matrix of `[cell-name]` values. Then we can render the first-class matrix value, or compute a spreadsheet value to render after evaluation.
 
-The main weakness is that there is no built-in coordination between processes. Each process obtains exclusive control of the state, and any coordination must be represented within the model itself. Also, there's no effective means to make this system observably deterministic.
-
-Note: For live programming, we might additionally wish to stabilize the `P` value, i.e. such that `P s = s → s` and `PR s = s → 1 + s`. A stable process value simplifies external modification of the step function, between steps. In this case, we cannot fork concurrently.
-
-## Behavioral Programming
-
-In [behavioral programming (BP)](http://www.wisdom.weizmann.ac.il/~bprogram/), processes don't directly manipulate state. Instead, concurrent processes - called behaviors - will automatically coordinate to compute a sequence of events. Each behavior can suppress events, propose events, observe events, and potentially terminate or spawn concurrent behaviors. In a purely functional system, we might model this as:
-
-        type B e = e → 1 + (S e)
-        type S e = (Set of e) * (Set of (B e))
-
-Our system has a set of proposed events and a set of behaviors. Each behavior has an opportunity to either suppress or accept an event. Upon acceptance, we will compute a next set of proposed events and behaviors. An event is accepted only if all behaviors in the current system accept it, and our next system is the union of next events and behaviors. External agents could interfere with this system by injecting new behaviors or events, or by selecting a non-deterministic "next" event after we filter the rejected events.
-
-Although behavioral programming uses the word "event", the value could feasibly represent a system state. Doing so would offer similar advantages as state-sharing processes. We can also support "soft" coordination models, e.g. by including a score upon acceptance, or representing sets as priority-ordered lists.
-
-## Multi-Variable Behavioral Programming 
-
-For large systems, we need fine-grained state and behaviors. 
-
-Assume our state or event is represented by a collection of single-assignment shared variables. Concurrent behaviors will observe and assign subsets of variables. A potential API:
-
-        get : Label a → m a
-        set : Label a → a → m 1
-        alt : m a → m a → m a
-        fail : ∀ a . m a
-
-Use of `alt` allows for non-deterministic decisions, with `fail` eliminating some decisions. Setting a variable twice will also result in failure. Labels can feasibly be constructed based on types, or have a finite set of types.
-
-To model stateful behaviors, we might loop or enable access to history:
-
-        type B = List of (m B)      STATEFUL LOOP
-        hist : Label a → m a        STATEFUL HISTORY
-
-Access to historical information is more convenient in context of live software updates, job control, state accessibility, etc.. Loops, especially with concurrency, tend to be opaque and escape the thumb of human users. In case of access to history, we might assume a low-priority optional behavior of form `hist label >>= set label` to preserve unassigned variables across time-steps by default, plus a `reset` function to drop variables.
-
-To support priority explicitly, we could prioritize `alt` by including a number that heuristically indicates how much weight we should associate with the first option above the second. To support scratch-spaces for computations and composition of applications, we could also support a hierarchical state model with subdirectories, e.g. `in : Directory → m a → m a`. For concurrent operations, we can safely add a `fork` operation due to single-assignment restrictions.
-
-Weaknesses of this model are combinatorial explosions of search paths (too many options) and expression of concurrent constraints or contributions to a single value (e.g. no way for individual behaviors to say "render this" then combine all these options).
-
-# Second Class Models
-
-Although these aren't suitable as a foundation for *general* applications, they could still be useful and interesting.
+Spreadsheet-like applications can cover a lot of valuable use-cases - documents, slide-show presentations, system dashboards. But we still need to consider state and effects.
 
 ## Computable Forms
 
-Using editable views in a graphical environment, it is not difficult to represent a boolean as a checkbox or provide a color-picker together with an HSV type, a slider for a ranged number, or a calendar widget for a date type. We can model a drop-down "selection list" in terms of a list together with an indexed selector. Hence, we can model interactive forms as normal values or definitions in Awelon.
+The idea:
 
-Although the above is a usable approach, we can benefit from properly separating a record of input data from the form, i.e. such that our form is described by a *function* that receives a single *record argument*, and the record itself just contains the input data. With this approach, we can infer the required fields and types for the record, and perhaps present to our clients a value with holes in it, and perhaps render a partially evaluated result.
+* we can project some definitions as interactive forms
+* copy a template form as needed, integrate edited form
 
-This doesn't generalize easily for interactive applications, but forms seem widely applicable as a specialized feature.
-
-## Expressive Spreadsheets
-
-An Awelon dictionary is essentially a filesystem with spreadsheet-like characteristics. But it's feasible to actually record spreadsheets within the dictionary, defining a word per cell. Every Awelon definition can then be evaluated independently. Essentially, this is just an editable view on part of a dictionary, using a row-column convention:
-
-        :foo-2-a "world"
-        :foo-3-a "hello"
-        :foo-4-a foo-3-a foo-2-a concat
-
-To be useful as a spreadsheet, the main requirement is a sufficiently dense encoding of rows and columns. (If words were sparsely defined, we'd be better off favoring an ad-hoc layout, perhaps recording entries in an edit session or using progressive disclosure.)
-
-Awelon does not provide any automatic mechanisms to access collections or tables encoded this way, but it is feasible for agents or projectional editors to additionally maintain records and lists based on which words are defined in the dictionary. This would allow full-table access, while preserving the acyclic structure between individual "cells".
-
-## Command Pattern
-
-A command pattern might be represented as:
-
-        :foo-0 initial state constructor
-        :foo-1 foo-0 command1
-        :foo-2 foo-1 command2
-        ...
-        :foo-99 foo-98 command99
-        :foo-hd foo-99
-
-Essentially, we represent a stream of commands manipulating a state. We could render the state after each command, like a REPL or notebook application. The explicit representation simplifies historical views, forking, undo, and similar. In general, keeping the entire history of commands may cost too much in some cases, so we may need to occasionally checkpoint the state. But for many use cases, the number of commands won't be too large and checkpoints may be managed explicitly.
-
-*Aside:* This could also be viewed as a specialized 1D spreadsheet.
-
-## Edit Sessions as Scratchpads
-
-Where command patterns or spreadsheets use structured words, we could more generally just model an edit-session of arbitrary words (perhaps under a prefix, `foo-`) such that clients can easily add and define new words.
-
-## Stable Dictionaries
-
-Rather than mutating dictionaries, we could try to keep the dictionary mostly constant, and instead leverage secure hash resources and stowage to a much greater extent. The dictionary would define a lot of standard functions, accelerators, etc.. but data would be kept in the stowage layer, and almost never manipulated directly. This is convenient for standardization and sharing of the dictionary, and can be combined easily with other ideas.
-
-## Monotonic Dictionaries
-
-It is feasible to model Awelon systems that never redefine a word. Words may instead serve as single-assignment variables. Allocation of fresh words, and garbage collection of irrelevant words, would be managed by a central authority. The main benefit of monotonic structure is that it's much easier to reason about system behavior and caching. OTOH, deep updates are a hassle to express.
-
-## Publish Subscribe
-
-Publish subscribe is a model for continuous, live programming of real world systems.
-
-With ad-hoc conventions a dictionary might describe subscriptions to external data resources. An agent can fulfill these subscriptions, pushing data into the dictionary. Conversely, external agents might subscribe to words or expressions on a dictionary and observe changes in their evaluation due to changes in the underlying data.
-
-We can leverage hierarchical dictionaries to publish-subscribe entire databases. Various topics such as weather or geography could be maintained independently in separate dictionaries, then synchronized when the network is available. This benefits from dictionary-layer structure sharing, lazy downloads, streaming and checkpoints, etc..
+This relies on projectional editors to provide an interactive view for updating a form, e.g. using a checkbox for a boolean or a color-picker in place of an HSV value. We'll simply copy the form as often as required, and integrate the complete template into some input stream. This doesn't generalize well to the larger problems, but forms are useful for many user-interactive applications.
 
 ## Effectful Work Orders
 
@@ -229,8 +133,13 @@ Hence, we can evaluate and optimize opaque words, link frozen words, and GC the 
 
 Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo-meta-gc` for elements under `foo`, or we could represent our policies under a global word like `meta-gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
 
-## Content Addressed Network Models
+# Natural Language Inspired Meta-Programming
 
-Conventional networks associate a network address (socket, IP, URL, etc.) with a servicing process. This association is external. But an alternative is to associate a network model with *content*. Topic-based publish-subscribe is one example. Another might involve creating an asymmetric encryption key per process, and communicating based on public key (in practice a unique address/channel per process, but logically content addressed). In the latter case, we could leverage distributed hashtables for routing (instead of centralized DNS).
+Awelon project started with a vision: a stream of natural language manipulates a 'context' in the listener. Rather than a concrete model, this context is full of disjoint ideas and concepts, vagaries and ambiguities, resources and data, soft desiderata and hard requirements, with some meta-knowledge of how to search for a model instance. The partial model itself corresponds to an arbitrary type, which might be composed with other partial models, which further constrains and refines the selection of partial models based on composition compatibility. 
 
+A longer stream will incrementally clarify, connect, refines, extend, and modify this context. Ideally, we can incrementally *render* this context to a human or agent, perhaps in terms of example search results. By iteratively extending the stream and rendering the context, we form an ad-hoc dialogue between the agent and the Awelon system. It is feasible for multiple human and software agents could cooperatively participate, sharing influence on a model like a blackboard system metaphor, indirectly forming a dialogue between all involved agents. This also provides a basis for generic programming, since program fragments would represent partial programs that adapt to their context.
+
+Awelon programming language was influenced by this vision insofar as it is a designed for streaming programs (via concatenative structure), partial evaluation (via purity, local rewriting), and massive scale with embedded data (via dictionary representation, hierarchical component structure, binary large objects, and stowage). However, Awelon's primitives are very low level. We must build an enormous foundation before we have Awelon 'words' suitable for manipulating and refining an ambiguous context! Before we achieve this, we can also leverage simpler intermediate ideas like [Dyna](https://github.com/nwf/dyna) or [μKanren](http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf).
+
+This is a long-term goal for Awelon. And it's applicable to almost any output type, including documents or presentations or interactive software. We'll still need a suitable target model in any case. So this is ultimately more of a meta-programming concept.
 
