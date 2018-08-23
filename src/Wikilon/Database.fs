@@ -5,7 +5,9 @@ open Data.ByteString
 
 // As a RESTful application, Wikilon data is kept in a Database and
 // the web-apps shouldn't keep much local state. Potential exceptions
-// may exist for server-push (e.g. web-sockets) and caching.  
+// may exist for server-push (e.g. web-sockets) and caching. For the
+// latter, we might benefit from caching evaluation environments for
+// multiple runs.
 //
 // What does our DB need, then?
 //
@@ -29,9 +31,8 @@ open Data.ByteString
 //
 // A reverse-lookup index can be maintained in real-time, but the others
 // cannot be due to cascading update issues. We should manage the indices
-// in a background thread, asynchronously. Further, I need to consider the
-// potential to add new indices over time, and potential for dependencies 
-// between indices (e.g. version tracking depends on reverse-lookup index).
+// in a background thread, asynchronously and incrementally. Further, I
+// should consider our potential to introduce new indices. 
 //
 // For the moment, it might be best to favor an ad-hoc approach, with each
 // index implemented by hand.
@@ -41,19 +42,23 @@ open Data.ByteString
 // treated as another index, with updates being processed asynchronously.
 // Ideally, anything we can query can also be indexed.
 // 
-module DB =
+module WikiState =
 
     type Symbol = Dict.Symbol   /// Bytes, minus LF or SP
     type Def = Dict.Def         /// Bytes minus LF, with finalizers
 
     /// Our simplified transaction model! Upon commit, we'll compare
-    /// a read-set against values in the database. If everything is
-    /// okay, we'll accept the writes as non-conflicting.
+    /// a read-set against values in the database. We may also check
+    /// the write-set for sensible symbols and definitions, e.g. to
+    /// ensure everything will parse. If it all checks out, we accept
+    /// the writes as non-conflicting.
     ///
     /// Reads and writes may be entire dictionaries, which allows for
     /// prefix-level updates or read dependencies. But in the normal
     /// use case, our write-set or read-set should be a simple set of
     /// symbols with local definitions.
+    ///
+    /// Transactions may be rejected for reasons other than co
     type TX = 
         { reads   : Dict
           writes  : Dict      
@@ -70,17 +75,51 @@ module DB =
             { tx with writes = Dict.add k d (tx.writes) }
         let inline markDurable tx = { tx with durable = true }
 
+    /// A history of dictionaries.
+    type DictHist = Snapshot.H<Dict>
 
-    /// Database abstract interface.
+    val dict_key = BS.fromString "dict"
+    val hist_key = BS.fromString "hist"
+
+    let getDict (db:Stowage.DB) : 
+
+
+    /// Database abstract interface. A database is stateful, but has
+    /// a primary value for import/export.
     ///
-    /// The Database allows some separation from 
+    /// This doesn't specify a schema, e.g. for definitions versus
+    /// user models. Also, we might wish to use separate databases
+    /// for sensitive data, such as passwords or user models.
     type DB =
-
-        // Since we're working with Dicts, DB has a Stowage.
+        /// Every database has associated Stowage.
         abstract member Stowage : Stowage with get
-        
-        
 
+        /// The primary state can be accessed as a value.
+        abstract member Head : Dict with get
+
+        /// We'll often look up individual symbols. Doing so might be
+        /// more efficient than constructing a Dict value, depending
+        /// on internal representations.
+        abstract member Read : Symbol -> Def option
+
+        /// Our DB will have a memory of historical states. However, we
+        /// won't make strong guarantees about how long our historical 
+        /// snapshots are preserved.
+        abstract member Hist : DictHist with get
+
+        /// Updates to our database are transactional. Transactions are
+        /// modeled as pure values, see above. Upon commit, we'll accept
+        /// or reject the transaction. Non-durable transactions can often
+        /// return very swiftly.
+        abstract member Commit : TX -> bool
+
+    // Thoughts: Some forms of cache can be modeled as 'forgetful' DBs.
+    // E.g. with memoized results that can be regenerated as needed.
+    // It could feasibly be separated from our main dictionary.
+        
+    /// Even with a key-value DB, I still need a schema of sorts for our
+    /// primary data. Durable data includes both our dictionaries and our
+    /// user information. 
 
 
 

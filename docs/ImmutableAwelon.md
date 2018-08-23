@@ -8,7 +8,9 @@ With immutable code, our "dictionary" is replaced by a "development environment"
 
 That's the idea. 
 
-Whether it's a "good" idea is a separate question. The main advantage is that we simplify the sharing of code in a "global" codebase, and we simplify caching because programs and their meanings are deeply immutable. Yet, if we envision use-cases like a Wiki, then support for spreadsheet-like characteristics isn't necessarily bad. Awelon's support for embedded dictionaries (together with *localization*) can provide similar benefits for sharing. If we explicitly model a (codebase,compiler) pair in the immutable language, we also get similar properties where changes to the codebase can require significant recomputation. 
+Whether it's a "good" idea is a separate question.
 
-One point to consider is how to represent embedded data. It's feasible to use a `succ` and `zero` interfaces to construct natural value types within the local namespace of a module. Otherwise, we could try to add built-in definitions for common data. 
+The advantage is that we simplify the sharing of code in a global codebase, and we simplify caching because the evaluation, type, etc. may be associated directly with the secure hash. The disadvantage is that maintaining and distributing data becomes relatively difficult. The codebase is no longer the "living sea of data" I desire for Awelon [application models](ApplicationModel.md). The spreadsheet-like characteristic of Awelon dictionaries is convenient for many of Awelon's use cases.
+
+Further, it's unclear how to support convenient embedding of data if we must use huge secure hashes for data constructors. I suppose we could [add first-class modules to Awelon](AwelonFML.md) with local symbols to serve the same role, in which case we have first-class dictionary values.
 

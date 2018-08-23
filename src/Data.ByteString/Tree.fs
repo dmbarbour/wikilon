@@ -254,7 +254,7 @@ module CritbitTree =
 
     // Any prefix for a key will be in the normal search-path for that key,
     // but not all keys in the search-path will be valid prefixes due to not
-    // testing every critbit. So we'll just test every key in the search path
+    // comparing every bit. So we'll just test every key in the search path
     // from longer (a deeper match in right) to shorter.  
     let rec private tryFindPrefixN (k:Key) (kl:Key) (node:Node<'V>) : (Key * 'V) option =
         match node with

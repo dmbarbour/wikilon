@@ -1,36 +1,34 @@
 namespace Awelon
 open Data.ByteString
-open System.Collections.Generic
-open System.Collections.ObjectModel
+open System.Collections.Immutable
 open Stowage
 
 // Awelon is encoded in ASCII (minus C0 and DEL), and is syntactically
 // simple, similar to Forth. A program is a sequence of named operations
-// with first-class blocks (which contain programs) and namespaces. We 
-// also enable a hierarchical dictionary namespace.
+// with first-class blocks (which contain programs). For large scale
+// Awelon systems, I also permit qualified namespaces, although they
+// should only rarely see use.
 //
-//   Program = Action*
-//   Action = Block | NS '/' Action | Atom
+//   Program = (NS Action)*
+//   Action = Block | Atom
 //   Block = '[' Program ']'
-//   NS = Word
-//   Atom = Word | Annotation | Nat | Text | Resource
+//   NS = (Word '/')* 
+//   Atom = Word | Annotation | Nat | Text 
 //
 //   Word = [a-z][a-z0-9-]* 
 //   Annotation = '(' Word ')'
 //   Nat = '0' | [1-9][0-9]*
 //   Text = '"' (not '"')* '"'
-//   Resource = BinRef | CodeRef
-//   BinRef = '%' RscHash
-//   CodeRef = '$' RscHash
-//   RscHash = (see Stowage.RscHash)
-// 
-// This module implements a hand-written parser for Awelon code. 
+//
+// Besides Awelon code, a dictionary may define some symbols with a
+// binary reference (via secure hash). In this case, the binary acts
+// as a text, but without restrictions on byte use. 
 module Parser =
 
     /// A Word is a ByteString with regex `[a-z][a-z0-9-]*`. 
     type Word = ByteString
 
-    /// A Natural number is `0 | [1-9][0-9]*`. 
+    /// A positive Natural number is `[1-9][0-9]*`. 
     /// Not processed into a number type by this module.
     type NatTok = ByteString
 
@@ -42,6 +40,12 @@ module Parser =
     /// NOTE: We only keep weak references at this parser layer. The
     /// client may need special actions to keep references alive.
     type RscHash = Stowage.RscHash
+
+    /// A Namespace qualifier is a string such as `foo/bar/baz/`.
+    /// Usually, it's the empty string. 
+    /// In this case, we'll record it as a simple bytestring. The
+    /// empty string is the most common.
+    type NS = ByteString
 
     /// Tokens are just typed ByteString fragments. We'll skip the 
     /// annotation parentheses, text quotes, or prefix characters. 
@@ -65,33 +69,16 @@ module Parser =
 
     /// At this Parser layer, a Program is simply a legal parse. There
     /// is no association with the dictionary or Stowage context.
-    type Program = Action list  // Action*
-        // TODO: consider the ImmutableArray<Action> type, instead.
-        // That should be more efficient in many use cases. But the
-        // list is simpler to work with from F#.
+    type Program = NSAction list
+    and NSAction = (struct(NS * Action))
     and Action =
         | Atom of Token         // simple action
         | Block of Program      // [Program]
-        | NS of NSAction        // ns/Action
-    and NSAction = (struct(Word * Action))
-
-    /// Test whether an Action is a Block, possibly with namespace.
-    let rec isBlock op =
-        match op with
-        | Block _ -> true
-        | NS (ns,op') -> isBlock op'
-        | Atom _ -> false
-
-    let rec private wrapNS ns op =
-        match ns with
-        | (w::ns') -> wrapNS ns' (NS(struct(w,op)))
-        | _ -> op
 
     /// Awelon uses characters in ASCII minus C0 and DEL. Most
     /// of these are permitted only within embedded texts. For
     /// embedding Unicode, you might try binary resoures.
     let inline isAwelonChar c = (126uy >= c) && (c >= 32uy)
-
     let inline isWordStart c = (byte 'z' >= c) && (c >= byte 'a')
     let inline isNumChar c = (byte '9' >= c) && (c >= byte '0')
     let inline isWordChar c = isWordStart c || isNumChar c || (byte '-' = c)
@@ -104,12 +91,17 @@ module Parser =
     let inline private startsWith pred s = 
         (not (BS.isEmpty s)) && (pred (BS.unsafeHead s))
 
-    let tryParseWord (r:ByteString) : (struct(Word * ByteString)) option =
-        if startsWith (isWordStart) r 
-            then Some (BS.span isWordChar r)
-            else None
+    let inline private isSepChar c = 
+        (byte ' ' = c) || (byte '[' = c) || (byte ']' = c)
+    let inline private hasSep r = (BS.isEmpty r) || (isSepChar (BS.unsafeHead r)) 
 
-    let private hasWordSep r = not (startsWith isWordChar r)
+    let tryParseWord (r:ByteString) : (struct(Word * ByteString)) option =
+        let noWordStart = BS.isEmpty r 
+                       || not (isWordStart (BS.unsafeHead r))
+        if noWordStart then None else Some (BS.span isWordChar r)
+
+    let inline private hasWordSep r = 
+        (BS.isEmpty r) || (isSepChar (BS.unsafeHead r))
 
     /// Test match for regex `0 | [1-9][0-9]*`.
     let isValidNatTok s =
@@ -324,19 +316,24 @@ module Parser =
 
     /// A cursor represents a location within an "open" program. This
     /// is convenient for rewriting a program, or for addending one,
-    /// while controlling use of the .Net stack.
+    /// while controlling use of the .Net stack. Entering a block is
+    /// recorded with a continuation - an action to perform on exit.
     ///
     /// This cursor is placed between actions, potentially deep in a 
     /// block. It does not track location within a text, word, or the
     /// namespace part.
     [<Struct>]
     type Cursor =
-        { bcx : (struct(Word list * Cursor)) option
+        { bcc : (Program -> Cursor) option // block continuation context
           toL : Action list // reverse-ordered
           toR : Action list // program order
         }
 
     module Cursor =
+        /// place cursor at start of program
+        let fromProgram (p:Program) : Cursor =
+            { bcc = None; toL = List.empty; toR = p }
+
         let inline hasLeft (crs:Cursor) : bool =
             not (List.isEmpty (crs.toL))
 
@@ -344,7 +341,7 @@ module Parser =
             not (List.isEmpty (crs.toR))
 
         let inline inBlock (crs:Cursor) : bool =
-            Option.isSome (crs.bcx)
+            Option.isSome (crs.bcc)
 
         let inline putLeft (op:Action) (crs:Cursor) : Cursor =
             { crs with toL = (op::crs.toL) }
@@ -352,37 +349,11 @@ module Parser =
         let inline putRight (op:Action) (crs:Cursor) : Cursor =
             { crs with toR = (op::crs.toR) }
 
-        let rec private openBlock' ns op =
-            match op with
-            | Block b -> struct(ns,b)
-            | NS(w,op') -> openBlock' (w::ns) op'
-            | Atom _ -> failwith "not a block"
-
-        let inline private openBlock op = openBlock' (List.empty) op
-
-        let inline enterBlock' (ns:Word list) (b:Program) (crs:Cursor) : Cursor =
-            { bcx = Some(ns,crs)
-              toL = List.empty
-              toR = b
-            }
-
-        let enterBlock (blockOp:Action) (crs:Cursor) : Cursor =
-            let struct(ns,b) = openBlock blockOp
-            enterBlock' ns b crs
-
-        /// same as List.append (List.rev xs) dst
-        let rec appendRev xs dst =
+        // same as List.append (List.rev xs) dst
+        let rec private appendRev xs dst =
             match xs with
             | (x::xs') -> appendRev xs' (x::dst)
             | _ -> dst
-
-        /// we'll exit to the right of our block
-        let exitBlock (crs:Cursor) : Cursor =
-            match crs.bcx with
-            | Some(ns,crs') ->
-                let b = appendRev (crs.toL) (crs.toR)
-                putLeft (wrapNS ns (Block b)) crs'
-            | None -> failwith "not in a block"
 
         let skipToBlockStart (crs:Cursor) : Cursor =
             { crs with toL = List.empty; toR = appendRev (crs.toL) (crs.toR) }
@@ -390,20 +361,38 @@ module Parser =
         let skipToBlockEnd (crs:Cursor) : Cursor =
             { crs with toR = List.empty; toL = appendRev (crs.toR) (crs.toL) }
 
-        let rec private riseToProgRoot (crs:Cursor) : Cursor =
-            if not (inBlock crs) then crs else
-            riseToProgRoot (exitBlock crs)
+        let rec private openBlock' ns op =
+            match op with
+            | Block b -> struct(ns,b)
+            | NS(w,op') -> openBlock' (w::ns) op'
+            | Atom _ -> failwith "not a block"
+        let inline private openBlock op = openBlock' (List.empty) op
 
-        let skipToProgStart (crs:Cursor) : Cursor = 
-            riseToProgRoot crs |> skipToBlockStart
+        let private blockCC (ns:Word list) (cc:Action -> Cursor) (b:Program) : Cursor =
+            cc (wrapNS ns (Block b))
+            
+        /// enter block with an explicit exit continuation.
+        let enterBlockCC (blockOp:Action) (cc:Action -> Cursor) : Cursor =
+            let struct(ns,b) = openBlock blockOp
+            { bcc = Some (blockCC ns cc)
+              toL = List.empty
+              toR = b
+            }
 
-        let skipToProgEnd (crs:Cursor) : Cursor = 
-            riseToProgRoot crs |> skipToBlockEnd
+        /// enters block, on exit will place block to left of cursor.
+        let enterBlockExitRight (b:Action) (crs:Cursor) : Cursor =
+            enterBlockCC b (fun b' -> putLeft b' crs)
 
-        let fromProgram (p:Program) : Cursor =
-            { bcx = None; toL = List.empty; toR = p }
+        /// exit block will apply the bcc continuation, handling the
+        /// modified block.
+        let exitBlock (crs:Cursor) : Cursor =
+            match crs.bcc with
+            | Some fn -> fn ((skipToBlockStart crs).toR)
+            | None -> failwith "not in a block"
 
-        let toProgram (crs:Cursor) : Program =
-            (skipToProgStart crs).toR
+        let rec toProgram (crs:Cursor) : Program =
+            if inBlock crs then toProgram (exitBlock crs) else
+            (skipToBlockStart crs).toR
+
 
 

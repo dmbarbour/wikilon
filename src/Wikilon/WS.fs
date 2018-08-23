@@ -8,11 +8,10 @@ open Suave
 module WS =
 
     type Params =
-        { db    : DB
-          admin : ByteString option
+        { db    : Stowage.DB
+          admin : ByteString 
           // might add logging, etc.
         }
-
 
 
 

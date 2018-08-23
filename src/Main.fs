@@ -90,15 +90,11 @@ let main argv =
     let bad = not (List.isEmpty args.bad)
     if bad then printfn "Unrecognized args (try -help): %A" args.bad; (-1) else
     do setAppWorkingDir args.home
-    let adminPass =
-        if not args.admin then None else
-        let pw = getEntropy 64 |> Stowage.RscHash.hash |> BS.take 20
-        do printfn "admin:%s" (BS.toString pw)
-        Some pw
     Stowage.Cache.resize (1_000_000UL * (uint64 args.cache))
     use dbStore = new Stowage.LMDB.Storage("data", (1024 * args.size))
     let dbRoot = Stowage.DB.fromStorage dbStore
     let dbWiki = DB.withPrefix (BS.fromString "wiki/") dbRoot
+    let adminPass = getEntropy 64 |> Stowage.RscHash.hash |> BS.take 24
     let wsParams : WS.Params = { db = dbWiki; admin = adminPass }
     let app = WS.mkApp wsParams
     let cts = new CancellationTokenSource()
@@ -111,9 +107,11 @@ let main argv =
         }
     let (_,serve) = startWebServerAsync svc app
     Async.Start(serve, cts.Token) 
+    if args.admin then do 
+        printfn "admin:%s" (BS.toString adminPass)
     printfn "Press any key to halt."
     Console.ReadKey true |> ignore<ConsoleKeyInfo>
-    cts.Cancel()
+    cts.Cancel() // clean cancel
     0 // return an integer exit code
 
 

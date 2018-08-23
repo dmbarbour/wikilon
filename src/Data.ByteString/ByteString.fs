@@ -174,6 +174,14 @@ module BS =
         do Array.blit b.UnsafeArray b.Offset mem a.Length b.Length
         unsafeCreateA mem
 
+    /// Appending three items comes up quite frequently due to separators.
+    let append3 (a:ByteString) (b:ByteString) (c:ByteString) : ByteString =
+        let mem = Array.zeroCreate (a.Length + b.Length + c.Length)
+        do Array.blit a.UnsafeArray a.Offset mem           0           a.Length
+        do Array.blit b.UnsafeArray b.Offset mem       a.Length        b.Length
+        do Array.blit c.UnsafeArray c.Offset mem (a.Length + b.Length) c.Length
+        unsafeCreateA mem
+
     /// take and drop are slices that won't raise range errors.
     let inline take (n : int) (s : ByteString) : ByteString =
         if (n < 1) then empty else
@@ -256,6 +264,22 @@ module BS =
         let struct(l,_) = spanEnd f x
         l
         
+    /// Compute the maximal shared prefix between two strings.
+    let sharedPrefix (a:ByteString) (b:ByteString) : ByteString =
+        let ixMax = min (a.Length) (b.Length)
+        let rec loop ix =
+            let halt = (ix = ixMax) || (a.[ix] <> b.[ix])
+            if halt then ix else loop (ix + 1)
+        take (loop 0) a
+
+    /// Compute the maximal shared suffix between two strings.
+    let sharedSuffix (a:ByteString) (b:ByteString) : ByteString =
+        let ixMax = min (a.Length) (b.Length)
+        let rec loop ix =
+            let halt = (ix = ixMax) || (a.[a.Length - ix] <> b.[b.Length - ix])
+            if halt then ix else loop (ix + 1)
+        takeLast (loop 0) a
+
     /// conversions for other string encodings
     let inline encodeString (s : string) (e : System.Text.Encoding) = 
         unsafeCreateA (e.GetBytes(s))

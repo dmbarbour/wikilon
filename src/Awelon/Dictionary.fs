@@ -21,16 +21,18 @@ open Stowage
 // symbols and prefixes within the referenced node. The empty symbol or
 // prefix is valid and useful.
 //
+// Definitions are normally Awelon code. But oversized definitions may
+// be rewritten to `$secureHash`, and binary resources may be included
+// via `%secureHash`. This feature is part of our dictionary, rather 
+// than embedded in Awelon code per se. Similar extensions are feasible
+// in the future.
+//
 // This dictionary representation is streamable, representing real-time
 // updates in an append-only log. Only the final match for the symbol or
 // prefix is used. In a stream, empty prefix `/ secureHash` can be used
 // for checkpoints or resets because empty prefix matches all symbols.
 // But outside of streams, we'll normalize - erase irrelevant lines then 
 // sort what remains.
-//
-// The dictionary could be used outside of Awelon, but you would need to
-// escape symbols containing SP or definitions containing LF. Performance
-// is worse than Stowage.LSMTrie (currently).
 //
 // Hierarchical dictionaries simply use `dictname/word` symbols. We
 // can use `/dictname/ secureHash` to logically include one dictionary
@@ -41,6 +43,8 @@ module Dict =
     let cDef = byte ':'
     let cDel = byte '~'
     let cDir = byte '/' 
+
+    let mimeType = BS.fromString "text/vnd.awelon.dict"
 
     /// Symbols should be ASCII with no control characters, usually
     /// a word or extended with `/` for hierarchical dictionaries. 
@@ -55,57 +59,25 @@ module Dict =
     /// A directory is represented by a symbol prefix.
     type Prefix = Symbol
     
-    /// A definition should consist of valid Awelon code, but we
-    /// do not parse it at this layer. Minimally, a definition 
-    /// must be a one-liner, not containing LF, but it's better
-    /// to avoid any control characters.
-    /// 
-    /// Definitions should not be very large. Within a dictionary,
-    /// a definition cannot be divided across nodes and will always
-    /// be copied when there's an update to the associated node. So
-    /// it's preferable to keep definitions small, leveraging those 
-    /// $secureHash references if necessary.
+    /// A definition at the dictionary layer may consist of:
     ///
-    /// To integrate Stowage GC with .Net GC, each Def has a slot for
-    /// Stowage dependencies with .Net finalizers.
-    [<Struct; CustomEquality; CustomComparison>]
+    /// - an Awelon code definition - byte string
+    /// - an oversized definition via $secureHash
+    /// - a binary resource reference %secureHash
+    /// 
+    /// Oversized code definitions can be rewritten to $secureHash
+    /// upon compaction to ensure a predictable worst-case for the
+    /// node size. Updates should usually be provided as Awelon code
+    /// or binary resources.
+    ///
+    /// Inline code should parse as Awelon, or at least must not
+    /// contain the LF character.
     type Def = 
-        val Data : ByteString
-        val private Deps : System.Object
-        new(def,deps) = { Data = def; Deps = deps }
-        new(def) = new Def(def,null)
-        member x.KeepAlive() : unit = System.GC.KeepAlive (x.Deps)
-        override x.GetHashCode() = x.Data.GetHashCode()
-        override x.Equals(yobj) =
-            match yobj with
-            | :? Def as y -> (ByteString.Eq (x.Data) (y.Data))
-            | _ -> false
-        interface System.IComparable with
-            member x.CompareTo (yobj : System.Object) =
-                match yobj with
-                | :? Def as y -> compare (x.Data) (y.Data)
-                | _ -> invalidArg "yobj" "cannot compare values of different types"
+        | Code of ByteString
+        | CodeRef of LVRef<ByteString>
+        | BinRef of LVRef<ByteString>
 
- 
-    let isValidDefChar c = (cLF <> c)
-    let isValidDefStr s = BS.forall isValidDefChar s
-    let inline isValidDef (def:Def) = isValidDefStr (def.Data)
-
-    /// Construct definition with automatic management of the
-    /// contained secure hashes (if any).
-    let autoDef (db:Stowage) (s:ByteString) : Def =
-        let inline mkDep h = VRef.wrap (EncBytesRaw.codec) db h
-        let addDep l h = ((mkDep h)::l)
-        let lDeps = RscHash.foldHashDeps addDep (List.empty) s
-        Def(s, lDeps :> System.Object)
-
-    /// Rewrite local definition to `$secureHash` remote redirect.
-    let externDef (db:Stowage) (def:Def) : Def =
-        let ref = VRef.stow (EncBytesRaw.codec) db (def.Data)
-        def.KeepAlive()
-        Def(BS.cons (byte '$') (ref.ID), (ref :> System.Object))
-
-    // A definition update: None for delete, Some for define.
+    /// A definition update: None for delete, Some for define.
     type DefUpd = Def option 
 
     /// A dictionary node in-memory is represented as a trie with
@@ -534,9 +506,11 @@ module Dict =
                 diffP (joinBytes p ix (BS.take n ap)) ac' bc' 
         diffP (BS.empty) a0 b0
 
+    // TODO: efficient subtraction, intersection, and union
+    
 
-    // TODO: efficient unions and intersections.
-
+    // Intersection on symbols. Right-biased in definitions. 
+    // let intersect (a0:Dict) (b0:Dict) : Dict =
 
     // `/` SP secureHash LF
     let private protoRefSize = uint64 (3 + RscHash.size) 
@@ -713,7 +687,7 @@ module Dict =
                 writeDst d dst
             member cD.Read db src = 
                 // TODO: consider mem-caching LVRefs to improve sharing.
-                let mkDef s = autoDef db s
+                let mkDef s = Def(s,db)
                 let mkDir h = LVRef.wrap (VRef.wrap cD db h)
                 parseDict mkDef mkDir (ByteStream.readRem src)
             member cD.Compact db d0 = 
@@ -729,7 +703,7 @@ module Dict =
     /// just use the existing `/ secureHash` directory if it's a single
     /// entry, otherwise will allocate a directory in Stowage. Does not
     /// compact the dictionary, and can result in very small nodes. It 
-    /// is usually better to compact a dictionary, than to stow it.
+    /// is usually better to compact a dictionary than to stow it.
     let stow (db:Stowage) (d:Dict) : Dir =
         if Map.isEmpty (d.cs) && Option.isNone (d.vu) then
             match d.pd with
@@ -748,8 +722,7 @@ module Dict =
     // The performance I'm getting from this Dict/codec is comparable
     // to the Stowage.LSMTrie when caching is in effect, considerably 
     // worse otherwise, likely due to the coarse grained Stowage node
-    // decisions. But it's within acceptable limits, I think. I will
-    // assume we can usually 
+    // decisions. But it's within acceptable limits, I think. 
 
 type Dict = Dict.Dict
 

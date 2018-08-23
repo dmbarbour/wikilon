@@ -5,12 +5,16 @@
   <ItemGroup>
     <Compile Include="Cache.fs" />
     <Compile Include="Parse.fs" />
+    <Compile Include="LocalVar.fs" />
     <Compile Include="Dictionary.fs" />
-    <Compile Include="WordVersion.fs" />
+    <Compile Include="DictIndex.fs" />
     <Compile Include="Interpret.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />
     <ProjectReference Include="..\Stowage\Data\Stowage.Data.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Collections.Immutable" Version="1.5.0" />
   </ItemGroup>
 </Project>

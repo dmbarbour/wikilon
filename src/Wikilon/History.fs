@@ -13,10 +13,12 @@ module TimeStamp =
 // A snapshot-based history model.
 module Snapshot =
 
-    /// A history modeled as a list of time-stamped snapshots,
-    /// ordered so the latest times are near the head. We will
-    /// gradually use exponential decay to erase older entries,
-    /// trying to keep entries well distributed over time.
+    /// A history is modeled as a list of time-stamped snapshots with
+    /// the latest snapshots near the head. Exponential decay is used
+    /// to limit the list length, erasing intermediate snapshots to 
+    /// keep entries fairly well distributed over time. The longer our
+    /// history, the more snapshots we'll preserve. Length can be set
+    /// via the codec, to erase entries upon compaction.
     type H<'V> = (struct(TimeStamp * 'V)) list
 
     /// Add an entry to the history. Adds to best location. Under
