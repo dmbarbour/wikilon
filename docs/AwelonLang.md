@@ -109,7 +109,7 @@ Awelon dictionaries use secure hashes as identifiers for binary large objects. T
         :my-binary-large-object %secureHashOfBinary
         :my-oversized-function $secureHashOfDefinition
 
-Binary resources allow us to embed images, meshes, textures, sounds, and other ad-hoc binary data in our codebase without resorting to awkward base64 encodings or other techniques. References to external definitions, meanwhile, are mostly relevant for optimizing the dictionary representation, ensuring a predictable worst-case size for dictionary index nodes.
+Binary resources allow us to embed images, meshes, textures, sounds, and other ad-hoc binary data in our codebase without resorting to awkward base64 encodings or other techniques. References to external definitions, meanwhile, are mostly relevant for optimizing the dictionary representation, ensuring a predictable worst-case size for dictionary index nodes. *Note:* Secure hash resource references are extensions at the dictionary layer, and are not part of Awelon code.
 
 Support for binary resources in this manner ameliorates much awkwardness when embedding bulk data within Awelon code. A binary resource is treated similar to an embedded text, a list of bytes, albeit with fewer limitations. We can easily embed images, for example. Large definitions, meanwhile, may work together with *Stowage* to support large structured data.
 
@@ -126,38 +126,30 @@ Specifically, the current secure hash proposal is the 320-bit [BLAKE2b](https://
 
 The BLAKE2b algorithm could be replaced by another, simply rewriting the entire dictionary, if ever it proves inadequate. The proposed base32 alphabet is chosen to avoid accidental offense with pronounceable words.
 
-*Note:* Binary resources are a feature of the Awelon dictionary, and may only be indirectly referenced through the associated Awelon word. This constraint exists to simplify indexing, versioning, and caching.
-
 *Security Note:* A secure hash should be treated as a bearer token authorizing access to the associated resource. However, it's important that the system must not *leak* this authority. In particular, we should guard against timing attacks to discover stored secure hashes. Further, there is an attack of the form "does data with this secure hash exist?" where the  attacker might request millions of hashes to discover, for example, a partially known phone number within an otherwise predictable template. This attack can be resisted by including an entropy field (or comment) with random data together with the sensitive data.
 
 *Security Note 2:* To work with untrusted content distribution services, we can easily use half our secure hash for lookup and the other half as a symmetric encryption key. 
 
 ### Software Packaging and Distribution
 
-Awelon is designed for distribution of entire dictionaries. 
+Awelon is designed for distribution of entire dictionaries. An advantage of whole-dictionary distribution is that everything can be curated, tested, known to work nicely together. There is no "version hell" of package maintenance. Awelon dictionaries can be very large, but *lazy download* of secure hash resources can enable working with dictionaries that contain more data han we use.
 
-However, Awelon dictionaries may include data, such as an atlas or almanac. Full size might be measured in gigabytes or terabytes, too large for casual sharing. Fortunately, secure hash resources implement an implicit software package model. For example, a `/weather- secureHash` database "package" could effectively be a remote reference that we lazily download on an as-needed basis.
+However, packages remain useful for access control, sale, or real-time update.
 
-We can support user-defined packages with distinct names. An entry `/packagename- secureHash` can manually install or update a package in one line. Packages could be published and shared through a central web service or shared dictionary. We can automatically derive the blurb, readme, etc.. by peeking at `packagename-meta-readme` and so on. With suitable *Editable Views*, a common `packagename-` prefix can easily be hidden or minified during development.
+In those cases, we might associate a package with a registered prefix `packagename-*`. This allows for convenient one-line update or install `/packagename- secureHash`, easily enforcable local definitions via `packagename-local-*`, and package protected *Opaque Data Types* (via `(seal-packagename)` and `(unseal-packagename)`). A simple registry can resist name conflicts. A package could be installed and maintained manually, or automatically given a URL, authorization, and authentication requirements (perhaps included within the client dictionary as `local-install-packagename`).
 
-Package-based distribution has several issues. The main issue is that package-level software distributions exhibit "version hell" maintenance issues. For example, if package `/foo-` is used by both `/bar-` and `/baz-`. To install a new version of `/bar-`, we may require a newer version of `/foo-`. Due to the newer version of `/foo-` we install, we might require an update to `/baz-`. In contrast, dictionary-level distributions allow global curation, with integration of types and tests. This issue could be ameliorated if we leverage an intermediate dictionary distribution, similar to [Haskell's Stackage snapshots](https://www.stackage.org/). Lesser issues include the requirement for global names and ad-hoc connectivity. But these are mitigated by shared registries and verifying packages or distributions pass static analysis tests (cf. *Opaque Data Types*).
-
-There are other forms of software distribution to consider. As a generalization of packages, we can use a multi-line dictionary node to represent a *patch* on a dictionary. We can leverage pairs of patches to represent transactional read-set and write-set. We can even implement long-running streams of soft real-time updates on a dictionary. 
-
-The Awelon dictionary representation is simple and flexible in its application.
+To resist version hell, I would recommend packages are mostly provided through community-curated distributions so all the versions of packages are known to work together. Also see [Haskell Stackage snapshots](https://www.stackage.org/).
 
 ## Stowage
 
-Large scale computations frequently work with data that doesn't fit all at once into memory. In conventional computing systems, oversized data can be explicitly offloaded to a separate filesystem or database. However, doing so is awkward within purely functional computations. To address this requirement, I introduce a `(stow)` annotation.
+Large scale computations frequently work with data that doesn't fit all at once into memory. These days, operating systems help address the issue using *virtual memory* where volumes of the address space are offloaded until accessed. Purely functional languages can take virtual memory a step further due to the absence of mutation, collapsing identical volumes of data to support structure sharing. We can make this explicit using a `(stow)` annotation:
 
         [large value](stow)    => [stow-id]
         [small value](stow)    => [small value]
 
-Here, `stow-id` is a word whose definition is `large value`. This may be a new word or a word previously associated with the same value. 
+Here, `stow-id` is a word whose definition is `large value`. Effectively, we're allocating new words to extend a dictionary, or creating a supplementary dictionary. An evaluator that supports stowage will simply produce these words as an extra output. Words can be reused when the same value is stored. This is a 'safe' form of dictionary mutation, being monotonic in nature.
 
- it may be a previous stowage word with the same definition. Reuse can simplify structure sharing, while stable, reproducible names (e.g. including a secure hash) are valuable for memoization and stable views. An evaluator that supports stowage will produce a collection of stowage words together with an evaluated result. Stowage words may need to be garbage collected. To maximize performance, stowage should be lazy, awaiting sufficient memory pressure that we must offload some data.
-
-Stowage, together with partial evaluation and memoization, enables massive databases to be embedded and integrated as first-class values within Awelon dictionaries. 
+Importantly, stowage can work nicely with caching and memoization of computations. Stowage identifiers offer a second-class form of reference equality that Awelon otherwise lacks. Stowage words can also serve as natural volumes for progressive disclosure when rendering. A disadvantage is that stowage identifiers will often need to be garbage collected.
 
 ## Evaluation
 
@@ -242,10 +234,10 @@ Implementation-hiding modularity in functional programming languages is frequent
 
 For Awelon, we can support opaque data types via value sealer annotations:
 
-        (seal-foo)  (s * x) → (s * foo:x)
-        (open-foo)  (s * foo:x) → (s * x)
+        (seal-foo)      (s * x) → (s * foo:x)
+        (unseal-foo)    (s * foo:x) → (s * x)
 
-By themselves, these annotations serve as symbolic type wrappers, akin to `newtype` in Haskell, resisting accidental access to representation. To protect opaque data types, we further constrain direct access to these annotations to a codebase prefix: `(seal-foo)` and `(open-foo)` are only permitted in source definitions of words starting with `foo-`. This is trivially enforced by linter, and works well together with a policy for private functions, for example that `foo-local-*` may only be directly used from other words of form `foo-*`. A hyphenated prefix would then serve as a dictionary package or module, with ad-hoc opaque data types and hidden functions.
+By themselves, these annotations serve as symbolic type wrappers, akin to `newtype` in Haskell, resisting accidental access to representation. To protect opaque data types, we further constrain direct access to these annotations to a codebase prefix: `(seal-foo)` and `(unseal-foo)` are only permitted in source definitions of words starting with `foo-`. This is trivially enforced by linter, and works well together with a policy for private functions, for example that `foo-local-*` may only be directly used from other words of form `foo-*`. A hyphenated prefix would then serve as a dictionary package or module, with ad-hoc opaque data types and hidden functions.
 
 ## Structural Equivalence
 

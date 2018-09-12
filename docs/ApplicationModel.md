@@ -3,27 +3,27 @@
 
 ## Goals
 
-My goal for Awelon project is to integrate the programmer and user experiences. 
+A goal for Awelon project is to integrate the programmer and user experiences. 
 
-Today, using conventional application models and programming languages, the programmer exists "above" the program and "before" its execution. In contrast, the user exists "within" living seas of data, shared with other users. Programmers have flexible and fine-grained control over how data is integrated or analyzed. In contrast, users have coarse-grained "user interfaces" that are inflexible and it's awkward to share results.
+Today, using conventional application models and programming languages, the programmer exists "above" the program and "before" its execution. In contrast, the user exists "within" living seas of data, shared with other users. Programmers have flexible and fine-grained control over how data is integrated or analyzed. In contrast, users have coarse-grained "user interfaces" that are inflexible, and it's awkward to share results between these interfaces. 
 
-If successfully integrated, the programmer-user lives within the program, which is also a living sea of data shared with other programmer-users. The programmer-user can integrate and analyze data in a flexible, fine-grained manner. Source data is composed transparently with computed information. Yet, for aesthetics and convenience, it must be possible to overlay attractive interfaces with coarse-grained views and manipulations of a system.
+If successfully integrated, the programmer-user lives within the program, which is also a living sea of data shared with other programmer-users. The programmer-user can integrate and analyze data in a flexible, fine-grained manner. Source data is composed transparently with computed information. Yet, for aesthetics and convenience, it must be possible to overlay attractive interfaces with coarse-grained views and manipulations of a system. Data and computation should both be more accessible.
 
-## Quick Start via Conventional Models
+## Regarding Conventional Models
 
 Although I have some lofty goals, I believe it's best to get started swiftly with conventional application models. In purely functional languages, conventional applications can be modeled using simple functions with continuations. For example:
 
         -- imperative process with synchronous effects
         type Imperative eff r = ((eff a) * (a → Imperative eff r)) + r
 
-        -- blackboard system, concurrent shared state rewriting
+        -- blackboard systems, concurrent shared state rewriting
         type BB st = st * List of (st → (1 + BB st))
 
 Besides these, we can model state machines, component entity systems, mobile processes navigating a map, multi-threaded imperative systems with channels or rendezvous, stream processing pipelines or Kahn process networks, and so on. In any case, 'effects' must be modeled in terms of incremental exchange of *values* between application and environment.
 
 With conventional models, we can develop useful software artifacts, whether it's a web-server or interactive fiction. We could compile and run the application outside the dictionary, or embed it within the dictionary.
 
-It's feasible to compile programs for conventional operating systems. Further, because these models are first-class values, it isn't difficult to simulate or checkpoint a process within the dictionary by either rewriting state in-place or recording the incremental inputs and computing the current state. 
+It's feasible to compile programs for conventional operating systems. Further, because these models are first-class values, it isn't difficult to simulate or checkpoint a process within the dictionary by checkpointing the current state (and stowage dependencies) back into the dictionary. 
 
 The main disadvantage is that most conventional models don't remain attached to the user very well. Fortunately, multi-agent systems (like the blackboard, mobile processes, or a publish-subscribe environment) can help, since we can treat the users as some of the agents.
 
@@ -45,56 +45,78 @@ Awelon's features offer a foundation to build upon, but we need more.
 
 To serve as a "living sea of data", we first need live data in our dictionary.
 
-Dictionaries can support "package" based software distributions. And software includes arbitrary data. For example, we could have a `weather-*` almanac that records weather histories on a regional basis. We can easily update this package with a one-liner `/weather- secureHash` or patch. If we *automate* this update, binding the `weather-` prefix to a remote service, we can effectively have live data. 
+I assume there exist multiple agents maintaining a shared community dictionary. The different agents may be authorized to maintain different components or volumes, usually distinguished by prefix (like `weather-*` for a weather almanac). Definitions within the community may be automatically curated, e.g. via type checking, integration testing, enforcing locality constraints (e.g. that `foo-local-*` and `(seal-foo)` are only used from words of form `foo-*`), and so on. 
 
-Automated package bindings shouldn't be too difficult. It simply requires configuration. This configuration could easily be represented within the dictionary, e.g. using a `local-bind-*` that defines a record with URL, authorization, and authentication. When we don't fully trust a package provider, we could require a trusted third party to test and sign the package as part of our authentication, e.g. to ensure it respects local words, value sealers, type safety. 
+This models an entire "sea of data" as a dictionary.
 
-We can have a community dictionary that is maintained and curated by multiple agents. It's not difficult to automatically extract packages from a community dictionary, or to bind entire dictionaries but reserve a volume `local-*` for local definitions. Intriguingly, it is not difficult to support streaming updates to a dictionary, although we cannot do nearly as much validation as we could with package level updates.
+But many agents won't use all the data, nor even be authorized for all data. If it's simply not using data, that can be implicitly handled by lazy download of secure hash resources. For example, the `/weather- secureHash` resource can be lazily downloaded when required. But securing data would require extra attention.
 
-## Sharing Live Data
+## Access Control
 
-For an agent or user to bind live data packages, other agents must publish.
+I can see two basic options for securing data. In the first case, we assume a multi-agent shared dictionary, but agents may have limited heterogeneous authority regarding which words they observe or edit. In the second case, we assume the dictionary is the smallest granularity for access control, so an agent has full control of its dictionary, but we restrict construction of said dictionary based on agent authority.
 
-This isn't too complicated. One option is to configure the intention to publish, synchronizing some prefix of our local dictionary into a public volume with appropriate authorizations. Perhaps we use `local-share-*` for configuration. This could be performed at a package level or using an embedded dictionary. Alternatively, we could have remote services into which we publish data, which is then converted to a package that we bind.
+To restrict agents within a dictionary seems very ad-hoc. We can apply simple package-style implementation hiding techniques with value sealers, restricting `foo-local-*` to `foo-*`. Rich access control restrictions could feasibly be represented under `foo-meta-access` together with some authorizations model. Alternatively, we could attempt to augment dictionary representation at a more fundamental level for security, similar to [Tahoe-LAFS](https://www.tahoe-lafs.org/trac/tahoe-lafs).
 
-Original "source" data will almost always be simple - numbers, texts, binaries, lists, matrices, records, trees - in order to control dependencies. But we can also share derived observations.
+To restrict construction of a dictionary, we can leverage package-based software distribution. For example, we might give our `weather-*` package only to paying clients. The agent might record a URL, authorization, and authentication requirements (such as third-party signatures) in `local-install-weather` and automatically update the package.
 
-A relevant concern is that gathering data can be expensive. Similar to the lazy download of packages, we might want demand-driven maintenance of data. This can be supported indirectly: an agent that shares data will usually do so through an intermediate service, and that service can provide metadata about actual observed demand. This may also require lazy bindings on the client side, however. Larger packages could feasibly be partitioned into smaller ones for fine-grained demand.
+I favor the second option. It avoids any ad-hoc models at the Awelon layer, and it offers more power to the individual agent to choose alternative package sources. Thus for now I assume we'll use package-based distributions for sensitive or expensive data. A community package repository could serve a similar role as an app-store and guard against name conflicts.
+
+## Soft Real-Time Updates
+
+Conveniently, Awelon's dictionary representation makes live dictionaries or even live packages easy to update live via binary streams. We can easily distribute live data after it has been already formatted for the Awelon dictionary. Further, it's robust to disruption because the 'update events' contribute in such a simple way to the Awelon dictionary's current state.
+
+We would need external services to validate updates in real-time, e.g. to ensure type safety, guard against undesirable package dependencies, or even test correctness of data. In this sense, updates must go through proper 'channels' to be distributed.
 
 ## Stateful Applications
 
-Stateful apps in Awelon will normally be represented as computations over time-series data. That is, we partition inputs into multiple time-series databases or streams (which may include user inputs), we incrementally merge this data into a common timeline of events, and we observe the computed state. With careful choice of data structures and *Memoization*, we can cache most of application state and only compute the differences.
+To model stateful applications, we have two basic options: 
 
-The advantage of this design is decentralized input, the ability to develop new applications and views from the databases, the ability to efficiently correct our input histories near the head, and the ability to treat state as a pure spreadsheet-like computation. 
+* maintain a representation of application state in the dictionary
+* recompute state from the time-series history of relevant events
 
-But there are some weaknesses.
+However, we can eliminate the first option. Maintaining state is semantically awkward because the current state will depend on *when* the application was evaluated. Further, it requires centralizing the "inputs" to the application in a manner that does not work nicely with data packages.
 
-First, space overheads. If we're asked to remember our entire input history, that's not going to work nicely in the long run. This might not be a problem for some input types, e.g. posting to a forum. But, for example, we wouldn't want to preserve every character-level edit of every post. This could be mitigated by intelligently scrubbing event histories near each input source. Multiple small edits can be incrementally composed into a larger patch. We can leverage partial history models, e.g. based on exponential decay.
+Thus Awelon systems will normally use time-series data to compute the current application state. The "time-series" feature is important because it provides a common dimension to merge multiple independent input sources into a shared stream where the bulk is relatively stable and thus subject to *Memoization*. A weakness of this design is the inability to easily forget old data, but we could design for lossy history models (for example, probabilistic or monoidal), allowing us to summarize past events to recover space.
 
-Second, effects models. Any small change to our dictionaries, or adding a new application, could potentially result in alternative requests for action or information. But although we can recompute state, we cannot change past effects. Most problematic are synchronous effects models. 
+*Aside:* At very large scales, we also require spatial partitioning of our stateful resources. This can be modeled by adding latency to logical timestamps based on the origin of data, simulating transmission or processing delays.
 
-*Note:* I've considered more conventional approaches, such as checkpointing state into a dictionary or modeling a set of persistent variables by writing to a dictionary. But this interacts very awkwardly with partial evaluation and live maintenance of input sources. I do not feel it is the right path to pursue.
-
-## Modeling Effects
+## Modeling Effects and Interactions
 
 Effects are interactions between a computation and its environment. 
 
-In Awelon systems where we model applications within a dictionary, our "environment" is ultimately a set of external agents. Our "inputs" are provided through binding of live data packages. And "outputs" can only be observed by a small subset of agents that perform a computation. The relevant question is how applications should model outputs to request action or information. 
+However, an important consideration is that we cannot change "past" effects on a "real world" environment. Thus, we have two options: we either fully stabilize our past interactions, or we design around the instability. In context of Awelon systems, stabilization seems a lost cause. Although use of time-series data will stabilize past requests under normal conditions (where we only update the 'head' of input sources), we can still experience instability whenever we add application features, remove bugs, or summarize input histories.
 
-We can recompute state after a change to code or input, but we cannot easily change our input in response to a change in outputs. For example, Bob asks, "What do you want?", and Alice answers, "Nachos", but then Bob's program changes and the question becomes "Who are you?", the old answer "Alice" is no longer appropriate. Mostly, this constrains against synchronous effects models where interpretation of the next input depends on prior outputs.
+We must design around the inevitable instability. 
 
-An asynchronous variant might instead involve an intermediate database. Bob tells Alice to write certain information to the database. Then Bob looks up each "Who are you?" and "What do you want?" question in an appropriate database. Unanswered questions are written into the output together with final application state. If we use a "local" answers database, we can model multiple instances of an application with different answer sets and hence different states.
+First, we must reject synchronous effects models because the order of requests can be unstable. Second, we must reject asynchronous models where feedback relies on dynamically allocated identifiers such as "question 37" or a spawned actor ID, because those identifiers will be unstable. It is safe to use dynamic identifiers internally, but it may prove difficult to prevent leaks into (for example) message-passing models. Third, we must reject the concept of *exclusive control* over external devices or resources because it might have been a prior version of our app that had control back then. Outputs must be handled as soft advice or polite requests that influence system behavior but do not control it.
 
-*Aside:* In many cases, such as modeling animations or music, it's better to use temporal data types (i.e. so we can query them at a given time frame) rather than model them via second-class effects.
+This leaves static allocations, stable topics, and content-addressed models.
 
+For example, a user could be presented with a set of questions like "what is your name?" and "what is your favorite color?", and could answer "favorite color: blue", "name: Lancelot". The order of questions versus answers could be separated as a factor, making the application more robust to changes in order. Instead, we stabilize the shared topic identifiers like 'favorite color'.
 
+Models to contemplate: [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern), [tuple spaces](https://en.wikipedia.org/wiki/Tuple_space), and [entity-component-system (ECS)](https://en.wikipedia.org/wiki/Entity%E2%80%93component%E2%80%93system). These models are asynchronous, mostly content-addressed, and reasonably compatible with time-series data. They have relatively stable state, which is convenient for rendering. ECS is the most structured, additionally having the convenient property of being deterministic up to input, which simplifies reasoning, safe extension, and debugging.
 
+Real-world effectful interactions in these models could be achieved by wiring input to stable topics/tuples/components, and computed values are taken as (strong) advice in the real world, wired to physical devices or rendered to display. 
+
+This seems a viable approach to effects in Awelon applications. And importantly, any of those models could be simulated functionally or separated from the Awelon dictionary as conventional apps.
+
+# Second Class Models
+
+Besides trying to solve the general problem, it seems we could represent useful application models at the dictionary layer via projectional editors.
 
 ## Spreadsheet-like Applications
 
-Spreadsheets are among the most natural applications to express in Awelon. For example, we can define a word per cell, perhaps using a simple naming convention like using `foo-3-c` to represent the definition of row 3 column c in spreadsheet foo. A spreadsheet-based editable view could then render hundreds of cells in a compact manner.
+Spreadsheets are perhaps the most natural applications to express in Awelon. Effectively, we propose to model *Stateful Applications* by adding time-series data to the implicit spreadsheet that is the entire Awelon dictionary. But we could pursue the idea a lot more literally with a projectional editor.
 
-A read-eval-print-loop (REPL) can also be modeled as a spreadsheet-like application, such that each line starts with the prior line:
+* spreadsheets cells are given word names like `sheetname-3-c`
+* automatically maintain a matrix value containing all cells
+* render and edit the entire spreadsheet value as a spreadsheet
+
+I find this intriguing because it would allow for some very *rich* spreadsheets, where cells may reference databases or application states. It's not general-purpose, but would allow for powerful and convenient views of the 'system' maintained within a dictionary.
+
+## REPLs and Notebook Applications
+
+A read-eval-print-loop (REPL) can be modeled as a spreadsheet-like application in a single dimension, where each line starts with a reference to the prior line:
 
         :repl-foo-0 repl-init
         :repl-foo-1 repl-foo-0 command-1
@@ -103,26 +125,9 @@ A read-eval-print-loop (REPL) can also be modeled as a spreadsheet-like applicat
         :repl-foo-42 repl-foo-41 command-42
         :repl-foo-hd repl-foo-42
 
-This could then be rendered as a REPL session, with outputs rendered after each line. We can recompute outputs whenever the dictionary or underlying data changes. Adding a new line only requires two changes to our dictionary: add a definition for the new line, and modify the head entry. If outputs are rendered graphically (based on our *Editable Views*), this might be better compared to a matlab session or [jupyter notebook](http://jupyter.org/).
+This could easily be rendered as a REPL session, with an output rendered at each line. We can recompute outputs whenever the dictionary or underlying data changes. Adding a new line requires only two changes to our dictionary: add a definition to the new line, and modify the head entry. If outputs are rendered graphically (depending on our *Editable Views*), this might be better compared to a matlab session or [jupyter notebook](http://jupyter.org/).
 
-In practice, we may prefer to accompany our spreadsheet-like application with a first-class value representation, e.g. a matrix of `[cell-name]` values. Then we can render the first-class matrix value, or compute a spreadsheet value to render after evaluation.
-
-Spreadsheet-like applications can cover a lot of valuable use-cases - documents, slide-show presentations, system dashboards. But we still need to consider state and effects.
-
-## Computable Forms
-
-The idea:
-
-* we can project some definitions as interactive forms
-* copy a template form as needed, integrate edited form
-
-This relies on projectional editors to provide an interactive view for updating a form, e.g. using a checkbox for a boolean or a color-picker in place of an HSV value. We'll simply copy the form as often as required, and integrate the complete template into some input stream. This doesn't generalize well to the larger problems, but forms are useful for many user-interactive applications.
-
-## Effectful Work Orders
-
-Most effect models today are based around imperative commands. But a more RESTful concept is the [work order](https://en.wikipedia.org/wiki/Work_order), a document that describes some work to be done and allows agents to select which jobs they perform. My intuition is that work orders would be a better basis for exporting work requirements to a multi-agent system compared to imperative commands. Of course, any individual work order might consist of a sequence of commands.
-
-This is similar to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept, except that work orders aren't necessarily removed while they're worked upon. They might be updated to indicate who is working on them, though.
+This idea could easily be extended to a 'forum' like model without a clear head entry. Instead, we have multiple branches/replies following from any given node. It seems an interesting model to pursue in context of an Awelon-based web service.
 
 # Managed Dictionaries
 
@@ -152,9 +157,11 @@ I believe this would offer a powerful basis for generic programming, adaptive pr
 
 This is a long-term goal for Awelon. But it's not a complete application model.
 
-# Hierarchical Dictionary Structure (Potential Awelon Extension)
+# Hierarchical Dictionary Structure (Rejected Awelon Extension)
 
-We could efficiently represent hierarchical embedding of dictionaries by using a `dictname/` prefix with implicit scope. For example, `:d/foo bar baz` will implicitly depend on `d/bar` and `d/baz`. With this, we could update individual words deep in the hierarchy or update the full embedded dictionary as a one-liner `/d/ secureHash`. We can extend Awelon syntax so the host can reference words of form `d/foo`. Embedded dictionaries would simplify issues of packages related to version hell, global names, information security, separate compilation, and caching. 
+We could efficiently represent hierarchical embedding of dictionaries by using a `dictname/` prefix with implicit scope. For example, `:d/foo bar baz` will implicitly depend on `d/bar` and `d/baz`. With this, we could update individual words deep in the hierarchy or update the full embedded dictionary as a one-liner `/d/ secureHash`. We can extend Awelon syntax so the host can reference words of form `d/foo`. 
+
+Embedded dictionaries have potential to simplify issues related to name conflicts and information security, which would otherwise handled in an ad-hoc manner via community dictionaries and static analysis. But the advantage gained seems to be limited. 
 
 A significant disadvantage is that we require the aesthetically awkward `d/42` or `d/"hello world"` to indicate dependency on `d/succ`, `d/cons`, and so on. For convenience and consistency, we might accept `d/[x y z]` as equivalent to `[d/x d/y d/z]`, such that `d/42 => d/[41 succ] => [d/41 d/succ]`. Aesthetics could feasibly be mitigated by *localization* - allowing a rewrite from `d/foo` to `foo` when the meaning is obviously equivalent, which should be the case for common data types.
 
