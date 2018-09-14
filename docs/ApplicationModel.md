@@ -82,23 +82,28 @@ Thus Awelon systems will normally use time-series data to compute the current ap
 
 ## Modeling Effects and Interactions
 
-Effects are interactions between a computation and its environment. 
+Effects are interactions between a computation and its environment.
 
-However, an important consideration is that we cannot change "past" effects on a "real world" environment. Thus, we have two options: we either fully stabilize our past interactions, or we design around the instability. In context of Awelon systems, stabilization seems a lost cause. Although use of time-series data will stabilize past requests under normal conditions (where we only update the 'head' of input sources), we can still experience instability whenever we add application features, remove bugs, or summarize input histories.
+Two relevant environments are the "real world" and the "dictionary". Applications must interact with the real-world to have useful 'effects'. But modeling interactions within the dictionary are convenient for system extensibility.
 
-We must design around the inevitable instability. 
+Fortunately, modeling interactions within a dictionary is not too difficult. First we model a shared environment, such as a network, a publish-subscribe bus, or a multi-user dungeon. Second, we "install" applications (services, time-series inputs, etc.) within said environment. Finally, we compute the current state of the entire environment. In general, we should model the shared environment rather than individual apps. 
 
-First, we must reject synchronous effects models because the order of requests can be unstable. Second, we must reject asynchronous models where feedback relies on dynamically allocated identifiers such as "question 37" or a spawned actor ID, because those identifiers will be unstable. It is safe to use dynamic identifiers internally, but it may prove difficult to prevent leaks into (for example) message-passing models. Third, we must reject the concept of *exclusive control* over external devices or resources because it might have been a prior version of our app that had control back then. Outputs must be handled as soft advice or polite requests that influence system behavior but do not control it.
+A major challenge for real-world interaction is that *definitions are unstable*, yet we cannot undo past real-world effects. Use of time-series data can help resist instability, but won't help for adding features or removing bugs. Consequently, we should favor interaction models that are robust to historical instability: IO must be asynchronous, inputs should avoid application-specific identifiers (such as allocated actor IDs), and  outputs must not assume exclusive control. Consequently, outputs might be taken as "advice" to guide some external device.
 
-This leaves static allocations, stable topics, and content-addressed models.
+There are some interaction models that fit both criteria, such as [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern), [entity-component-system (ECS)](https://en.wikipedia.org/wiki/Entity%E2%80%93component%E2%80%93system), or even [functional reactive programming (FRP)](https://en.wikipedia.org/wiki/Functional_reactive_programming). Although FRP is normally associated with a single top-level behavior, we could feasibly adapt it for use in a shared environment.
 
-For example, a user could be presented with a set of questions like "what is your name?" and "what is your favorite color?", and could answer "favorite color: blue", "name: Lancelot". The order of questions versus answers could be separated as a factor, making the application more robust to changes in order. Instead, we stabilize the shared topic identifiers like 'favorite color'.
+        type Registry  = Name → SharedEnv →  Behavior
+        type SharedEnv = Name → Behavior
+        registryToEnv :: Registry → SharedEnv
+        registryToEnv = // fixpoint and memoization magic
 
-Models to contemplate: [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern), [tuple spaces](https://en.wikipedia.org/wiki/Tuple_space), and [entity-component-system (ECS)](https://en.wikipedia.org/wiki/Entity%E2%80%93component%E2%80%93system). These models are asynchronous, mostly content-addressed, and reasonably compatible with time-series data. They have relatively stable state, which is convenient for rendering. ECS is the most structured, additionally having the convenient property of being deterministic up to input, which simplifies reasoning, safe extension, and debugging.
+There are other concerns to contemplate. For example, ECS and FRP are deterministic up to input. ECS is easier to extend (with new system rules, new components/topics, new entities) by default, while FRP is easier to compose. And, of course, performance is very relevant.
 
-Real-world effectful interactions in these models could be achieved by wiring input to stable topics/tuples/components, and computed values are taken as (strong) advice in the real world, wired to physical devices or rendered to display. 
+In any case, we must wire computed advice back to real-world devices. Wiring outputs to 'continuous' operators seems simple enough. But there is a lesser challenge regarding integration with imperative APIs. It seems feasible to resolve this by ad-hoc means, e.g. first integrate outputs with an external publish-subscribe system then have external agents translate published data to imperative operations.
 
-This seems a viable approach to effects in Awelon applications. And importantly, any of those models could be simulated functionally or separated from the Awelon dictionary as conventional apps.
+## Conclusion
+
+It seems that FRP or ECS would make a reasonable application model for Awelon systems, despite being awkward for integrating with imperative systems. It's at least worth trying.
 
 # Second Class Models
 
@@ -106,17 +111,15 @@ Besides trying to solve the general problem, it seems we could represent useful 
 
 ## Spreadsheet-like Applications
 
-Spreadsheets are perhaps the most natural applications to express in Awelon. Effectively, we propose to model *Stateful Applications* by adding time-series data to the implicit spreadsheet that is the entire Awelon dictionary. But we could pursue the idea a lot more literally with a projectional editor.
+Spreadsheets are among the most natural applications to express in Awelon. The dictionary and definitions already have spreadsheet-like behavior, but lacks the spreadsheet *layout*. We can resolve this via projectional editor. For example, we could treat a prefix `sheetname-*` as a spreadsheet, using names like `sheetname-3-c` (or `-c-3`, for column-row order). We can then render the entire volume as a spreadsheet.
 
-* spreadsheets cells are given word names like `sheetname-3-c`
-* automatically maintain a matrix value containing all cells
-* render and edit the entire spreadsheet value as a spreadsheet
+Alternatively, we could simply define a set of related variables under a `sessionid-*` prefix, with ad-hoc names and connectivity, and display all the variables together as a worksheet with local names whose definitions can be redefined or tweaked. This gives spreadsheet-like characteristics without the table structure. We could also represent this with nodes and wires.
 
-I find this intriguing because it would allow for some very *rich* spreadsheets, where cells may reference databases or application states. It's not general-purpose, but would allow for powerful and convenient views of the 'system' maintained within a dictionary.
+Intriguingly, our spreadsheets can support *Stateful Applications* if the inputs reference time-series data that is managed elsewhere in the dictionary. We can also directly include application states in our views.
 
 ## REPLs and Notebook Applications
 
-A read-eval-print-loop (REPL) can be modeled as a spreadsheet-like application in a single dimension, where each line starts with a reference to the prior line:
+A read-eval-print-loop (REPL) can be modeled as a spreadsheet-like application in a single dimension, where each line starts with a reference to the prior line, and we have a clear final line:
 
         :repl-foo-0 repl-init
         :repl-foo-1 repl-foo-0 command-1
@@ -127,7 +130,11 @@ A read-eval-print-loop (REPL) can be modeled as a spreadsheet-like application i
 
 This could easily be rendered as a REPL session, with an output rendered at each line. We can recompute outputs whenever the dictionary or underlying data changes. Adding a new line requires only two changes to our dictionary: add a definition to the new line, and modify the head entry. If outputs are rendered graphically (depending on our *Editable Views*), this might be better compared to a matlab session or [jupyter notebook](http://jupyter.org/).
 
-This idea could easily be extended to a 'forum' like model without a clear head entry. Instead, we have multiple branches/replies following from any given node. It seems an interesting model to pursue in context of an Awelon-based web service.
+## Forum-like Applications
+
+We can drop the head entry from a REPL or Notebook, and still compute the relationships using a reverse-lookup index. For example, we can reverse-lookup all references to `repl-foo-1`, and filter for those where the first word is `repl-foo-1`, and we'd allow for a many-to-one relationship between an entry and replies. Taken transitively up to, say, five levels and we'd have a typical forum-like display. Optionally, we could relax the first word filter or filter for replies within the thread `repl-foo-*` to further tweak the threading model.
+
+In any case, this produces an append-mostly tree structure (or acyclic graph) with spreadsheet and REPL-like characteristics. This could make an interesting basis to model actual multi-user forums, allowing for data-rich "discussions" that draw data from packages and compute a shared environment, especially if taken together with *Natural Language Inspired Meta-Programming* to build partial models with soft constraints.
 
 # Managed Dictionaries
 
@@ -157,7 +164,9 @@ I believe this would offer a powerful basis for generic programming, adaptive pr
 
 This is a long-term goal for Awelon. But it's not a complete application model.
 
-# Hierarchical Dictionary Structure (Rejected Awelon Extension)
+# Brainstorming
+
+## Hierarchical Dictionary Structure (Rejected For Now)
 
 We could efficiently represent hierarchical embedding of dictionaries by using a `dictname/` prefix with implicit scope. For example, `:d/foo bar baz` will implicitly depend on `d/bar` and `d/baz`. With this, we could update individual words deep in the hierarchy or update the full embedded dictionary as a one-liner `/d/ secureHash`. We can extend Awelon syntax so the host can reference words of form `d/foo`. 
 
@@ -168,4 +177,12 @@ A significant disadvantage is that we require the aesthetically awkward `d/42` o
 Another disadvantage is that there is reduced pressure to develop a common community with shared data and language. One of Awelon's goals with the dictionary model is related to easy sharing within a community, the ability for humans in a community to learn and share a common set of 'words' to communicate and share computation artifacts with each other.
 
 At this time, I'm uncertain whether hierarchical dictionary structure is is worth these costs. Fortunately, it is easy to delay introduction of hierarchical dictionary structure without risk of incompatibility. I will leave this feature out of Awelon unless there is sufficiently strong and clear use case.
+
+## Local Identifiers (Rejected)
+
+Assume we're defining `very-long-prefix-x` and we want to reference `very-long-prefix-y`. This seems a common scenario for Awelon systems and application models. It could be convenient to support a shorthand, for example just use `-y` (perhaps with more hyphens to step further back). That said, if we're only interested in *convenience*, it seems sufficient to address this via projectional editor.
+
+What are the benefits of this feature at the Awelon layer? A moderate space savings (but not as much as compressed stowage, and only up to a hundred bytes per reference). A potential benefit for copying or renaming prefixes (but we must be careful about renaming prefixes containing hyphens, and we must still search for the full version of a word). 
+
+It seems to me the potential benefits aren't worth the overheads and complexities this would introduce. If the storage is tempting, it would seem much wiser to simply use compressed storage, like LevelDB, for secure hash resources. But even uncompressed, we aren't working with overly large entries.
 

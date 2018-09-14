@@ -10,27 +10,27 @@ Awelon is a Turing complete, purely functional language based on concatenative c
 
 Awelon additionally has limited support for data - natural numbers, embedded texts, and large binaries. Beyond these few primitives, programmers may define words in a dictionary. Evaluation proceeds by rewriting according to primitive combinators and lazily rewriting words to their definitions when doing so permits further progress. Hence, the result of evaluation is an Awelon program equivalent to the input.
 
-Those `[]` square brackets represent first-class functions and contain Awelon code. Values in Awelon are always formally first-class functions, frequently using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or [Scott encodings](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). However, effective Awelon compilers or interpreters should recognize and optimize common functions and value types. This is a concept of software *Accleration* to support efficient use of CPU and memory, extending the set of language *performance primitives* relative to a reference implementation. Acceleration for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
+Those `[]` square brackets represent first-class functions and contain Awelon code. Values in Awelon are always formally first-class functions, frequently using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or variants thereof. However, Awelon compilers or interpreters (guided by annotations) will recognize and optimize common function and value types. This is a concept of software *Accleration* to support efficient use of CPU and memory, extending the set of language *performance primitives* relative to a reference implementation. Acceleration for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
 
-A runtime will also recognize a set of *Annotations*, represented by parenthetical words. For example, `[A](par)` might request parallel evaluation for the expression `A`, or `[F](accel)` might indicate that `F` should be recognized and accelerated. Annotations have identity semantics. Ignoring them won't affect observations within the program. However, external observers will be affected. Annotations serve roles in debugging and guiding performance.
+A runtime will recognize a set of *Annotations*, represented by parenthetical words. For example, `[A](par)` might request parallel evaluation for the expression `A`, while `[F](trace)` might indicate that `[F]` should be written to a debugging log or console. Annotations formally have identity semantics: erasing or ignoring them shouldn't affect observable behavior within a computation. Nonetheless, annotations can enhance performance, guide evaluation, express and enforce programmer assumptions, support static analysis or debugging.
 
-By itself, Awelon is a simplistic language - a purely functional assembly. 
+By itself, Awelon is a simplistic language - a purely functional assembly.
 
-Being purely functional, all data must be represented within the Awelon program. Hence, the Awelon *dictionary* doubles as a database or smart filesystem, and is designed for easy update, sharing, and integration. The intention is to leverage [projectional editing tools](http://martinfowler.com/bliki/ProjectionalEditing.html) to render Awelon programs and data with a rich structural or graphical syntax. Because Awelon evaluates by rewriting, projections designed for source code can generally also render evaluated results or intermediate states. Hence, computations may be viewed as self-rewriting user interfaces. The purpose of Awelon language is to use this idea to develop new [application and data models](ApplicationModel.md) that are accessible, sharable, and composable by end users.
+Unlike conventional programming languages, Awelon encourages representing data within a codebase. The intention is to make data (weather, geography, music, congressional voting records, etc.) more accessible and composable compared to more conventional languages. The codebase, called a *Dictionary* because programmers define *Words*, serves as a smart filesystem, database, or wiki with spreadsheet-like characteristics. The Awelon dictionary has a simple representation designed for efficient update, versioning, and sharing at large scales.
 
-*Note:* I'm contemplating a few variations of Awelon. See [Immutable Awelon](ImmutableAwelon.md) and [Awelon with Modules](AwelonFML.md).
+Awelon's simplistic syntax and rewrite semantics are intended to work nicely with [projectional editing tools](http://martinfowler.com/bliki/ProjectionalEditing.html), see *Editable Views*. It is feasible to edit a color value using a color picker, edit music using a music notation, edit a graph with nodes and edges. When we evaluate code, the result is more Awelon syntax which can be rendered using the same tools. The motive here is to reduce the separation between program and user-interface, make data and computed information more accessible and composable. Awelon is designed for non-conventional [application models](ApplicationModel.md). 
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Syntactically, a user-definable word has regex `[a-z][a-z0-9-]*`. That is, a word consists of lower case alphanumerics and hyphens, and starts with an alpha.
+Words are the user-definable unit for Awelon code. Syntactically, words consist of lower-case alphanumerics and hyphens, and start with an alpha - i.e. regex `[a-z][a-z0-9-]*`. This ensures words are URL-safe and visibly distinguishable as raw text. That said, a projectional editor could be configured to render a subset of words with graphics or unicode, e.g. displaying `iconic-cat-in-a-cup` with an appropriate icon.
 
-The formal meaning of a word is a trivial rewriting to its definition, a function encoded in Awelon. Definitions must have acyclic dependencies (see *Loops*), must be block-balanced (no unmatched `[` or `]`). In addition to formal semantics, words may have informal connotations in context of a system or environment. For example, `foo-meta-doc` may define documentation associated implicitly with `foo`. 
+The formal meaning of a word is a trivial equivalence to its definition in context of a *Dictionary*. The definition must have acyclic dependencies (see *Loops*), must be block-balanced (no unmatched `[` or `]`), and should be a well-typed, reusable function.
 
-In context of an Awelon system, words may be further restricted by static analysis. For example, a linter could easily express a policy that words of form `foo-local-*` are only directly referenced from words of similar form `foo-*`, representing private functions. Or a policy that `foo-type`, if defined, must evaluate to a recognizable representation of a function type, which is then verified against the definition of `foo`. Such constraints can provide rich structure within the Awelon system.
+Beyond formal semantics, words may have informal connotations and conventions. For example, a development environment may present `foo-meta-doc` as documentation associated with `foo`, and might complain to the programmer if the type doesn't match what is expected from a `-meta-doc` suffix. Similarly, a development environment may complain if `foo-local-*` is used outside the context of `foo-*`.
 
 ## Natural Numbers
 
-Awelon has limited support for natural numbers. Syntactically, natural numbers are represented by regex `0 | [1-9][0-9]*` wherever a word may appear. Semantically, natural numbers are Awelon words with an automatic definition.
+Awelon has limited support for natural numbers. Syntactically, natural numbers are represented by regex `0 | [1-9][0-9]*`. Semantically, natural numbers are Awelon words with an automatic definition.
 
         0 = [zero]
         1 = [0 succ]
@@ -65,7 +65,6 @@ Some potential annotations:
 * `(par)` - evaluate argument in parallel, in background
 * `(eval)` - evaluate argument before progressing further
 * `(stow)` - move large values to disk, load on demand
-* `(accel)` - assert software acceleration of a function
 * `(optimize)` - rewrite function for efficient evaluation
 * `(jit)` - compile a function for multiple future uses
 * `(memo)` - memoize a computation for incremental computing
@@ -78,11 +77,13 @@ Awelon does not constrain annotations beyond requirement for identity semantics.
 
 ## Acceleration
 
-We can improve performance of software by replacing slow implementations of common operations or data types with fast ones, requiring only that behavior is preserved. I call this *acceleration*, in general, alluding to hardware acceleration but permitting software acceleration. In Awelon, we could recognize common models (such as natural numbers) and operations upon them (such as adding or multiplying). 
+Awelon systems can support performance extensions for common data types. Like conventional languages, it's feasible to support ints, floats, arrays, and specialized operations upon them. I use the words 'acceleration' and 'accelerators' to describe this performance feature.
 
-In practice, acceleration requires annotations such as `(nat)` and `[reference impl](accel)`. Annotations make assumptions explicit, resulting in robust, predictable performance that neither degrades silently nor improves magically. They also simplify static analysis of programs to ensure all uses of accelerators are safe.
+Acceleration is precisely controlled by annotations. For example, we might use `(nat)` to indicate a value should have the natural number type and use the specialized natural number representation under the hood. We can use `[reference impl](accel-nat-add)` to replace the reference implementation by a built-in operation for adding two natural numbers. The reference implementation should be validated, but this can be done separately. Explicit use of annotations helps resist silent performance degradation: a compiler or interpreter should complain when an annotation is deprecated or unrecognized.
 
-Besides natural numbers, acceleration can feasibly be applied to integers, floating point, lists as arrays, records, linear algebra, a pure subset of OpenCL, Kahn process networks, etc.. It's important to develop a few models with a relatively high return on investment. Effectively, a choice of accelerators becomes a set of *performance primitives* for Awelon.
+Essentially, it's just built-in functions with reference implementations. 
+
+Beyond common data types, it's feasible to accelerate *interpreters* for embedded languages. For example, we could develop a safe subset of OpenCL or Vulkan then introduce an accelerator to interpret it. This would allow for developing ad-hoc high-performance implementations for many functions, albeit with a restriction for functional purity. But the more complicated an accelerator, the more likely we are to get it wrong, so caution is warranted.
 
 ## Dictionary
 
@@ -136,9 +137,11 @@ Awelon is designed for distribution of entire dictionaries. An advantage of whol
 
 However, packages remain useful for access control, sale, or real-time update.
 
-In those cases, we might associate a package with a registered prefix `packagename-*`. This allows for convenient one-line update or install `/packagename- secureHash`, easily enforcable local definitions via `packagename-local-*`, and package protected *Opaque Data Types* (via `(seal-packagename)` and `(unseal-packagename)`). A simple registry can resist name conflicts. A package could be installed and maintained manually, or automatically given a URL, authorization, and authentication requirements (perhaps included within the client dictionary as `local-install-packagename`).
+In those cases, we might associate a package with a prefix `packagename-*`. This allows for convenient one-line update or install `/packagename- secureHash`, easily enforced package-local definitions via `packagename-local-*`, and package protected *Opaque Data Types* (via `(seal-packagename)` and `(unseal-packagename)`). 
 
-To resist version hell, I would recommend packages are mostly provided through community-curated distributions so all the versions of packages are known to work together. Also see [Haskell Stackage snapshots](https://www.stackage.org/).
+A community registry can resist name conflicts, and could also support curated distributions that ensure packages have stable types or are known to work together, similar to [Haskell Stackage snapshots](https://www.stackage.org/). If necessary, simple (albeit expensive) operation to rename a package including all internal references.
+
+So, Awelon can support conventional package-based distribution where needed. The `packagename-` prefix might prove a little verbose, but that's a problem for projectional editors to solve (cf. *Editable Views*).
 
 ## Stowage
 
