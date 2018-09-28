@@ -82,28 +82,23 @@ Thus Awelon systems will normally use time-series data to compute the current ap
 
 ## Modeling Effects and Interactions
 
-Effects are interactions between a computation and its environment.
+Effects are interactions between a computation and its environment. It's useful to model a "logical environment" that we can easily extend with new behaviors or input sources. Real-world inputs can always be recorded into a dictionary, e.g. as time-series data.
 
-Two relevant environments are the "real world" and the "dictionary". Applications must interact with the real-world to have useful 'effects'. But modeling interactions within the dictionary are convenient for system extensibility.
+Unfortunately, we cannot assume stability of *outputs* to the real-world. Not when the definitions of applications might change at any time. Use of time-series data can improve stability enough to leverage memoization for stateful computations, but doesn't make strong guarantees.
 
-Fortunately, modeling interactions within a dictionary is not too difficult. First we model a shared environment, such as a network, a publish-subscribe bus, or a multi-user dungeon. Second, we "install" applications (services, time-series inputs, etc.) within said environment. Finally, we compute the current state of the entire environment. In general, we should model the shared environment rather than individual apps. 
+Thus, our real-world interaction model should be robust to unstable behavior.
 
-A major challenge for real-world interaction is that *definitions are unstable*, yet we cannot undo past real-world effects. Use of time-series data can help resist instability, but won't help for adding features or removing bugs. Consequently, we should favor interaction models that are robust to historical instability: IO must be asynchronous, inputs should avoid application-specific identifiers (such as allocated actor IDs), and  outputs must not assume exclusive control. Consequently, outputs might be taken as "advice" to guide some external device.
+This implies asynchronous interaction, stable input identifiers, and soft requests. Asynchronous interactions are robust to small changes in order or timing of requests. Stable input identifiers (in contrast to spawned actor IDs, pixel offsets, etc.) can be recorded in the real-world input history without changing meaning. Soft requests don't assume exclusive control over the environment, i.e. we cannot assume there is a strong relationship between past outputs and future inputs. Outputs can be taken as advice to influence external devices.
 
-There are some interaction models that fit both criteria, such as [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern), [entity-component-system (ECS)](https://en.wikipedia.org/wiki/Entity%E2%80%93component%E2%80%93system), or even [functional reactive programming (FRP)](https://en.wikipedia.org/wiki/Functional_reactive_programming). Although FRP is normally associated with a single top-level behavior, we could feasibly adapt it for use in a shared environment.
+There are some interaction models that fit these criteria, such as [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern), [entity-component-system (ECS)](https://en.wikipedia.org/wiki/Entity%E2%80%93component%E2%80%93system), or even [functional reactive programming (FRP)](https://en.wikipedia.org/wiki/Functional_reactive_programming). Of these, ECS and FRP have the advantage of being inherently deterministic, whereas pubsub requires modeling an arbitrary scheduler (which complicates reasoning about real-time behavior, etc.). But FRP is a little difficult to extend or model a shared registry of services.
 
-        type Registry  = Name → SharedEnv →  Behavior
-        type SharedEnv = Name → Behavior
-        registryToEnv :: Registry → SharedEnv
-        registryToEnv = // fixpoint and memoization magic
+## RESTful Applications
 
-There are other concerns to contemplate. For example, ECS and FRP are deterministic up to input. ECS is easier to extend (with new system rules, new components/topics, new entities) by default, while FRP is easier to compose. And, of course, performance is very relevant.
-
-In any case, we must wire computed advice back to real-world devices. Wiring outputs to 'continuous' operators seems simple enough. But there is a lesser challenge regarding integration with imperative APIs. It seems feasible to resolve this by ad-hoc means, e.g. first integrate outputs with an external publish-subscribe system then have external agents translate published data to imperative operations.
+As an alternative to modeling stateful interactive apps, we could separate the "stateful" from the "interactive". For example, we can model stateless functions that reference and update a shared database in a manner reminiscent of web-services. Indeed, we could directly implement web services in this way, assuming we develop a suitable model for reflective updates to databases within a dictionary.
 
 ## Conclusion
 
-It seems that FRP or ECS would make a reasonable application model for Awelon systems, despite being awkward for integrating with imperative systems. It's at least worth trying.
+It seems that FRP or ECS would make a reasonable application model for Awelon systems, despite being awkward for integrating with imperative systems. It's at least worth trying. Meanwhile, RESTful or conventional apps make acceptable fallbacks.
 
 # Second Class Models
 
@@ -132,9 +127,11 @@ This could easily be rendered as a REPL session, with an output rendered at each
 
 ## Forum-like Applications
 
-We can drop the head entry from a REPL or Notebook, and still compute the relationships using a reverse-lookup index. For example, we can reverse-lookup all references to `repl-foo-1`, and filter for those where the first word is `repl-foo-1`, and we'd allow for a many-to-one relationship between an entry and replies. Taken transitively up to, say, five levels and we'd have a typical forum-like display. Optionally, we could relax the first word filter or filter for replies within the thread `repl-foo-*` to further tweak the threading model.
+We can drop or ignore the head entry (`repl-foo-hd`) from a REPL or Notebook, and still compute the relationships using a reverse-lookup index. For example, we can reverse-lookup all references to `repl-foo-1`, and filter for those where the first word is `repl-foo-1`, and we would find `repl-foo-2`. But in general, this would allow for a many-to-one relationship, multiple "direct continuations" of `repl-foo-1`. Alternatively, we can relax the first-word constraint to find more reactions in a directed acyclic graph, or limit our view to thread-local reactions via `repl-foo-*`.
 
-In any case, this produces an append-mostly tree structure (or acyclic graph) with spreadsheet and REPL-like characteristics. This could make an interesting basis to model actual multi-user forums, allowing for data-rich "discussions" that draw data from packages and compute a shared environment, especially if taken together with *Natural Language Inspired Meta-Programming* to build partial models with soft constraints.
+If we compute reactions to some depth (such as five levels), we might render it as a forum thread with occasional "discussion continues here" links. Besides source, we can render the computed values at each step. This could represent a discussion forum with embedded data and spreadsheet-like characteristics. This could be especially interesting if we're working with higher level functions that construct partial models with soft constraints (cf. *Natural Language Inspired Meta-Programming*), so our "discussion" is highly robust and reactive to incremental changes.
+
+Compared to the linear REPL or Notebook, the forum tree structure is relatively awkward to render. But it's much more amenable to multi-party discussion.
 
 # Managed Dictionaries
 
@@ -160,23 +157,21 @@ A stream of natural language manipulates a 'context' in the listener. This conte
 
 A stream of Awelon code manipulates a 'context' in the computer. This context is a stack of data and function values. This is much more precise than natural language. But we could take some inspiration from natural language by modeling a 'value' that represents a partial model with hard and soft constraints, such that we can automatically 'search' for valid implementations of the model.
 
-I believe this would offer a powerful basis for generic programming, adaptive programming, program refinement, and application development. We can also leverage intermediate ideas like [Dyna](https://github.com/nwf/dyna) or [μKanren](http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf).
+I believe this would offer a powerful basis for generic programming, adaptive programming, program refinement, and application development. We can also leverage intermediate models like [Dyna](https://github.com/nwf/dyna) or [μKanren](http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf). But we should certainly use a "scored" logic of some form: search is much more efficient if we can focus on a few high quality options.
 
-This is a long-term goal for Awelon. But it's not a complete application model.
+This is a long-term goal for Awelon. It's not a complete application model, but could be used to construct other application models that are more robust and adaptive to changes in data or definition.
 
 # Brainstorming
 
-## Hierarchical Dictionary Structure (Rejected For Now)
+## Hierarchical Dictionary Structure (Rejected)
 
-We could efficiently represent hierarchical embedding of dictionaries by using a `dictname/` prefix with implicit scope. For example, `:d/foo bar baz` will implicitly depend on `d/bar` and `d/baz`. With this, we could update individual words deep in the hierarchy or update the full embedded dictionary as a one-liner `/d/ secureHash`. We can extend Awelon syntax so the host can reference words of form `d/foo`. 
+We could efficiently represent hierarchical embedding of dictionaries by using a `dictname/` prefix with implicit scope. For example, `:d/foo bar baz` will implicitly depend on `d/bar` and `d/baz`. With this, we could update individual words deep in the hierarchy or update the full embedded dictionary as a one-liner `/d/ secureHash`. We can then extend Awelon syntax so the host can reference words of form `d/foo`.
 
-Embedded dictionaries have potential to simplify issues related to name conflicts and information security, which would otherwise handled in an ad-hoc manner via community dictionaries and static analysis. But the advantage gained seems to be limited. 
+Embedded dictionaries have potential to simplify control over name conflicts and information security, which would be otherwise handled in an ad-hoc manner via community dictionaries and static analysis. 
 
-A significant disadvantage is that we require the aesthetically awkward `d/42` or `d/"hello world"` to indicate dependency on `d/succ`, `d/cons`, and so on. For convenience and consistency, we might accept `d/[x y z]` as equivalent to `[d/x d/y d/z]`, such that `d/42 => d/[41 succ] => [d/41 d/succ]`. Aesthetics could feasibly be mitigated by *localization* - allowing a rewrite from `d/foo` to `foo` when the meaning is obviously equivalent, which should be the case for common data types.
+But there are some significant disadvantages. First, the resulting dictionary is aesthetically awkward, occasionally requiring `d/42` or `d/"hello world"`. We could support `d/[x y z]` but it complicates parsers and interpreters. More importantly, there is a broad impact on the social level if we reduce pressure to develop references (words) with globally shared meanings. 
 
-Another disadvantage is that there is reduced pressure to develop a common community with shared data and language. One of Awelon's goals with the dictionary model is related to easy sharing within a community, the ability for humans in a community to learn and share a common set of 'words' to communicate and share computation artifacts with each other.
-
-At this time, I'm uncertain whether hierarchical dictionary structure is is worth these costs. Fortunately, it is easy to delay introduction of hierarchical dictionary structure without risk of incompatibility. I will leave this feature out of Awelon unless there is sufficiently strong and clear use case.
+With a flat namespace, developers can more easily share data. We may need ad-hoc analysis to control dependency relationships between "packages", and we'll need a community center (like a package registry) to resist name conflicts. But we can develop an environment where words have stable meanings - a shared language.
 
 ## Local Identifiers (Rejected)
 
@@ -184,5 +179,5 @@ Assume we're defining `very-long-prefix-x` and we want to reference `very-long-p
 
 What are the benefits of this feature at the Awelon layer? A moderate space savings (but not as much as compressed stowage, and only up to a hundred bytes per reference). A potential benefit for copying or renaming prefixes (but we must be careful about renaming prefixes containing hyphens, and we must still search for the full version of a word). 
 
-It seems to me the potential benefits aren't worth the overheads and complexities this would introduce. If the storage is tempting, it would seem much wiser to simply use compressed storage, like LevelDB, for secure hash resources. But even uncompressed, we aren't working with overly large entries.
+It seems to me the potential benefits aren't worth the overheads and complexities this would introduce. If the storage is tempting, it would seem much wiser to simply use compressed storage, like LevelDB. But even uncompressed, we aren't working with overly large entries - the longest words in practice should be around a hundred bytes.
 

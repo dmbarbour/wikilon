@@ -143,9 +143,9 @@ module EncSized =
 
 /// Raw ByteString Encoder. 
 ///
-/// This codec is suitable for a *VRef<ByteString>, such that the binary
-/// is not mixed with any other data. On read, it trivially consumes all 
-/// the data from the input stream.
+/// This codec is suitable for a VRef<ByteString> that consists of only
+/// the bytestring and no other data. On read, it trivially consumes all 
+/// remaining data from the input.
 module EncBytesRaw =
     let inline size (b:ByteString) : SizeEst = uint64 b.Length
     let inline write b dst = ByteStream.writeBytes b dst

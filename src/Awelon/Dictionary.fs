@@ -1,4 +1,5 @@
 namespace Awelon
+//open System.Collections.Generic
 open Data.ByteString
 open Stowage
 // open System.Collections.Immutable
@@ -18,14 +19,12 @@ open Stowage
 // either defines (:) or deletes (~) a symbol, or directs to another 
 // node based on a matching prefix (/). Referenced nodes are identified
 // by their secure hash, and the matched prefix is stripped from all 
-// symbols and prefixes within the referenced node. The empty symbol or
-// prefix is valid and useful.
+// symbols in the referenced node (so :prod under /pr becomes :od). The
+// empty symbol or prefix is valid.
 //
 // Definitions are normally Awelon code. But oversized definitions may
-// be rewritten to `$secureHash`, and binary resources may be included
-// via `%secureHash`. This feature is part of our dictionary, rather 
-// than embedded in Awelon code per se. Similar extensions are feasible
-// in the future.
+// compact to `$secureHash` while binary resources may be embedded via
+// `%secureHash`. Binaries act embedded texts without byte constraints.
 //
 // This dictionary representation is streamable, representing real-time
 // updates in an append-only log. Only the final match for the symbol or
@@ -34,48 +33,43 @@ open Stowage
 // But outside of streams, we'll normalize - erase irrelevant lines then 
 // sort what remains.
 //
-// Hierarchical dictionaries simply use `dictname/word` symbols. We
-// can use `/dictname/ secureHash` to logically include one dictionary
-// into another.
+// *Aside:* I've contemplated hierarchical dictionaries via `:dictname/word`
+// symbols. Although rejected from Awelon language for various reasons, we
+// could still use the idea for sharing indexes, evaluated definitions, 
+// dictionary history or versions, and similar extensions.
 module Dict =
     let cLF = 10uy
     let cSP = 32uy
     let cDef = byte ':'
     let cDel = byte '~'
-    let cDir = byte '/' 
+    let cDir = byte '/'
+    let cRemote = byte '$'
+    let cBinary = byte '%'
 
     let mimeType = BS.fromString "text/vnd.awelon.dict"
 
-    /// Symbols should be ASCII with no control characters, usually
-    /// a word or extended with `/` for hierarchical dictionaries. 
-    /// But minimally, excluding SP and LF is sufficient. Symbols 
-    /// should not be too large, e.g. no more than a few hundred 
-    /// bytes. For inner nodes, the common prefix is stripped so the
-    /// symbol may be a suffix of a word.
+    /// Symbols are usually Awelon words. Minimally, we must forbid
+    /// use of the SP and LF characters. 
     type Symbol = ByteString
     let isValidSymbolChar c = (cLF <> c) && (cSP <> c)
     let isValidSymbol s = BS.forall isValidSymbolChar s
 
     /// A directory is represented by a symbol prefix.
     type Prefix = Symbol
-    
+
     /// A definition at the dictionary layer may consist of:
     ///
-    /// - an Awelon code definition - byte string
-    /// - an oversized definition via $secureHash
-    /// - a binary resource reference %secureHash
-    /// 
-    /// Oversized code definitions can be rewritten to $secureHash
-    /// upon compaction to ensure a predictable worst-case for the
-    /// node size. Updates should usually be provided as Awelon code
-    /// or binary resources.
+    /// - inline definition - byte string
+    /// - remote definition via $secureHash
+    /// - binary resource via %secureHash
     ///
-    /// Inline code should parse as Awelon, or at least must not
-    /// contain the LF character.
+    /// Each definition is a single line, and should parse correctly
+    /// and be normalized. Secure hashes should not appear in normal
+    /// Awelon code.
     type Def = 
-        | Code of ByteString
-        | CodeRef of LVRef<ByteString>
-        | BinRef of LVRef<ByteString>
+        | Inline of ByteString
+        | Remote of VRef<ByteString>
+        | Binary of VRef<ByteString>
 
     /// A definition update: None for delete, Some for define.
     type DefUpd = Def option 
@@ -89,12 +83,15 @@ module Dict =
           cs : Children       // nodes with larger prefixes
         }
     and Children = Map<byte,struct(Prefix * Dict)>
-    and Dir = LVRef<Dict> option  // secureHash (Some) or blank (None)
+    and Dir = VRef<Dict> option  // secureHash (Some) or blank (None)
 
-        // TODO: consider keeping a size-estimate per Dict node to
-        // help with compaction algorithms. Whether this is worthwhile
-        // will depend on the compaction algorithm.
-
+        // TODO: develop an ephemeron table to track VRef<Dict> items
+        // to improve structure sharing in memory. Not essential, but 
+        // this could provide significant performance benefits.
+        //
+        // For now, will simply use LVRefs for dictionaries, but that
+        // isn't so great when working with many similar dictionaries.
+        
     /// The DictEnt type corresponds to a single line in a dictionary,
     /// a single update to a symbol or prefix. 
     type DictEnt =
@@ -140,7 +137,7 @@ module Dict =
 
     // TODO: consider developing a mutable DictBuilder variant for efficient
     // parsing. This could improve read performance by a moderate degree. 
-    // OTOH, the benefits might not be worth the complexity.
+    // OTOH, the benefits might not be worth the extra maintenance work.
 
     // This operation is inefficient. I've a proposal at fsharp-suggestions 
     // (#673) to support an efficient accessor for singleton maps to fix the
@@ -283,8 +280,8 @@ module Dict =
     let private hasRemote k d =
         let struct(_,pd) = matchDir' k d
         match pd with
-        | Some (Some _) -> true
-        | _ -> false
+        | Some dir -> Option.isSome dir
+        | None -> false
 
     /// Update definition for a symbol. May try to remove `~symbol`
     /// entries that are obviously unnecessary, but does not load
@@ -293,23 +290,13 @@ module Dict =
         let bFullDel = Option.isNone du && not (hasRemote k dict)
         let vu = if bFullDel then None else Some du
         let rw d = mkDict (d.pd) vu (d.cs)
-        rewriteAtKey k rw dict 
+        rewriteAtKey k rw dict
 
-    /// Define a symbol in the dictionary. This returns a new Dict
-    /// with the symbol defined as specified. It will overwrite a
-    /// prior definition, if any.
+    /// Define or update a symbol's definition.
     let inline add sym def d = updSym sym (Some def) d
 
-    /// Remove a symbol from the dictionary. This does not test if
-    /// the symbol is present; if not, it can perform unnecessary
-    /// rewrites. See remove' variant.
+    /// Delete a symbol's definition, leaving it undefined.
     let inline remove sym d = updSym sym None d
-
-    /// remove variant, which tests for presence of symbol before
-    /// deleting it. This is better for performance if the symbol
-    /// has a high chance of not being defined in the dictionary.
-    let inline remove' sym d = 
-        if contains sym d then remove sym d else d 
 
     /// Update directory node at a given prefix. This will overwrite
     /// all existing entries with the same prefix. Will avoid adding
@@ -343,7 +330,7 @@ module Dict =
     // When false, we can often eliminate deletion entries from `b`.
     let rec private flushUpdates' (hr:bool) (a:Dict) (b:Dict) : Dict =
         match b.pd with 
-        | Some dir -> 
+        | Some dir -> // node b overrides node a at this point
             if hr || Option.isSome dir then b else
             mkDict None (b.vu) (b.cs) // drop prefix deletion entry
         | None ->
@@ -374,8 +361,8 @@ module Dict =
             updChild ix (BS.take n ap) ac' acs
         
     /// specialized equivalent to `applySeqEnt a (toSeqEnt b)`, with
-    /// much better performance. This is an entry-level append, NOT 
-    /// a union of definitions.
+    /// much better performance. NOTE: This is an entry-level append, 
+    /// which is not the same as a union of definitions.
     let flushUpdates (a:Dict) (b:Dict) : Dict = flushUpdates' false a b
 
     /// Merge with prototype chain. Transitively eliminates the empty
@@ -525,17 +512,21 @@ module Dict =
     let inline private sizeVU (vu : DefUpd option) =
         match vu with
         | None -> struct(0UL,0UL)
-        | Some None -> struct(1UL,2UL)  // `~` LF
         | Some (Some def) -> 
-            let len = BS.length (def.Data)
-            if (0 = len) 
-                then struct(1UL,2UL)    // `:` LF
-                else struct(1UL,3UL + uint64 len) // `:` SP def LF
+            match def with
+            | Inline bytes ->
+                // drop SP for empty definition
+                if BS.isEmpty bytes then struct(1UL,2UL) else
+                struct(1UL, 3UL + uint64 (BS.length bytes))
+            | Remote _ | Binary _ -> 
+                // `:` SP (`$`|`%`) secureHash LF
+                struct(1UL, uint64 (4 + RscHash.size))
+        | Some None -> struct(1UL,2UL)  // `~` LF
 
     /// Return two sizes for dictionary: (line count * byte count)
     /// based on what would be written to a dictionary node. Each
     /// line corresponds to one entry, and lines are as compact as
-    /// feasible (avoiding unnecessary whitespace).
+    /// feasible (avoiding unnecessary whitespace). Exact size!
     let rec size (d:Dict) : struct(SizeEst * SizeEst) =
         let struct(lnp,szp) = sizePD (d.pd)
         let struct(lnv,szv) = sizeVU (d.vu)
@@ -554,53 +545,78 @@ module Dict =
         let struct(ln,_) = size d 
         ln
 
-    let private entBytes (ent:DictEnt) : struct(byte * ByteString * ByteString) =
-        match ent with
+    // write entry, excluding LF
+    let private writeEnt (e:DictEnt) (dst:ByteDst) : unit =
+        match e with
         | Direct (p, dirOpt) ->
+            ByteStream.writeByte cDir dst
+            ByteStream.writeBytes p dst
             match dirOpt with
-            | Some ref -> struct(cDir, p, ref.ID)
-            | None -> struct(cDir, p, BS.empty)
-        | Define (s, defOpt) ->
-            match defOpt with
-            | Some def -> struct(cDef, s, def.Data)
-            | None -> struct(cDel, s, BS.empty)
-
-    // write entry, including LF
-    let private writeEnt (dst:ByteDst) (e:DictEnt) : unit =
-        let struct(c,s,d) = entBytes e
-        ByteStream.writeByte c dst
-        ByteStream.writeBytes s dst
-        if (not (BS.isEmpty d)) then
-            ByteStream.writeByte cSP dst
-            ByteStream.writeBytes d dst
-        ByteStream.writeByte cLF dst
+            | Some ref ->
+                ByteStream.writeByte cSP dst
+                ByteStream.writeBytes (ref.Addr) dst
+            | None -> ()
+        | Define (s, Some def) ->
+            ByteStream.writeByte cDef dst
+            ByteStream.writeBytes s dst
+            match def with
+            | Inline bytes -> 
+                if BS.isEmpty bytes then () else
+                ByteStream.writeByte cSP dst
+                ByteStream.writeBytes bytes dst
+            | Remote ref -> 
+                ByteStream.writeByte cSP dst
+                ByteStream.writeByte cRemote dst
+                ByteStream.writeBytes (ref.Addr) dst
+            | Binary ref -> 
+                ByteStream.writeByte cSP dst
+                ByteStream.writeByte cBinary dst
+                ByteStream.writeBytes (ref.Addr) dst
+        | Define (s, None) ->
+            ByteStream.writeByte cDel dst
+            ByteStream.writeBytes s dst
 
     let private writeDst (d:Dict) (dst:ByteDst) : unit =
-        let struct(_,sz) = size d
-        let szMax = uint64 (System.Int32.MaxValue)
-        if (sz > szMax) then raise (System.OutOfMemoryException()) else
-        ByteStream.reserve (int sz) dst
-        Seq.iter (writeEnt dst) (toSeqEnt d)
+        let wfn e = writeEnt e dst; ByteStream.writeByte cLF dst
+        Seq.iter wfn (toSeqEnt d)
 
     /// Write a dictionary node as a ByteString.
-    let write (d:Dict) : ByteString = ByteStream.write (writeDst d)
+    let write (d:Dict) : ByteString = 
+        ByteStream.write (writeDst d)
 
 
     let private isSP c = (c = cSP)
     let inline private trimSP s = 
         s |> BS.dropWhile isSP |> BS.dropWhileEnd isSP
     
+    // wrap hash as raw binary reference
+    let inline private binRef db h =
+        let ok = (RscHash.size = (BS.length h)) // simplistic test
+        if not ok then raise ByteStream.ReadError else 
+        VRef.wrap (EncBytesRaw.codec) db h
+
+    let private parseDef (db:Stowage) (s:ByteString) : Def =
+        if BS.isEmpty s then Inline (BS.empty) else
+        let c0 = BS.unsafeHead s
+        if (cRemote = c0) then Remote (binRef db (BS.unsafeTail s)) else
+        if (cBinary = c0) then Binary (binRef db (BS.unsafeTail s)) else
+        Inline s
+
+    let private parseDir (c:Codec<Dict>) (db:Stowage) (s:ByteString) : Dir =
+        if BS.isEmpty s then None else
+        if (RscHash.size <> BS.length s) then raise ByteStream.ReadError else
+        // TODO: use ephemeron table for Dict refs to improve sharing
+        Some (LVRef.wrap (VRef.wrap c db s))
+
     /// Parse a single line from a dictionary. May raise ByteStream.ReadError.
-    let private parseDictEnt mkDef mkDir ln =
+    let private parseDictEnt (mkDef:ByteString->Def) (mkDir:ByteString->Dir) (ln:ByteString) : DictEnt =
         if BS.isEmpty ln then raise ByteStream.ReadError else
         let c0 = BS.unsafeHead ln
         let struct(sym,spdef) = BS.span ((<>) cSP) (BS.unsafeTail ln)
-        let def = BS.drop 1 spdef // drop symbol-def separator
+        let def = trimSP spdef // ignore extra spaces
         if (c0 = cDef) then Define(sym, Some (mkDef def)) else
-        let h = trimSP def // ignore whitespace for Del and Dir lines.
-        if ((c0 = cDel) && (BS.isEmpty h)) then Define (sym, None) else
-        if ((c0 = cDir) && (BS.isEmpty h)) then Direct (sym, None) else
-        if ((c0 = cDir) && (RscHash.isValidHash h)) then Direct (sym, Some (mkDir h)) else
+        if (c0 = cDir) then Direct(sym, mkDir def) else
+        if ((c0 = cDel) && (BS.isEmpty def)) then Define(sym, None) else
         raise ByteStream.ReadError
 
     let private parseLineStep onLine s =
@@ -686,9 +702,8 @@ module Dict =
             member __.Write d dst = 
                 writeDst d dst
             member cD.Read db src = 
-                // TODO: consider mem-caching LVRefs to improve sharing.
-                let mkDef s = Def(s,db)
-                let mkDir h = LVRef.wrap (VRef.wrap cD db h)
+                let mkDef s = parseDef db s
+                let mkDir h = parseDir cD db h
                 parseDict mkDef mkDir (ByteStream.readRem src)
             member cD.Compact db d0 = 
                 let struct(d',_,sz') = nodeCompact cD db d0

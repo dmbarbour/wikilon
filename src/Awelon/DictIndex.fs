@@ -1,29 +1,115 @@
 namespace Awelon
 open Data.ByteString
+open Parser
 
 // Awelon systems generally require indexed dictionaries.
 //
-// We start with two basic indices:
+// I can start with two basic indices:
 //
 //  reverse lookup index:   symbol → client
 //  behavior version index: word → version
 //
-// The behavior version index gives us a unique version ID for the
-// deep definition of a word, including all of its dependencies.
-// This version ID can then be used to cache computations on the
-// definition's behavior such as type and evaluation. We might 
-// further compute a behavior version for evaluated behaviors.
-// 
-// The reverse lookup index is necessary to compute the version
-// index, but also is independently valuable for providing links
-// when browsing or editing a dictionary. Some special attention
-// is required for indexing our secure-hash resources, and perhaps
-// for tracking resources that weren't immediately available.
+// The reverse lookup index will also track annotations. 
+// of a word (e.g. `foo bar` is a continuation of `foo`), but 
+// that's probably less critical. We can leverage reverse lookup
+// for manual keywords and categories, too.
 //
-// Ideally, indexing is real-time and occurs in the background,
-// hence features such as laziness and incremental computation
-// are desirable. To this end, our behavior version index will
-// support a queue for elements we still need to index. 
+// The version index can track each word together with transitive
+// dependencies, i.e. a minimal subtree of the larger dictionary
+// to define the word. Basically a tree-hash. Unfortunately, this
+// cannot be computed in real-time! So I might wish to compute it
+// using some form that tracks intermediate states and allows for
+// incremental computation.
+//
+// Besides these two indices, I also want to support fuzzy-find
+// and type-based lookups like Hoogle. Features that would help
+// with interactive development. But I suspect this will require
+// more specialized work, and might benefit from probabilistic 
+// models. I can address it later, as needed.
+
+// DictRLU combines a dictionary with a reverse-lookup index.
+module DictRLU =
+    open Parser
+
+    /// implicit deps for natural numbers, texts, and binaries.
+    let private w_zero : Word = BS.fromString "zero"
+    let private w_succ : Word = BS.fromString "succ"
+    let private w_null : Word = BS.fromString "null"
+    let private w_cons : Word = BS.fromString "cons"
+
+    // we won't look at binaries, just assume they use the full range.
+    let private binDeps : Set<Word> =
+        Set.ofList [w_null; w_cons; w_zero; w_succ]
+
+    /// we'll simply treat `(anno)` as a word for reverse lookup
+    /// dependencies, but we need to add parentheses again.
+    let wrapParens (w:Word) : Word =
+        let lP = BS.singleton (byte '(')
+        let rP = BS.singleton (byte ')')
+        BS.append3 lP w rP
+
+    let private addTokDeps (s:Set<Word>) (struct(tt,w) : Token) : Set<Word> =
+        match tt with
+        | TT.Word -> Set.add w s
+        | TT.Anno -> Set.add (annoDep w) s
+        | TT.Nat -> 
+            let bZero = (1 = BS.length w) && (byte '0' = w.[0])
+            if bZero then s |> Set.add w_zero else
+            s |> Set.add w_zero |> Set.add w_succ
+        | TT.Text -> 
+            if BS.isEmpty w then s |> Set.add w_null else
+            s |> Set.add w_null |> Set.add w_cons 
+              |> Set.add w_zero |> Set.add w_succ
+    
+    /// compute dependencies for a program.
+    let progDeps (p:Program) : Set<Word> =
+        Seq.fold addTokDeps (Set.empty) (tokenize p)
+
+    /// parse a program and compute dependencies.
+    /// (A program that does not parse has no dependencies.)
+    let parseProgDeps (pStr:ByteString) : Set<Word> =
+        match parse pStr with
+        | ParseOK p -> progDeps p
+        | ParseFail _ -> Set.empty
+
+    /// Our reverse-lookup index can be represented using a dictionary
+    /// for convenient export. We'll only use the keys from the trie.
+    /// A key of form `word@client` means that client references word.
+    ///
+    /// Annotations are represented in the RLU using `(anno)@client`.
+    /// We do not track full texts or exact natural numbers. 
+    type RLU = Dict
+
+    module RLU =
+
+        /// Find direct clients with a specific prefix of a word. This is
+        /// useful for some application models where we might render a word
+        /// as a forum root with "replies" in a threaded model.
+        let wordClientsWithPrefix (w:Word) (p:Word) (rlu:RLU) : seq<Word> =
+            let wp = BS.append3 w (BS.singleton (byte '@')) p
+            let rlu' = Dict.extractPrefix wp rlu
+            let onKV ((k,v)) = BS.append p k
+            Seq.map onKV (Dict.toSeq rlu')
+
+        /// Find all direct clients of a word.
+        let wordClients (w:Word) (rlu:RLU) : seq<Word> =
+            wordClientsWithPrefix w (BS.empty) rlu
+
+        /// Find all direct clients of an annotation word.
+        /// (Trivially, wraps word in parentheses then calls wordClients.)
+        let annoClients (w:Word) (rlu:RLU) : seq<Word> =
+            wordClients (wrapParens w) rlu
+
+        
+    
+    /// A DictRLU is a *consistent* pair of Dict and RLU. Well, we 
+    /// assume consistency. Maintaining consistency requires use of
+    /// the DictRLU update interface, in general.
+    ///
+    /// Fortunately, a DictRLU can be maintained incrementally.
+
+(*
+
 //
 // NOTE: 
 //
@@ -32,32 +118,6 @@ open Data.ByteString
 // prefix sharing should ameliorate costs for words with many clients.
 module DictX =
 
-    /// A qualified word is basically a word together with a qualified
-    /// namespace. We'll index fully qualified words, e.g. for the 
-    /// program `d/[foo bar]` we must record dependencies on `d/foo`
-    /// and `d/bar`. Each namespace component should also be a valid
-    /// word. A qualified word will not contain SP or LF.
-    ///
-    /// Besides Awelon words, we might include a few more symbols to
-    /// help track special dependencies such as secure hash resources.
-    type QW = ByteString
-
-    /// Our namespace is simply the fragment of a qualified word up
-    /// to and including the final `/`.
-    type NS = ByteString
-
-    let cNSSep = byte '/'
-    let private notNSSep c = (c <> cNSSep)
-    let wordNS (qw:QW) : NS = BS.dropWhileEnd notNSSep qw
-    let parentNS (ns:NS) : NS = wordNS (BS.dropLast 1 ns)
-    let childNS (ns:NS) (w:Parser.Word) : NS = BS.append3 ns w (BS.singleton cNSSep)
-
-    /// implicit dependencies for natural numbers and texts:
-    /// zero, succ, null, cons
-    let word_zero : Parser.Word = BS.fromString "zero"
-    let word_succ : Parser.Word = BS.fromString "succ"
-    let word_null : Parser.Word = BS.fromString "null"
-    let word_cons : Parser.Word = BS.fromString "cons"
 
     /// Unqualified dependencies for a natural number in Awelon.
     let natDeps (n:Parser.NatTok) : QW list =
@@ -181,4 +241,4 @@ module DictX =
           ver : Dict    // 
         }
 
-
+*)

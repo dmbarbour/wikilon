@@ -7,47 +7,48 @@
 
 To leverage .NET JIT, I'll start by reimplementing in F#. This should enable access to runtime code generation mechanisms (e.g. CodeDOM), assuming a suitable 'accelerated' intermediate language. I've selected the `dotnet` core, which unfortunately excludes some nice libraries like WebSharper but has a relatively clean and portable toolset.
 
-I'll need to implement ByteStrings, since CLR's UTF-16 strings aren't very appropriate for Awelon.
+I'll implement ByteStrings, since CLR's UTF-16 strings aren't very appropriate for Awelon.
 
 ## Wikilon Database
 
-As a RESTful system, all persistent state should be kept in a database, excepting only regenerable, cached computations and some weak session-like features for real-time server push (which must be easily restarted). 
+As a RESTful system, all persistent state should be kept in a database, excepting only regenerable, cached computations and some weak session-like features for real-time server push (which must be easily restarted). As an Awelon system, our "database" will be an Awelon dictionary, or perhaps a set of named dictionaries.
 
-### The Dictionary
+For now, I've dropped support for hierarchical dictionaries. But we can still leverage `meta-*` fields to record geneology, histories, etc..
 
-Our primary database will simply be one big dictionary. This is an important center of Wikilon, and so must not be coupled with other data - excepting, perhaps, a long-running history. We can leverage some features of Awelon dictionaries:
+## Search
 
-* hierarchical dictionaries can simplify user-level or project-level sandboxes
-* dictionaries can use `meta-*` fields to track geneology, origin, and so on
-* dictionaries can keep tagged snapshots via further hierarchical dictionaries
+I'm uncertain about how to approach search. But minimally:
 
-We can feasibly model subscriptions, such that some dictionaries are copied from a different branch automatically, but it isn't a critical feature for now. We can also have a convention to model web-services that allow external clients to post/put/get.
+* lookup by word
+* reverse lookups
 
-### Search?
+A "continuation" of `foo` would be any word whose definition starts with word `foo`. That is, we're continuing computation using the environment computed by `foo`. Specifically tracking continuations in the reverse lookup index might prove convenient for a subset of application models, but does not seem essential.
 
-I'm uncertain about how to approach search. Complicating factors include the hierarchical dictionary structure, security concerns, and secure hash resources.
+For now, I'll skip support for full-text search and fuzzy find. I don't know how to do these well. But with reverse lookup, I think it shouldn't be too difficult to maintain keywords or topics or categories within a dictionary to support effective browsing.
 
-Minimally, I can provide an index to find all clients of any given word. But full-text search that might cross dictionaries or require concept analysis is quite beyond the level I can support for now. (Reverse lookup for clients, however, might be useful indirectly, e.g. for embedding keywords.)
+## Users and Sessions
 
-### The Users
+Most users and edit sessions should somehow be recorded in the dictionary, I think. Or at least an associated dictionary. For example, we could model an "edit session" as a list of words that we open and edit. Or we could model a local worksheet in terms of a set of words with a common prefix, or a REPL session or notebook app with many lines.
 
-Additionally, I need to keep user data - sessions, clipboards, authorities, etc.. It might prove convenient (for import, export, history, etc.) to represent each user via dictionary, perhaps even within the global dictionary. User activities might be generally modeled similar to inventory tracking, of sorts.
+We might need some private user data, like authorities or a clipboard, outside of the dictionary. I wonder if it would be feasible to track per-user metadata
 
-Each user should perhaps have a dedicated sandbox dictionary, or at least the ability to create one.
+An interesting idea is to model an "inventory" for each user, which contains tasks and clipboards and objects. But this might not be a reasonable start.
 
 ## Caching
 
-Design for cached computation is cause for some frustrations at the moment. 
-
-My current proposed design is this:
+In general, a feasible approach is:
 
 * compute a global reverse-lookup index
 * compute a deep behavior version index
 * cache from version to evaluation, etc
 
-A global reverse-lookup index is useful for search, discovery, and other purposes. Further, it can be maintained in real-time with updates to a dictionary. Stowage resources will requires some special attention.
+Versions are based on secure hashes of a computation and its transitive dependencies. This allows for sharing of version identifiers between similar dictionaries, including historical versions or alternative branches of a dictionary.
 
-A behavior version hash is useful. It can map to evaluated definitions, which might have their own version hashes (to further improve sharing). The main issue with version hashes is that I cannot compute them in real-time: a change to the dictionary can result in a cascading change to version hashes. Fortunately, I can compute version hashes lazily without too much difficulty, and it not difficult to model a queue of versions to invalidate incrementally.
+The main issue is that a global version cache cannot be maintained in real-time. Updates to 'deep' dependencies too easily result in cascading changes in version identifiers. Developers can feasibly limit the "depth" of unstable dependencies within application models, which could help. We could also try for lazy on-demand versioning (requiring state) and even background versioning (requiring we model the invalidation process explicitly). This seems doable, but performance remains an open question.
+
+For now, perhaps I should just try to implement this and see how well it works in practice, and whether something faster should be developed.
+
+: a change to the dictionary can result in a cascading change to version hashes. Fortunately, I can compute version hashes lazily without too much difficulty, and it not difficult to model a queue of versions to invalidate incrementally.
 
 This design seems very promising, but it's still rather expensive in nature. And the implementation is more complicated than I'd prefer for just getting started swiftly.
 

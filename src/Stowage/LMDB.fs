@@ -12,7 +12,7 @@ open Stowage.LMDB_FFI
 ///
 /// This uses the memory mapped file database LMDB under the hood.
 /// LMDB is a read-optimized database, but offers effective write
-/// performance - at least faster than 
+/// performance.
 module LMDB =
     type Key = DB.Key
     type Val = DB.Val
