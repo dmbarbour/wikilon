@@ -136,7 +136,7 @@ module BS =
     do assert(256 = allBytes.Length)
 
     /// Singleton ByteStrings without runtime allocation
-    let singleton (c : byte) = unsafeCreate allBytes (int c) 1
+    let singleton (c : byte) = ByteString(allBytes,(int c),1)
 
     let inline ofSeq (s : seq<byte>) : ByteString = unsafeCreateA (Array.ofSeq s)
     let inline ofList (s : byte list) : ByteString = unsafeCreateA (Array.ofList s)

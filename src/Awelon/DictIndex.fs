@@ -1,6 +1,8 @@
 namespace Awelon
 open Data.ByteString
+open Stowage
 open Parser
+open Dict
 
 // Awelon systems generally require indexed dictionaries.
 //
@@ -9,27 +11,38 @@ open Parser
 //  reverse lookup index:   symbol → client
 //  behavior version index: word → version
 //
-// The reverse lookup index will also track annotations. 
-// of a word (e.g. `foo bar` is a continuation of `foo`), but 
-// that's probably less critical. We can leverage reverse lookup
-// for manual keywords and categories, too.
+// The reverse lookup index will allow us to quickly find all sites
+// where a word is used. This is valuable for a lot of use cases. 
+// Besides words, we can also track annotations and parse errors.
 //
-// The version index can track each word together with transitive
-// dependencies, i.e. a minimal subtree of the larger dictionary
-// to define the word. Basically a tree-hash. Unfortunately, this
-// cannot be computed in real-time! So I might wish to compute it
-// using some form that tracks intermediate states and allows for
-// incremental computation.
+// It is feasible for users to build on this to manually manage tag
+// clouds, search words, categories, etc. within a dictionary. This
+// can be achieved by defining associated words (such as tags-foo or 
+// foo-tags) with a list of tags. But RLU won't support full-text
+// lookup directly.
 //
-// Besides these two indices, I also want to support fuzzy-find
-// and type-based lookups like Hoogle. Features that would help
-// with interactive development. But I suspect this will require
-// more specialized work, and might benefit from probabilistic 
-// models. I can address it later, as needed.
+// The behavior version index will track each word together with
+// its full transitive dependency tree, i.e. a secure hash for a
+// subset of a dictionary that defines a particular word. A premise
+// is that most words should have stable definitions, and unstable
+// definitions should be near the tree root with very few clients.
+// Under this premise, our version index can be incremental. The
+// version index can also track dependency depth and discovered
+// cycles.
+//
+// Given a version index, we can easily build other indices, such
+// as memoized evaluations. 
+//
+// In general, it might be useful to track incremental update of
+// each index, allowing for background computation and maintenance.
+// Some laziness for behavior version indices might also be useful.
+// But incremental computation adds more complexity than I want to
+// suffer at this time. Alternatively, we might use a lazy or even
+// memory-only version index.
+//
 
 // DictRLU combines a dictionary with a reverse-lookup index.
 module DictRLU =
-    open Parser
 
     /// implicit deps for natural numbers, texts, and binaries.
     let private w_zero : Word = BS.fromString "zero"
@@ -37,21 +50,21 @@ module DictRLU =
     let private w_null : Word = BS.fromString "null"
     let private w_cons : Word = BS.fromString "cons"
 
-    // we won't look at binaries, just assume they use the full range.
-    let private binDeps : Set<Word> =
-        Set.ofList [w_null; w_cons; w_zero; w_succ]
+    /// If a word's definition fails to parse, we'll record this
+    /// in the reverse-lookup using special symbol `EPARSE`. This
+    /// allows for swift discovery of all parse errors in a Dict.
+    let wEPARSE : Symbol = BS.fromString "EPARSE"
 
-    /// we'll simply treat `(anno)` as a word for reverse lookup
-    /// dependencies, but we need to add parentheses again.
-    let wrapParens (w:Word) : Word =
+    // wrap annotation words with parentheses as dependencies.
+    let private wrapParens (w:Word) : Symbol =
         let lP = BS.singleton (byte '(')
         let rP = BS.singleton (byte ')')
         BS.append3 lP w rP
 
-    let private addTokDeps (s:Set<Word>) (struct(tt,w) : Token) : Set<Word> =
+    let private addTokDeps (s:Set<Symbol>) (struct(tt,w) : Token) : Set<Symbol> =
         match tt with
         | TT.Word -> Set.add w s
-        | TT.Anno -> Set.add (annoDep w) s
+        | TT.Anno -> Set.add (wrapParens w) s
         | TT.Nat -> 
             let bZero = (1 = BS.length w) && (byte '0' = w.[0])
             if bZero then s |> Set.add w_zero else
@@ -60,47 +73,180 @@ module DictRLU =
             if BS.isEmpty w then s |> Set.add w_null else
             s |> Set.add w_null |> Set.add w_cons 
               |> Set.add w_zero |> Set.add w_succ
+        | _ -> invalidArg "tt" "unrecognized token type"
     
-    /// compute dependencies for a program.
-    let progDeps (p:Program) : Set<Word> =
+    let progDeps (p:Program) : Set<Symbol> =
         Seq.fold addTokDeps (Set.empty) (tokenize p)
 
-    /// parse a program and compute dependencies.
-    /// (A program that does not parse has no dependencies.)
-    let parseProgDeps (pStr:ByteString) : Set<Word> =
-        match parse pStr with
+    /// Parse a program and compute its immediate dependencies.
+    /// A program that fails to parse will have a single dependency
+    /// on symbol `EPARSE`, for swift lookup of invalid programs.
+    let parseDeps (progStr:ByteString) : Set<Symbol> =
+        match parse progStr with
         | ParseOK p -> progDeps p
-        | ParseFail _ -> Set.empty
+        | ParseFail _ -> Set.singleton wEPARSE
+
+    let private binaryDeps : Set<Symbol> =
+        // assume a non-empty binary reference 
+        addTokDeps (Set.empty) (struct(TT.Text,w_null))
+
+    let defDeps (def:Def) : Set<Symbol> =
+        match def with
+        | Inline s -> parseDeps s
+        | Remote ref -> parseDeps (VRef.load ref) 
+        | Binary _ -> binaryDeps
 
     /// Our reverse-lookup index can be represented using a dictionary
     /// for convenient export. We'll only use the keys from the trie.
-    /// A key of form `word@client` means that client references word.
+    /// Each key of form `word@client` means client directly uses word.
     ///
     /// Annotations are represented in the RLU using `(anno)@client`.
-    /// We do not track full texts or exact natural numbers. 
+    /// We will not track embedded texts, binaries, or natural numbers
+    /// precisely (though dependencies on zero, succ, null, cons will
+    /// be tracked). 
+    ///
+    /// I assume dictionaries will be augmented with metadata, maintained
+    /// by hand or bot, arranged for easy access via reverse lookup of the
+    /// words or dedicated annotations.
     type RLU = Dict
 
     module RLU =
 
+        let cSep = byte '@'
+        let inline wordAtClient w c = BS.append3 w (BS.singleton cSep) c
+        let blankDef = Some (Inline (BS.empty))
+
+        let empty = Dict.empty
+
         /// Find direct clients with a specific prefix of a word. This is
         /// useful for some application models where we might render a word
         /// as a forum root with "replies" in a threaded model.
-        let wordClientsWithPrefix (w:Word) (p:Word) (rlu:RLU) : seq<Word> =
-            let wp = BS.append3 w (BS.singleton (byte '@')) p
-            let rlu' = Dict.extractPrefix wp rlu
-            let onKV ((k,v)) = BS.append p k
-            Seq.map onKV (Dict.toSeq rlu')
+        let wordClientsWithPrefix (w:Symbol) (p:Prefix) (rlu:RLU) : seq<Symbol> =
+            rlu |> Dict.extractPrefix (wordAtClient w p) 
+                |> Dict.prependPrefix p // nop for empty prefix
+                |> Dict.toSeq 
+                |> Seq.map fst // ignore the value field
 
         /// Find all direct clients of a word.
-        let wordClients (w:Word) (rlu:RLU) : seq<Word> =
+        let wordClients (w:Word) (rlu:RLU) : seq<Symbol> =
             wordClientsWithPrefix w (BS.empty) rlu
 
-        /// Find all direct clients of an annotation word.
-        /// (Trivially, wraps word in parentheses then calls wordClients.)
-        let annoClients (w:Word) (rlu:RLU) : seq<Word> =
+        /// Find all direct clients of an annotation.
+        let annoClients (w:Word) (rlu:RLU) : seq<Symbol> =
             wordClients (wrapParens w) rlu
 
-        
+        /// Find all words whose definitions failed to parse.
+        let parseErrors (rlu:RLU) : seq<Symbol> =
+            wordClients wEPARSE rlu
+
+        let private defBlank : Def = Inline (BS.empty)
+        let addWordDeps (c:Word) (deps:Set<Symbol>) (rlu0:RLU) : RLU =
+            let addDep rlu w = Dict.add (wordAtClient w c) defBlank d 
+            Set.fold addDep rlu0 deps
+        let remWordDeps (c:Word) (deps:Set<Symbol>) (rlu:RLU) : RLU =
+            let remDep rlu w = Dict.remove (wordAtClient w c) rlu
+            Set.fold remDep rlu0 deps
+
+        /// Update dependencies for a word.
+        let updWordDeps (w:Word) (old_deps:Set<Symbol>) (new_deps:Set<Symbol>) (rlu:RLU) : RLU =
+            rlu |> remWordDeps w (Set.difference old_deps new_deps)
+                |> addWordDeps w (Set.difference new_deps old_deps)
+
+        let inline private defOptDeps (defOpt : Def option) : Set<Symbol> =
+            match defOpt with
+            | Some def -> defDeps def
+            | None -> Set.empty
+
+        let updWordDef (w:Word) (old_def:Def option) (new_def:Def option) (rlu:RLU) =
+            updWordDeps w (defOptDeps old_def) (defOptDeps new_def) rlu
+
+        // Update RLU with a given difference in definitions.
+        // Deletion of a word should erase all dependencies.
+        let private onDictDiff rlu ((w,vdiff)) =
+            let struct(old_def,new_def) =
+                match vdiff with
+                | InL a -> struct(a,None)
+                | InR b -> struct(None,b)
+                | InB (a,b) -> struct(a,b)
+            updWordDef w old_def new_def rlu
+
+        /// Update the RLU given initial and final dictionaries.
+        let update (d0:Dict) (df:Dict) (rlu:RLU) : RLU =
+            Dict.diff d0 df |> Seq.fold onDictDiff rlu
+
+        /// As update, but performs compaction incrementally, ensuring
+        /// we don't have the full index in memory at once. 
+        let compactingUpdate (db:Stowage) (d0:Dict) (df:Dict) (rlu0:RLU) : RLU =
+            let chunkSize = 2000 // for incremental compaction
+            let onChunk rlu s = Seq.fold onDictDiff rlu s |> Dict.compact db
+            Dict.diff d0 df 
+                |> Seq.chunkBySize chunkSize
+                |> Seq.fold onChunk rlu0
+
+        // TODO: potentially optimize initialization of the index. 
+
+    /// DictRLU is assumed to be a consistent pair of dictionary and reverse
+    /// lookup index. Consistency can be maintained by use of the DictRLU API.
+    type DictRLU =
+        { dict : Dict
+          rlu  : RLU
+        }
+
+    let empty : DictRLU = { dict = Dict.empty; rlu = RLU.empty }
+
+    /// withDict can update the entire dictionary, computing the RLU
+    /// incrementally based on the difference of dictionaries.
+    let withDict (upd:Dict) (d:DictRLU) : DictRLU =
+        { dict = upd
+          rlu = RLU.update (d.dict) upd (d.rlu)
+        }
+
+    /// fromDict is equivalent to `withDict d empty`, but might be
+    /// specialized (eventually; it's low priority)
+    let fromDict (d:Dict) : DictRLU = withDict d empty
+
+    /// Incrementally add and index a definition.
+    let add (w:Word) (def:Def) (d:DictRLU) : DictRLU =
+        let def0 = Dict.tryFind w (d.dict)
+        { dict = Dict.add w def (d.dict)
+          rlu = RLU.updWordDef w def0 def (d.rlu)
+        }
+
+    /// Incrementally remove a word's definition.
+    let remove (w:Word) (d:DictRLU) : DictRLU =
+        let def0 = Dict.tryFind w (d.dict)
+        if Option.isNone def0 then d else
+        { dict = Dict.remove w (d.dict)
+          rlu = RLU.updWordDef w def0 None (d.rlu)
+        }
+
+    /// Update the entire dictionary, via dictionary difference.
+    let withDict (upd:Dict) (d0:DictRLU) : DictRLU =
+        { dict = upd
+          rlu = RLU.updateRLU (d0.dict) upd (d0.rlu)
+        }
+
+    /// Encode DictRLU as a pair of size-prefixed dictionaries.
+    let codec = 
+        let cP = EncPair.codec' (Dict.codec) (Dict.codec)
+        let fromP (struct(dict,rlu)) = { dict = dict; rlu = rlu }
+        let toP d = struct(d.dict, d.rlu)
+        Codec.view cP fromP toP
+
+    /// Compact the DictRLU. Since it's a pair of dictionaries,
+    /// the root size after compaction is at most about 4kB.
+    let inline compact (db:Stowage) (d:DictRLU) : DictRLU =
+        Codec.compact codec db d
+
+    /// A compacting update will control memory usage.
+    let compactingWithDict (db:Stowage) (upd:Dict) (d:DictRLU) : DictRLU =
+        let upd' = Dict.compact db upd //
+        { dict = upd' 
+          rlu = RLU.compactingUpdate db (d.dict) upd' (d.rlu)
+        }
+  
+    let compactingFromDict (db:Stowage) (d:Dict) : DictRLU =
+        compactingWithDict db d empty
     
     /// A DictRLU is a *consistent* pair of Dict and RLU. Well, we 
     /// assume consistency. Maintaining consistency requires use of

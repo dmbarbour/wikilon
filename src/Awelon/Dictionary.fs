@@ -174,7 +174,7 @@ module Dict =
         let cs' = updChild (BS.unsafeHead p) (BS.unsafeTail p) d (Map.empty)
         mkDict None None cs'
 
-    // prepend prefix specialized for known child nodes
+    // prepend prefix specialized for known valid child nodes
     let inline private prependChildPrefix (p:Prefix) (c:Dict) : Dict =
         if BS.isEmpty p then c else
         let cs' = Map.add (BS.unsafeHead p) (struct((BS.unsafeTail p), c)) (Map.empty)
@@ -461,8 +461,9 @@ module Dict =
     /// The efficiency goal is to avoid iterating nodes when we have
     /// obvious reference equality. Of course, we might still need to
     /// read nodes beyond those we iterate to look up old definitions.
-    /// This implementation assumes short `/ secureHash` chains, and 
-    /// does not check for a latest common ancestor. 
+    /// This implementation assumes shallow `/ secureHash` chains.
+    ///
+    /// Only representations for definitions are compared.
     let diff (a0:Dict) (b0:Dict) : seq<Symbol * VDiff<Def>> =
         let rec diffP p a b =
             if System.Object.ReferenceEquals(a,b) then Seq.empty else
@@ -479,7 +480,7 @@ module Dict =
                 | Some vdiff -> Seq.singleton (p,vdiff)
             Seq.append sv (diffCS p a b)
         and diffCS p a b = // diff all possible indexes 
-            // this is the only lazy part of our sequence...
+            // this is the lazy part of our sequence...
             Seq.concat (Seq.map (diffIX p (a.cs) (b.cs)) seqBytes)
         and diffIX p acs bcs ix = // diff specific index
             match Map.tryFind ix acs, Map.tryFind ix bcs with
@@ -493,11 +494,8 @@ module Dict =
                 diffP (joinBytes p ix (BS.take n ap)) ac' bc' 
         diffP (BS.empty) a0 b0
 
-    // TODO: efficient subtraction, intersection, and union
-    
-
-    // Intersection on symbols. Right-biased in definitions. 
-    // let intersect (a0:Dict) (b0:Dict) : Dict =
+    // TODO: efficient subtraction, intersection, and union?
+    // I want to leverage shared references in all cases.
 
     // `/` SP secureHash LF
     let private protoRefSize = uint64 (3 + RscHash.size) 
@@ -507,16 +505,16 @@ module Dict =
         | None -> struct(0UL,0UL)       // no line
         | Some None -> struct(1UL,2UL)  //  `/` LF
         | Some (Some _) -> struct(1UL,protoRefSize) // `/` SP secureHash LF
-            // Don't want to serialize ref ID.
 
     let inline private sizeVU (vu : DefUpd option) =
         match vu with
         | None -> struct(0UL,0UL)
-        | Some (Some def) -> 
+        | Some (Some def) ->
             match def with
             | Inline bytes ->
-                // drop SP for empty definition
+                // if empty  `:` LF
                 if BS.isEmpty bytes then struct(1UL,2UL) else
+                // otherwise `:` SP bytes LF
                 struct(1UL, 3UL + uint64 (BS.length bytes))
             | Remote _ | Binary _ -> 
                 // `:` SP (`$`|`%`) secureHash LF
@@ -605,7 +603,7 @@ module Dict =
     let private parseDir (c:Codec<Dict>) (db:Stowage) (s:ByteString) : Dir =
         if BS.isEmpty s then None else
         if (RscHash.size <> BS.length s) then raise ByteStream.ReadError else
-        // TODO: use ephemeron table for Dict refs to improve sharing
+        // TODO: use ephemeron table for Dict refs to improve memory sharing
         Some (LVRef.wrap (VRef.wrap c db s))
 
     /// Parse a single line from a dictionary. May raise ByteStream.ReadError.
@@ -624,16 +622,15 @@ module Dict =
         let struct(ln,more) = BS.span ((<>) cLF) s
         Some (onLine ln, BS.drop 1 more)
 
-    /// Parse entries in a dictionary string. May raise ByteStream.ReadError.
+    // Parse entries in a dictionary string. May raise ByteStream.ReadError.
     let private parseDictEnts mkDef mkDir (s:ByteString) : seq<DictEnt> =
         Seq.unfold (parseLineStep (parseDictEnt mkDef mkDir)) s
 
     let inline private parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
-    // divide huge prefixes into manageable fragments. Mostly, this is
-    // to handle the worst-case behavior for super-long symbols. In the
-    // normal use cases, it should have no impact.
+    // divide huge prefixes into manageable fragments. Simplifies worst
+    // case behavior, but shouldn't be relevant for normal dictionaries.
     let inline private limitPrefix lim struct(p,c) =
         struct(BS.take lim p, prependChildPrefix (BS.drop lim p) c)
 
@@ -643,19 +640,19 @@ module Dict =
     // the root node until sufficient updates are available. 
     let rec private nodeCompact (cD:Codec<Dict>) (db:Stowage) (d0:Dict) =
         // heuristic constants
-        let thresh = 25UL * uint64 (RscHash.size)
-        let flushThresh = 9UL * thresh
-        if Map.isEmpty (d0.cs) && Option.isNone (d0.vu) then
+        let thresh = 25UL * uint64 (RscHash.size) // minimum node size
+        let flushThresh = 9UL * thresh // per-node update buffer 
+        let defThresh = int (flushThresh >>> 2) // def at most 25% of buffer
+        let bNoUpdates = Map.isEmpty (d0.cs) && Option.isNone (d0.vu)
+        if bNoUpdates then
             // trivial case, no updates buffered at this node
             match (d0.pd) with
             | Some (Some _) -> struct(d0,1UL,protoRefSize)
             | _ -> struct(empty,0UL,0UL)
         else
-            // always merge updates at this step, even if there's just one.
-            // We'll buffer updates only based on our flush threshold.
-            let dM = mergeProto d0
+            let dM = mergeProto d0 // apply updates 
             let struct(ctM,szM) = size dM
-            let struct(dF,ctF,szF) =
+            let struct(dF,ctF,szF) = // flush to child nodes if oversized
                 let skipFlush = (szM < flushThresh) || (Map.isEmpty (dM.cs))
                 if skipFlush then struct(dM,ctM,szM) else
                 let compactChild (struct(cs,ct,sz)) ix pc0 =
@@ -677,7 +674,13 @@ module Dict =
                         struct(cs',ct',sz')
                 let struct(cs',ctCS,szCS) = // compact and compute sizes
                     Map.fold compactChild (struct(Map.empty,0UL,0UL)) (dM.cs)
-                let vu' = dM.vu // empty prefix cannot be flushed to child node 
+                let vu' = 
+                    match dM.vu with
+                    | Some (Some (Inline s)) when ((BS.length s) > defThresh) ->
+                        // move oversized definitions into separate node
+                        let ref = VRef.stow (EncBytesRaw.codec) db s
+                        Some (Some (Remote ref))
+                    | vu -> vu
                 let struct(ctVU,szVU) = sizeVU vu'
                 let dF = mkDict None vu' cs'
                 let ctF = ctVU + ctCS
@@ -695,8 +698,8 @@ module Dict =
     // larger update at the root before we flush.
 
     /// A reasonable default codec for Dictionary nodes. Heuristic.
-    /// After compaction, dictionary size is no more than 2kB, with
-    /// larger nodes moving to a `/ secureHash` reference.
+    /// After compaction, dictionary size is small (at most a couple
+    /// kilobytes). Big dictionaries are compacted to `/ secureHash`.
     let node_codec : Codec<Dict> =
         { new Codec<Dict> with
             member __.Write d dst = 

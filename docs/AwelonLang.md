@@ -199,11 +199,9 @@ Other loop combinators can be built upon `z`. For example, we can develop a `for
 
 Annotations can easily indicate [memoization](https://en.wikipedia.org/wiki/Memoization).
 
-        [computation](memo) => [result]
+For example, `[Function](memo2)` might express that we should memoize the function together with its next two arguments. The runtime would find or create a memoization table specific to the function, likely specialized for the expected argument type. Of course, memoization does impose some overheads, so it must be applied carefully or performance will suffer. Effective incremental computing requires use of memoization together with cache-friendly patterns: compositional views over persistent data structures, stable *Stowage* identifiers, etc..
 
-Memoization involves searching for an existing record of the computation, or writing one if it does not exist. The idea is to trade space for time. Of course, there are also significant overheads for storage and lookup, so this should be applied carefully.
-
-For effective incremental computing, we must use memoization together with cache-friendly patterns: compositional views over persistent data structures. We also need stable *Stowage* identifiers - allocating new names would hinder memoization.
+*Aside:* Awelon systems are purely functional, but memoization over time-series data can model many stateful applications.
 
 ## Error Reporting
 
