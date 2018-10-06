@@ -56,10 +56,8 @@ module DictRLU =
     let wEPARSE : Symbol = BS.fromString "EPARSE"
 
     // wrap annotation words with parentheses as dependencies.
-    let private wrapParens (w:Word) : Symbol =
-        let lP = BS.singleton (byte '(')
-        let rP = BS.singleton (byte ')')
-        BS.append3 lP w rP
+    let inline private wrapParens (w:Word) : Symbol =
+        BS.append3 (BS.singleton (byte '(')) w (BS.singleton (byte ')'))
 
     let private addTokDeps (s:Set<Symbol>) (struct(tt,w) : Token) : Set<Symbol> =
         match tt with
@@ -90,75 +88,265 @@ module DictRLU =
         // assume a non-empty binary reference 
         addTokDeps (Set.empty) (struct(TT.Text,w_null))
 
+    /// Find dependencies of a definition. Will use EPARSE if the
+    /// definition fails to parse. 
     let defDeps (def:Def) : Set<Symbol> =
         match def with
         | Inline s -> parseDeps s
         | Remote ref -> parseDeps (VRef.load ref) 
         | Binary _ -> binaryDeps
 
-    /// Our reverse-lookup index can be represented using a dictionary
-    /// for convenient export. We'll only use the keys from the trie.
-    /// Each key of form `word@client` means client directly uses word.
+    let duDeps (du:Def option) : Set<Symbol> =
+        match du with
+        | Some def -> defDeps def
+        | None -> Set.empty
+
+
+    // REPRESENTATION OF REVERSE-LOOKUP INDEX?
+    //
+    // Naively, we could just use a trie or dictionary with keys like
+    // `symbol@word`. This would combine all references to `symbol` at
+    // one location in the tree, but would also make it difficult to
+    // merge indices from different volumes of a dictionary because any
+    // word may depend on symbol.
+    //
+    // A "volume" of a dictionary is essentially a common prefix for
+    // the words defined within that volume, e.g. the "b" volume or 
+    // the "foo-" volume. A volume corresponds to dictionary packages,
+    // and aligns with how dictionaries are indexed.
+    // 
+    // To better isolate volumes, one option is to interleave symbol
+    // and word. `SYMBOL@word` might be represented as `wSoYrMdB.OL`.
+    // This complicates lookup for SYMBOL because we must scan several
+    // volumes, but it also aligns the reverse-lookup with dictionary
+    // volumes, which allows for some efficient updates and caching.
+
+    /// A separator '.' is injected between word and symbol within the
+    /// mangled key for the reverse lookup index. This must not appear
+    /// within the encoded symbols or words. 
+    let cSep = byte '.'
+
+    /// This function produces a string representing that the word
+    /// directly depends on the symbol. We interleave bytes from 
+    /// `word` and `symbol` to `wsoyrmdb.ol`. Logically, we add the
+    /// separator `.` to the shorter of symbol and word.
     ///
-    /// Annotations are represented in the RLU using `(anno)@client`.
-    /// We will not track embedded texts, binaries, or natural numbers
-    /// precisely (though dependencies on zero, succ, null, cons will
-    /// be tracked). 
-    ///
-    /// I assume dictionaries will be augmented with metadata, maintained
-    /// by hand or bot, arranged for easy access via reverse lookup of the
-    /// words or dedicated annotations.
+    /// This results in `symbol` having multiple locations in the 
+    /// index aligned with volumes of the dictionary. For example,
+    /// all references to `symbol` from words starting with `w` are
+    /// in the `ws` index volume. This allows for index updates to
+    /// better align with dictionary updates, improving stability
+    /// of the index and allows merging a dictionary package index.
+    let mangleSymbolAtWord symbol word =
+        let lS = BS.length symbol
+        let lW = BS.length word
+        let mem = Array.zeroCreate (1 + lS + lW)
+        let shLen = min lS lW
+        for ix = 0 to (shLen - 1) do
+            mem.[(2*ix)] <- word.[ix]
+            mem.[(2*ix)+1] <- symbol.[ix]
+        let off = 2 * shLen
+        if (shLen = lW) then 
+            // logically add separator to word
+            mem.[off] <- cSep
+            BS.blit (BS.drop shLen symbol) mem (off+1)
+        else 
+            // logically add separator to symbol
+            mem.[off] <- word.[shLen]
+            mem.[off+1] <- cSep
+            BS.blit (BS.drop (shLen+1) word) mem (off+2)
+        BS.unsafeCreateA mem
+
+    /// The reverse-lookup index is represented by a Dictionary with
+    /// mangled keys representing symbols together with locations. 
+    /// We can find symbols with some prefix under words with another
+    /// prefix, but the lookup is sophisticated due to the mangling.
+    /// (See symbolAtWord.)
+    /// 
+    /// The RLU index does not perform full-text or binary search.
+    /// But developers can build on this, introducing manual tags or
+    /// categories, e.g. using `foo-tags`, to track topics and other
+    /// content for more effective search.
     type RLU = Dict
 
     module RLU =
+        // we'll be leaving the definition fields blank
+        let private blank : Def = Inline (BS.empty)
 
-        let cSep = byte '@'
-        let inline wordAtClient w c = BS.append3 w (BS.singleton cSep) c
-        let blankDef = Some (Inline (BS.empty))
-
+        // empty or initial RLU index
         let empty = Dict.empty
 
-        /// Find direct clients with a specific prefix of a word. This is
-        /// useful for some application models where we might render a word
-        /// as a forum root with "replies" in a threaded model.
-        let wordClientsWithPrefix (w:Symbol) (p:Prefix) (rlu:RLU) : seq<Symbol> =
-            rlu |> Dict.extractPrefix (wordAtClient w p) 
-                |> Dict.prependPrefix p // nop for empty prefix
-                |> Dict.toSeq 
-                |> Seq.map fst // ignore the value field
+        /// Test if a given word contains a given symbol.
+        let isSymbolAtWord symbol word rlu =
+            Dict.contains (mangleSymbolAtWord symbol word) rlu
 
-        /// Find all direct clients of a word.
-        let wordClients (w:Word) (rlu:RLU) : seq<Symbol> =
-            wordClientsWithPrefix w (BS.empty) rlu
+        // active pattern for implicit prefix merge
+        let private (|Child|) (struct(p,c)) = Dict.prependPrefix p c
 
-        /// Find all direct clients of an annotation.
-        let annoClients (w:Word) (rlu:RLU) : seq<Symbol> =
-            wordClients (wrapParens w) rlu
 
-        /// Find all words whose definitions failed to parse.
-        let parseErrors (rlu:RLU) : seq<Symbol> =
-            wordClients wEPARSE rlu
+        // To process a reverse-lookup index, we'll frequently need
+        // to look at multiple branches, and we want to do this lazily
+        // so we'll use the sequence model. So I'll try to cover the
+        // common cases.
+        //
+        // When processing an RLU, there are four major states on two
+        // axes to consider based on where we are in a key: initial or
+        // final state (before or after the separator), and word or
+        // symbol byte. 
+        //
+        //  IW - initial word byte (before .)
+        //  IS - initial symbol byte (before .)
+        //  FW - final word byte (after .) 
+        //  FS - final symbol byte (after .)
+        //
+        // These identifiers are used in shorthand.
 
-        let private defBlank : Def = Inline (BS.empty)
-        let addWordDeps (c:Word) (deps:Set<Symbol>) (rlu0:RLU) : RLU =
-            let addDep rlu w = Dict.add (wordAtClient w c) defBlank d 
+        let rec private browseSym_IW (s:Symbol) (wp:Prefix) (rlu:RLU) : seq<Word * seq<Word>> =
+            let d = Dict.mergeProto rlu // load dictionary
+            if Map.isEmpty (d.cs) then Seq.empty else
+            let onChild ((ix,(Child c))) =
+                if (ix = cSep) 
+                    then browseSym_FS s wp c 
+                    else browseSym_IS s (BS.snoc wp ix) c
+            rlu.cs |> Map.toSeq |> Seq.map onChild
+        and private browseSym_IS s wp c =
+            if BS.isEmpty s then
+                // require match on symbol separator
+                let rem = Dict.extractPrefix (BS.singleton cSep) c
+                if Dict.isEmpty rem then Seq.empty else
+                Seq.singleton (wp, Seq.map fst (Dict.toSeq rem))
+            else
+                // match on next symbol character
+                let rlu = Dict.extractPrefix (BS.take 1 s) c
+                browseSym_IW (BS.drop 1 s) wp rlu
+        and private browseSym_FS s wp c =
+            // word is shorter than symbol, look for symbol entry
+            if not (Dict.contains s c) then Seq.empty else
+            Seq.singleton (wp, Seq.singleton (BS.empty))
+                    
+        /// Browse for instances of a symbol. 
+        ///
+        /// This function supports tree-structured browsing. We find
+        /// several prefixes, each of which may have many suffixes,
+        /// in a manner aligned with the RLU index nodes.
+        let browseSymbol (s:Symbol) (rlu:RLU) : seq<Word * seq<Word>> = 
+            Seq.delay (fun () -> browseSym_IW s (BS.empty) rlu)
+
+        let private unbrowse ((wp,ss)) = Seq.map (BS.append wp) ss
+
+        /// Find all instances of a symbol as a flat sequence.
+        let matchSymbol (s:Symbol) (rlu:RLU) : seq<Word> =
+            browseSymbol s rlu |> Seq.map unbrowse |> Seq.concat
+
+        /// Browse for words matching prefix that contain a symbol.
+        /// Efficiently isolate the search to a dictionary volume.
+        let browseSymbolInVolume (s:Symbol) (wp:Prefix) (rlu:RLU) : seq<Word * seq<Word>> =
+            if BS.isEmpty wp then browseSymbol s rlu else
+            Seq.delay (fun () ->
+                let k = mangleSymbolAtWord s wp
+                if ((BS.length s) < (BS.length wp)) then
+                    // e.g. look for `sym` in `word` or `wordy`
+                    //   - extract full key `wsoyrmd.` or `wsoyrmd.y`
+                    //   - anything that remains is a word suffix
+                    let rem = Dict.extractPrefix k rlu
+                    if Dict.isEmpty rem then Seq.empty else
+                    Seq.singleton (wp, Seq.map fst (Dict.toSeq rem))
+                else 
+                    // e.g. look for `sym` or `symbol` in `foo`
+                    //   - compute key `fsoyom.` or `fsoyom.bol`
+                    //   - split prefix `fsoyom` and suffix `bol`
+                    //   - extract prefix then browse for suffix
+                    let ixSep = (2 * (BS.length wp))
+                    assert(cSep = k.[ixSep]) // assumption via mangle def
+                    let kp = BS.take ixSep k
+                    let s' = BS.drop (ixSep + 1) k
+                    let rlu' = Dict.extractPrefix kp rlu
+                    browseSym_IW s' wp rlu'
+            )
+
+        /// Find all instances of a symbol within a volume, flat sequence.
+        let matchSymbolInVolume s wp rlu =
+            browseSymbolInVolume s wp rlu |> Seq.map unbrowse |> Seq.concat
+
+        // TODO: Multi-symbol lookups (medium priority)
+        //
+        // I'm very interested in finding words that contain *all* of
+        // several symbols. Mostly, this is useful for keyword or tag 
+        // searches. I'm uncertain how feasible this would be, however.
+        // Can we take advantage of the RLU volume structure?
+        //
+        // Say we're looking for symbols `symbol` and `example`, and we
+        // have words `foobar` and `bar-food`. Under `foobar`, we try to
+        // search both `fsoyombbaorl.` and `feoxoabmaprl.e`. Incrementally,
+        // if we search `fe` but fail to find `fs`, we cannot provide any
+        // result for `f*`. OTOH, if we DO find both `fe` and `fs`, we can
+        // accept preliminary result of `f` and continue to search for
+        // symbol suffixes `ymbol` and `xample`. 
+        //
+        // A related issue is that after we accept `f` we have two branches
+        // for `oyombbaorl.` and `oxoabmaprl.e`, but these came originally
+        // from the `fs` and `fe` branches. So we must somehow join these
+        // branches back together, or allow that we'll be processing our
+        // symbols on many distinct branches concurrently.
+        //
+        // There are a few more challenges with respect to the suffix and
+        // our symbols having different sizes.
+        //
+        // It seems that this is feasible, though not at easy to implement.
+        // all easy to implement. It will likely be important long-term, 
+        // for discovery and search of manually indexed data.
+
+        (*
+        let rec private browseSS_IW (ss:Symbol list) (wp:Prefix) (rlu:RLU) : seq<Word * seq<Word>> =
+            let d = Dict.mergeProto rlu // load dictionary
+            if Map.isEmpty (d.cs) then Seq.empty else
+            let onChild ((ix,(Child c))) =
+                if (ix = cSep) 
+                    then browseSym_FS ss wp c 
+                    else browseSym_IS ss (BS.snoc wp ix) c
+            rlu.cs |> Map.toSeq |> Seq.map onChild
+        and private browseSS_IS ss wp c =
+            if BS.isEmpty s then
+                // require match on symbol separator
+                let rem = Dict.extractPrefix (BS.singleton cSep) c
+                if Dict.isEmpty rem then Seq.empty else
+                Seq.singleton (wp, Seq.map fst (Dict.toSeq rem))
+            else
+                // match on next symbol character
+                let rlu = Dict.extractPrefix (BS.take 1 s) c
+                browseSym_IW (BS.drop 1 s) wp rlu
+        and private browseSym_FS s wp c =
+            // word is shorter than symbol, look for symbol entry
+            if not (Dict.contains s c) then Seq.empty else
+            Seq.singleton (wp, Seq.singleton (BS.empty))
+
+        *)
+
+        // TODO: Partial symbol matches (low priority)
+        //
+        // It's feasible to partially match symbols within the dictionary.
+        // It isn't feasible to limit the results so words appear only once,
+        // but we could return unique symbol-word pairs. 
+        //
+
+
+        // Adding definitions.
+        let private defBlank : Dict.Def = Dict.Inline (BS.empty)
+        let private addWordDeps (w:Word) (deps:Set<Symbol>) (rlu0:RLU) : RLU =
+            let addDep rlu sym = Dict.add (symbolAtWord sym w) blank d 
             Set.fold addDep rlu0 deps
-        let remWordDeps (c:Word) (deps:Set<Symbol>) (rlu:RLU) : RLU =
-            let remDep rlu w = Dict.remove (wordAtClient w c) rlu
+        let private remWordDeps (w:Word) (deps:Set<Symbol>) (rlu:RLU) : RLU =
+            let remDep rlu sym = Dict.remove (symbolAtWord sym w) rlu
             Set.fold remDep rlu0 deps
 
-        /// Update dependencies for a word.
-        let updWordDeps (w:Word) (old_deps:Set<Symbol>) (new_deps:Set<Symbol>) (rlu:RLU) : RLU =
-            rlu |> remWordDeps w (Set.difference old_deps new_deps)
-                |> addWordDeps w (Set.difference new_deps old_deps)
-
-        let inline private defOptDeps (defOpt : Def option) : Set<Symbol> =
-            match defOpt with
-            | Some def -> defDeps def
-            | None -> Set.empty
-
         let updWordDef (w:Word) (old_def:Def option) (new_def:Def option) (rlu:RLU) =
-            updWordDeps w (defOptDeps old_def) (defOptDeps new_def) rlu
+            // only index valid words
+            if not (isValidWord w) then rlu else
+            let old_deps = duDeps old_def
+            let new_deps = duDeps new_def
+            // assuming most edits are minor, update only the difference
+            rlu |> remWordDeps w (Set.difference old_deps new_deps) // remove (old - new)
+                |> addWordDeps w (Set.difference new_deps old_deps) // add (new - old)
 
         // Update RLU with a given difference in definitions.
         // Deletion of a word should erase all dependencies.
@@ -171,19 +359,44 @@ module DictRLU =
             updWordDef w old_def new_def rlu
 
         /// Update the RLU given initial and final dictionaries.
-        let update (d0:Dict) (df:Dict) (rlu:RLU) : RLU =
+        let updateByDiff (d0:Dict) (df:Dict) (rlu:RLU) : RLU =
             Dict.diff d0 df |> Seq.fold onDictDiff rlu
+
+        /// Update RLU given the initial dictionary and an entry.
+        let applyDictEnt (d0:Dict) (upd:DictEnt) (rlu:RLU) : RLU =
+            match upd with
+            | Define (w, new_def) -> 
+                rlu |> updWordDef (Dict.tryFind w d0) new_def
+            | Direct (p, dir) ->
+                // update by difference local to prefix
+                let d0_at_p = Dict.selectPrefix p d0
+                let df_at_p = Dict.prependPrefix p (Dict.fromProto dir)
+                updateByDiff (d0_at_p) (df_at_p) rlu
 
         /// As update, but performs compaction incrementally, ensuring
         /// we don't have the full index in memory at once. 
-        let compactingUpdate (db:Stowage) (d0:Dict) (df:Dict) (rlu0:RLU) : RLU =
+        let compactingUpdateByDiff (db:Stowage) (d0:Dict) (df:Dict) (rlu0:RLU) : RLU =
             let chunkSize = 2000 // for incremental compaction
-            let onChunk rlu s = Seq.fold onDictDiff rlu s |> Dict.compact db
+            let onChunk rlu chunk = Seq.fold onDictDiff rlu chunk |> Dict.compact db
             Dict.diff d0 df 
                 |> Seq.chunkBySize chunkSize
                 |> Seq.fold onChunk rlu0
 
-        // TODO: potentially optimize initialization of the index. 
+        let compactingApplyDictEnt (db:Stowage) (d0:Dict) (upd:DictEnt) (rlu:RLU) : RLU =
+            match upd with
+            | Define (w, new_def) ->
+                rlu |> updWordDef (Dict.tryFind w d0) new_def
+                    |> Dict.compact db
+            | Direct (p, dir) ->
+                // update by difference local to prefix
+                let d0_at_p = Dict.selectPrefix p d0
+                let df_at_p = Dict.prependPrefix p (Dict.fromProto dir) 
+                compactingUpdateByDiff db d0_at_p df_at_p rlu
+
+        // TODO: memo-cached computation of RLU for more efficient import
+        // of dictionaries (requires dictionary union function)
+
+        // TODO: consider optimizing initialization of index. 
 
     /// DictRLU is assumed to be a consistent pair of dictionary and reverse
     /// lookup index. Consistency can be maintained by use of the DictRLU API.
@@ -226,6 +439,20 @@ module DictRLU =
           rlu = RLU.updateRLU (d0.dict) upd (d0.rlu)
         }
 
+    /// Search dictionary for definition of a word.
+    let inline tryFind w d = Dict.tryFind w (d.dict)
+
+    /// Find all clients of a word as a sequence.
+    let wordClients w d = RLU.wordClientsWithPrefix w (BS.empty) (d.rlu)
+
+    /// Look for clients of an annotation, given symbol from within
+    /// the annotation parentheses, i.e. given `foo`, look for `(foo)`. 
+    let annoClients w d = wordClients (wrapParens w) d
+
+    /// Find all words whose definitions failed to parse.
+    let parseErrors d = wordClients wEPARSE d
+
+
     /// Encode DictRLU as a pair of size-prefixed dictionaries.
     let codec = 
         let cP = EncPair.codec' (Dict.codec) (Dict.codec)
@@ -238,7 +465,8 @@ module DictRLU =
     let inline compact (db:Stowage) (d:DictRLU) : DictRLU =
         Codec.compact codec db d
 
-    /// A compacting update will control memory usage.
+    /// A compacting update to limit and control memory usage.
+    /// Suitable for non-incremental differences.
     let compactingWithDict (db:Stowage) (upd:Dict) (d:DictRLU) : DictRLU =
         let upd' = Dict.compact db upd //
         { dict = upd' 

@@ -147,6 +147,11 @@ module BS =
     let inline toSeq (s : ByteString) : seq<byte> = s :> seq<byte> // IEnumerable<byte>
     let inline toList (s : ByteString) : byte list = List.ofSeq (toSeq s)
 
+    /// Copy a ByteString (which controls length, etc.) into a byte
+    /// array at a given offset.
+    let inline blit (src:ByteString) (tgt:byte[]) (tgtOff:int) =
+        Array.blit (src.UnsafeArray) (src.Offset) tgt tgtOff (src.Length)
+
     /// concatenate into one large bytestring
     let concat (xs : seq<ByteString>) : ByteString =
         let mem = new System.IO.MemoryStream()
@@ -157,12 +162,12 @@ module BS =
     let cons (b : byte) (s : ByteString) : ByteString =
         let mem = Array.zeroCreate (1 + s.Length)
         do mem.[0] <- b
-        do Array.blit s.UnsafeArray s.Offset mem 1 s.Length
+        do blit s mem 1
         unsafeCreateA mem
 
     let snoc (s : ByteString) (b : byte) : ByteString =
         let mem = Array.zeroCreate(s.Length + 1)
-        do Array.blit s.UnsafeArray s.Offset mem 0 s.Length
+        do blit s mem 0
         do mem.[s.Length] <- b
         unsafeCreateA mem
 
@@ -170,16 +175,16 @@ module BS =
         if isEmpty a then b else
         if isEmpty b then a else
         let mem = Array.zeroCreate (a.Length + b.Length)
-        do Array.blit a.UnsafeArray a.Offset mem        0 a.Length
-        do Array.blit b.UnsafeArray b.Offset mem a.Length b.Length
+        do blit a mem 0
+        do blit b mem (a.Length)
         unsafeCreateA mem
 
     /// Appending three items comes up quite frequently due to separators.
     let append3 (a:ByteString) (b:ByteString) (c:ByteString) : ByteString =
         let mem = Array.zeroCreate (a.Length + b.Length + c.Length)
-        do Array.blit a.UnsafeArray a.Offset mem           0           a.Length
-        do Array.blit b.UnsafeArray b.Offset mem       a.Length        b.Length
-        do Array.blit c.UnsafeArray c.Offset mem (a.Length + b.Length) c.Length
+        do blit a mem 0
+        do blit b mem (a.Length)
+        do blit c mem (a.Length + b.Length)
         unsafeCreateA mem
 
     /// take and drop are slices that won't raise range errors.

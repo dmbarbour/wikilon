@@ -131,7 +131,8 @@ module Dict =
     
     /// Translate a dictionary to a sequence of local entries. This
     /// has a moderate overhead to reconstruct symbols and prefixes.
-    let toSeqEnt (d:Dict) : seq<DictEnt> = toSeqEntP (BS.empty) d
+    let toSeqEnt (d:Dict) : seq<DictEnt> = 
+        Seq.delay (fun () -> toSeqEntP (BS.empty) d)
 
     let inline mkDict pd vu cs = { pd = pd; vu = vu; cs = cs }
 
@@ -409,8 +410,9 @@ module Dict =
         Seq.append sv scs
         
     /// Compute a sequence of defined symbols. This will perform
-    /// erasures and updates incrementally, as needed.
-    let toSeq (d:Dict) : seq<Symbol * Def> = toSeqP (BS.empty) d
+    /// erasures and updates incrementally, as needed. 
+    let toSeq (d:Dict) : seq<Symbol * Def> = 
+        Seq.delay (fun () -> toSeqP (BS.empty) d)
 
     /// Partition the dictionary on a symbol, such that all symbols
     /// smaller are to the left and symbols equal or greater are to
