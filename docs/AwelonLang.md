@@ -10,7 +10,7 @@ Awelon is a Turing complete, purely functional language based on concatenative c
 
 Awelon additionally has limited support for data - natural numbers, embedded texts, and large binaries. Beyond these few primitives, programmers may define words in a dictionary. Evaluation proceeds by rewriting according to primitive combinators and lazily rewriting words to their definitions when doing so permits further progress. Hence, the result of evaluation is an Awelon program equivalent to the input.
 
-Those `[]` square brackets represent first-class functions and contain Awelon code. Values in Awelon are always formally first-class functions, frequently using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or variants thereof. However, Awelon compilers or interpreters (guided by annotations) will recognize and optimize common function and value types. This is a concept of software *Accleration* to support efficient use of CPU and memory, extending the set of language *performance primitives* relative to a reference implementation. Acceleration for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
+Those `[]` square brackets represent first-class functions and contain Awelon code. Values in Awelon are always formally first-class functions, frequently using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or variants thereof. However, Awelon compilers or interpreters (guided by annotations) will recognize and optimize common function and value types. This is a concept of software *Accleration* to support efficient use of CPU and memory, extending the set of language *performance primitives* relative to a reference implementation. Accelerators for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
 
 A runtime will recognize a set of *Annotations*, represented by parenthetical words. For example, `[A](par)` might request parallel evaluation for the expression `A`, while `[F](trace)` might indicate that `[F]` should be written to a debugging log or console. Annotations formally have identity semantics: erasing or ignoring them shouldn't affect observable behavior within a computation. Nonetheless, annotations can enhance performance, guide evaluation, express and enforce programmer assumptions, support static analysis or debugging.
 
@@ -37,7 +37,7 @@ Awelon has limited support for natural numbers. Syntactically, natural numbers a
         2 = [1 succ]
         42 = [41 succ]
 
-Definition of `succ` and `zero` - and hence our model for natural numbers - is in theory left to our developers. For example, we could select between a recursive sum encoding (`type Nat = μN.(1+N)` where `type (A+B) = ∀r.(A→r)→(B→r)→r`) or a Church encoding (`type Nat = ∀x.(x→x)→x→x`). In practice, runtime support for *Acceleration* determines which model will be favored. For more sophisticated number types, it's feasible to build a tower of numbers via *Editable Views*.
+Definition of `succ` and `zero` - and hence our model for natural numbers - is in theory left to our developers. For example, we could select between a recursive sum encoding (`type Nat = μN.(1+N)` where `type (A+B) = ∀r.(A→r)→(B→r)→r`) or a Church encoding (`type Nat = ∀x.(x→x)→x→x`). In practice, runtime support for *Accelerators* determines which model will be favored. For more sophisticated number types, it's feasible to build a tower of numbers via *Editable Views*.
 
 *Note:* I've frequently considered a hard-coded interpretation, e.g. the Church encoding `N = [(c a)^N d]`, to guarantee stable meaning across all Awelon dictionaries. But this hardly seems worthwhile in context of the many other data types we will build above natural numbers.
 
@@ -48,15 +48,17 @@ Awelon has limited support for embedding texts inline between double quotes such
         "" = [null]
         "hello" = [104 "ello" cons]
 
-That is, texts are simply an ASCII-encoded list of bytes. Like natural numbers, `null` and `cons` must be defined in the dictionary, and *Acceleration* determines the de-facto standard. 
+That is, texts are simply an ASCII-encoded list of bytes. Like natural numbers, `null` and `cons` must be defined in the dictionary, and *Accelerators* will determine the de-facto standard definitions.
 
-Embedded texts are limited to ASCII minus control characters. There are no built-in escape characters, and the double quote also is forbidden. Although this is very limited, it's sufficient for lightweight DSLs, labels, basic test data, comments, rendering hints. We can build above the basic text using *Editable Views* - for example, `["hello\nmulti-line\nworld" literal]` could evaluate to a binary with line-feeds in place of the `\n` sequence. For large texts or ad-hoc binaries, developers are encouraged to favor *Binary Resources* at the dictionary layer rather than awkwardly embedded text.
+Embedded texts are limited to ASCII minus control characters and double-quote. There are no escape characters! However, it's not difficult to wrap texts with processing to handle user-defined escapes, e.g. `["hello\nmulti-line\nworld" literal]` might evaluate to a binary with line-feeds in place of each `\n` sequence, and a standard processing functions could easily be accelerated and supported in *Editable Views*. 
+
+*Note:* For large texts and binaries, developers are encouraged to leverage *Secure Hash Resources* at the dictionary layer, and rope-like data structures where appropriate. Embedded texts are intended for labels, test data, inline comments, one-liner micro-DSLs, etc..
 
 ## Annotations
 
 Annotations are special parenthetical words, such as `(par)` or `(error)`.
 
-Annotations always have the same formal semantics: identity. That is, adding annotations to a program must not affect its formal behavior. However, within this limitation, annotations are assigned ad-hoc *informal* semantics by the runtime or compiler. For example, `[A](par)` can request parallel evaluation of `[A]`, while observing `(error)` can cause evaluation to fail fast and simplify debugging. In general, annotations augment performance, safety, debugging, and display of programs. They encode any *programmer intentions* other than functional behavior.
+Annotations always have the same formal semantics: identity. That is, adding annotations to a program must not affect its formal behavior. However, within this limitation, annotations are assigned ad-hoc *informal* semantics by the runtime or compiler. For example, `[A](par)` can request parallel evaluation of `[A]`, `(trace)` could print to a debug console, and observing `(error)` can cause evaluation to fail fast. In general, annotations augment performance, safety, debugging, and display of programs. They encode any *programmer intentions* other than functional behavior.
 
 Some potential annotations:
 
@@ -75,15 +77,15 @@ Some potential annotations:
 
 Awelon does not constrain annotations beyond requirement for identity semantics.
 
-## Acceleration
+## Accelerators
 
-Awelon systems can support performance extensions for common data types. Like conventional languages, it's feasible to support ints, floats, arrays, and specialized operations upon them. I use the words 'acceleration' and 'accelerators' to describe this performance feature.
+Accelerators are built-in functions with reference implementations, controlled by annotation. Use of accelerators enables Awelon compilers or interpreters to extend the set of "performance primitives" available to Awelon programmers. With accelerators, we aren't restricted to just first-class function values and inefficient computation by Awelon's simple set of semantic primitives.
 
-Acceleration is precisely controlled by annotations. For example, we might use `(nat)` to indicate a value should have the natural number type and use the specialized natural number representation under the hood. We can use `[reference impl](accel-nat-add)` to replace the reference implementation by a built-in operation for adding two natural numbers. The reference implementation should be validated, but this can be done separately. Explicit use of annotations helps resist silent performance degradation: a compiler or interpreter should complain when an annotation is deprecated or unrecognized.
+For example, most Awelon systems will accelerate natural numbers. We might use `(nat32)` to indicate that a value should use an optimized representation for small natural numbers under the hood. A function to add two natural numbers could be annotated with `[reference impl] (accel-nat32-add)`, enabling an interpreter to symbolically substitute the reference implemementation by the built-in implementation. Separately, we can validate the reference implementation as part of a static system analysis.
 
-Essentially, it's just built-in functions with reference implementations. 
+Because acceleration is explicit via annotation, we can warn when an accelerator is not recognized or will soon be deprecated. Thus, performance with accelerators is predictable, stable, and will not rot silently. Modulo some minor hassles surrounding portability, programmers can confidently treat accelerators as language primitive.
 
-Beyond common data types, it's feasible to accelerate *interpreters* for embedded languages. For example, we could develop a safe subset of OpenCL or Vulkan then introduce an accelerator to interpret it. This would allow for developing ad-hoc high-performance implementations for many functions, albeit with a restriction for functional purity. But the more complicated an accelerator, the more likely we are to get it wrong, so caution is warranted.
+*Aside:* Besides simple arithmetic, accelerators might support linear algebra or interpret a safe subset of OpenCL or Vulkan for GPGPU computation. Similarly, accelerated evaluation of Kahn process network models (which are observably deterministic) could support parallel distributed computation. There are some interesting directions we can take the idea of accelerators, although every choice should be weighed carefully against simplicity and stability of implementation.
 
 ## Dictionary
 
@@ -103,7 +105,7 @@ Using secure hashes allows dictionaries to be deeply immutable, persistent data 
 
 *Note:* The dictionary does not permit comments. That sort of metadata must be embedded within the dictionary, using either associated symbols (such as `foo-meta-todo`) or embedding within definitions (like `"comment"(a2)d`). This permits metadata to be preserved and indexed like everything else.
 
-### Secure Hash Resources 
+### Secure Hash Resources
 
 Awelon dictionaries use secure hashes as identifiers for binary large objects. This has several nice properties: immutable, acyclic, cacheable, securable, provider-independent, self-authorizing, self-authenticating, implicitly structure sharing, automatically named, uniformly sized. Besides use in `/prefix secureHash` dictionary tree nodes, Awelon dictionaries may embed arbitrary binary resources via `%secureHash` or oversized Awelon definitions via `$secureHash`.
         
@@ -309,7 +311,7 @@ However, when we know we hold a unique reference to an array's representation, a
 
 ## Labeled Data
 
-Labeled data types (such as records and variants) are weakly commutative, human meaningful, and extensible in comparison to spatially structured data (such as `(A*B)` pairs and `(A+B)` sums). Awelon does not provide built-in support for labeled data. However, it isn't difficult to encode records as association lists, for example. Between annotations, acceleration, and editable views, it should be feasible to implement labeled data within Awelon.
+Labeled data types (such as records and variants) are weakly commutative, human meaningful, and extensible in comparison to spatially structured data (such as `(A*B)` pairs and `(A+B)` sums). Awelon does not provide built-in support for labeled data. However, it isn't difficult to encode records as association lists, for example. Between annotations, accelerators, and editable views, it should be feasible to implement labeled data within Awelon.
 
 An intriguing possibility is to work with *record constructor* functions, abstracting the actual record representation. A simple record constructor might look like `[[B] "b" put [A] "a" put ...]`. This preserves commutative structure within the record, permits flexible abstraction of records, and works conveniently with editable views. Updates would build the record, modify it, then rebuild the constructor - but this could be optimized away via accelerators.
 

@@ -437,6 +437,15 @@ module Dict =
                     else struct(lcs, Map.add ix (struct(p,c)) rcs)
         struct(mkDict None (d.vu) lcs', mkDict None None rcs')
 
+    /// Keep keys starting from given key, inclusive.
+    let inline fromKey k d =
+        let struct(_,dR) = splitAtKey k d
+        dR
+
+    /// Keep keys below a given key, exclusive.
+    let inline toKey k d =
+        let struct(dL,_) = splitAtKey k d
+        dL
 
     // translate options to VDiff
     let private diffOpt optA optB =
