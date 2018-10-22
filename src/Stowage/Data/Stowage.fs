@@ -65,6 +65,18 @@ exception MissingRsc of Stowage * RscHash
 
 module Stowage =
 
+    /// Fake Stowage. Drops everything you give it!
+    ///
+    /// Use cases: testing, default 'null' object, or computing an
+    /// ETAG based on logical compaction of a large data structure.
+    let fake : Stowage = 
+        { new Stowage with
+            member __.Stow s = RscHash.hash s
+            member db.Load h = raise (MissingRsc (db,h))
+            member __.Decref _ = ()
+            member __.Incref _ = ()
+        }
+
     // when tracking deps, don't want to implicitly hold a huge array
     // of origin data in memory, so we'll trimBytes first.
     let private depcons lst rsc = (BS.trimBytes rsc) :: lst 

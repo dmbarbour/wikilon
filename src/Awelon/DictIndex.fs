@@ -94,6 +94,10 @@ module DictRLU =
     /// The reverse-lookup index is represented as a Dictionary with
     /// mangled keys representing locations of symbols in another
     /// dictionary. The RLU dictionary value field is not used.
+    ///
+    /// Reverse lookup can be leveraged for tag or topic search, via
+    /// tag words `tag-foo` and simple conventions `foo-meta-tags`.
+    /// But tags would be maintained by hand or external software.
     type RLU = Dict
 
     module RLU =
@@ -238,18 +242,23 @@ module DictRLU =
                 let ss0 = symbols |> Set.toList |> List.map sToSP
                 ((BS.empty,ss0)::[]) // no initial prefix
 
+        open Search
+
         /// Search a volume of the dictionary for a set of symbols.
         let searchVolume (wp:Prefix) (symbols:Set<Symbol>) (rlu:RLU) : seq<Word> =
             Seq.delay (fun () ->
-                let ws0 = Search.initSearchVolume wp symbols rlu
-                Seq.unfold (Search.searchStep) ws0)
+                let ws0 = initSearchVolume wp symbols rlu
+                Seq.unfold searchStep ws0)
 
         /// Search results start at the given word lexicographically.
         /// This is suitable for incremental browsing of search results.
         let searchFrom (w0:Word) (symbols:Set<Symbol>) (rlu:RLU) : seq<Word> =
             Seq.delay (fun () ->
-                let ws0 = Search.initSearchFrom w0 symbols rlu
-                Seq.unfold (Search.searchStep) ws0)
+                let ws0 = initSearchFrom w0 symbols rlu
+                Seq.unfold searchStep ws0)
+
+        let inline search symbols rlu = 
+            searchVolume (BS.empty) symbols rlu
    
         // Constructing the RLU.
         let private blank : Dict.Def = Dict.Inline (BS.empty)
@@ -313,6 +322,7 @@ module DictRLU =
     /// API for updates. Based on the nature of a reverse-lookup index, the 
     /// cost for incremental maintenance is proportional to the size of our
     /// definition updates, so this is easily maintained in real-time.
+    [<Struct>]
     type DictRLU =
         { dict : Dict
           rlu  : RLU
@@ -393,5 +403,215 @@ module DictRLU =
   
     let compactingFromDict (db:Stowage) (d:Dict) : DictRLU =
         compactingWithDict db d empty
+
+// DictVX maintains an indexed version cache above DictRLU.
+module DictVX =
+
+    /// A word version is a short, cryptographically unique string
+    /// representing the word, its definition, and its transitive
+    /// dependencies (for parseable definitions).
+    ///
+    /// Intended for use as a key mapping to cached computations.
+    /// Those other caches can be shared across many dictionaries,
+    /// and use simple expiration models instead of invalidation.
+    type V = ByteString
+
+    // Note: We can leverage indirection, mapping from word version
+    // to a version for a word's type or link-optimized behavior. 
+    // The benefit of doing so would be to further improve sharing,
+    // hiding irrelevant structural details.
+
+    /// VX is an indexed word-version cache for a dictionary.
+    ///
+    /// As a cache, VX is normally incomplete. Missing elements are
+    /// computed and added to the cache on an as-needed basis. If a
+    /// word has an entry, so must its transitive dependencies (to
+    /// simplify invalidation). But empty VX is always valid.
+    ///
+    /// VX must be invalidated upon update to a word's definition.
+    /// Invalidation can be bounded by quota: updates normally erase
+    /// a minimal subset of entries, but at quota reset to empty VX.
+    type VX = Dict
+
+    // algorithms for invalidation, computing versions
+    module VX = 
+        let empty : VX = Dict.empty
+
+        /// VX ver represents potential changes to our versioning function.
+        let ver : byte = byte '1'
+
+        /// VX codec will write out a VX together with the VX ver value.
+        /// On reading, we reset VX if versioning function has changed.
+        let codec = 
+            let cD = Dict.codec
+            { new Codec<VX> with
+                member __.Write vx dst =
+                    cD.Write vx dst
+                    ByteStream.writeByte ver dst
+                member __.Read db src =
+                    let vx = cD.Read db src
+                    let cVer = ByteStream.readByte src
+                    if (cVer = ver) then vx else Dict.empty
+                member __.Compact db vx = 
+                    let struct(vx',sz) = cD.Compact db vx
+                    struct(vx', 1UL + sz) // add verVX byte
+            }
+
+        // invariant: elements in ws have versions in vx
+        let rec private invalidationLoop rlu vx ws q =
+            if ((q < 1) || (Set.isEmpty ws)) then struct(vx,ws,q) else
+            let w = Set.minElement ws 
+            let ws' = DictRLU.RLU.search w rlu 
+                    |> Seq.filter (hasVer vx) 
+                    |> Seq.fold (fun s c -> Set.add c s) ws 
+                    |> Set.remove w 
+            let vx' = Dict.remove w vx 
+            invalidationLoop rlu vx' ws' (q - 1) // continue!
+
+        /// Quota-Bounded Invalidation Step.
+        ///
+        /// Returns final VX and remaining words to invalidate (if any).
+        /// This could be used for small step background invalidation.
+        let invalidationStep (quota:int) (rlu:RLU) (ws0:Set<Word>) (vx:VX) : struct(VX * Set<Word>) =
+            let ws = Set.filter (hasVer vx) ws0 // for loop invariant
+            let struct(vx',ws',_) = invalidationLoop rlu vx ws quota
+            struct(vx',ws')
+
+        /// Invalidation of VX.
+        ///
+        /// This will invalidate a set of word versions, including transitive
+        /// clients of the word according to the given RLU. For shallow updates
+        /// to a dictionary, this should complete easily. But if the update is
+        /// for a core element, we might reach quota and instead clear the VX.
+        let invalidate (quota:int) (rlu:RLU) (ws:Set<Word>) (vx:VX) : VX =
+            let struct(vx',ws') = invalidationStep quota rlu ws vx
+            if Set.isEmpty ws' then vx' else empty
+            let wsV = Set.filter (hasVer vx) ws // words with versions
+
+        module private Calculate = 
+            // Regarding Cyclic Definitions
+            //
+            // Awelon should not have cyclic definitions, but that's
+            // an issue to resolve upon static analysis. Here, I will
+            // permit cycles and handle them safely. 
+            //
+            // To handle cycles, I'll version a "clique" at a time. Each
+            // clique will contain a set of interdependent definitions.
+            // Then the version of a word can be computed by combining a
+            // word with the clique's hash.
+            //
+            // Within computation, I represent cliques using three sets:
+            //
+            //   (words in clique, external dependencies, unknowns)
+            //
+            // Unknowns are the unprocessed task queue. We can version our
+            // clique when the unknown set is empty. To find cycles, we must
+            // check a full computation stack of cliques.
+            type WS = Set<Word>
+            type C = (struct(WS * WS * WS)) // (internal, external, unknown)
+            type CS = C list // stack of cliques
+
+            let defV (def:Def) : V =
+                match def with
+                | Inline s -> s // a V is small, should be inline.
+                | _ -> failwith "VX assumption violated: versions are inline"
+                    // I could handle these cases, but they shouldn't happen
+                    // and I'd prefer an error so I can debug why I'm wrong
+
+            // A version is computed from a clique hash and a word.
+            // Essentially append, hash, and drop bytes so it isn't
+            // reference-counted in Stowage.
+            let inline mkV (hC:RscHash) (w:Word) : V =
+                (BS.append h w) |> RscHash.hash |> BS.drop 1
+
+            // To version a clique.
+            //
+            // The simplest implementation is to simply render the clique
+            // as a bytestring then take a secure hash. This might not 
+            // scale nicely to super-sized cliques of 100k elements, but
+            // those shouldn't be a thing anyway. (TODO: fix when becomes
+            // a problem)
+            // 
+            // Special attention: to avoid dictionary compaction from 
+            // affecting versions, we can either inline remote defs or
+            // hash the inline defs or make a local decision. I chose
+            // to hash the inline defs.
+            // 
+            // We can update this def, but update VX.ver to reset caches.
+            let hashClique (d:Dict) (vx:VX) (clique:WS) (deps:WS) : RscHash =
+                ByteStream.write (fun dst ->
+                    // write out each `word $hashDef\n`
+                    clique |> Set.iter (fun w ->
+                        ByteStream.writeBytes w dst
+                        ByteStream.writeByte (byte ' ') dst
+                        match Dict.tryFind w d with
+                        | None -> ByteStream.writeByte (byte '~') dst
+                        | Some def ->
+                            match def with
+                            | Inline s ->
+                                ByteStream.writeByte (byte '$') dst
+                                ByteStream.writeBytes (RscHash.hash s) dst
+                            | Remote ref ->
+                                ByteStream.writeByte (byte '$') dst
+                                ByteStream.writeBytes (ref.ID) dst
+                            | Binary ref ->
+                                ByteStream.writeByte (byte '%') dst
+                                ByteStream.writeBytes (ref.ID) dst
+                        ByteStream.writeByte (byte '\n') dst)
+                    // write out each external `dep !ver\n`
+                    deps |> Set.iter (fun w ->
+                        ByteStream.writeBytes w dst
+                        ByteStream.writeByte (byte ' ') dst
+                        ByteStream.writeByte (byte '!') dst
+                        let v = match Dict.tryFind w vx with
+                                | None -> failwith "VX invariant violated: deps have versions"
+                                | Some def -> defV def
+                        ByteStream.writeBytes v dst
+                        ByteStream.writeByte (byte '\n') dst)
+                ) |> RscHash.hash
+
+            // compute the versions for words in clique, add to VX. 
+            let finalizeClique (d:Dict) (vx0:VX) (iws:IWS) (xws:XWS) : VX =
+                assert(not (Set.isEmpty iws))
+                let hC = hashClique d vx0 iws xws
+                let onIW w vx = Dict.add w (Inline (mkV hC w)) vx
+                vx0 |> Set.foldBack onIW iws  // add clique words to VX
+
+            let rec versionLoop (d:Dict) (vx:VX) (cs:CS) : VX =
+                match cs with
+                | (struct(i,x,u)::cs') ->
+                    if Set.isEmpty u then
+                        let vx' = finalizeClique d vx i x
+                        versionLoop d vx' cs 
+                    else
+                        let tgt = Set.minElement u
+                        let u' = Set.remove tgt u
+                        versionLoopW d vx (struct(i,x,u')::cs') w
+                | [] -> vx // all done
+            and versionLoopW d vx cs w =
+
+
+            
+        open Calculate
+
+        /// Cache and compute a version for the word. Will use version
+        /// from cache if possible, otherwise will compute the version
+        /// for the word and its transitive dependencies, cache it all,
+        /// then return the word's version. Cost is proportional to the
+        /// size of all transitive dependencies.
+        let version (d:Dict) (vx:VX) (w:Word) : struct(VX * V)
+            match Dict.tryFind w vx with
+            | Some def -> struct(vx, defV def)
+            | None -> 
+
+    /// A DictVX couples a DictRLU and (mutable) VX.
+    ///
+    /// Entries in the VX must be consistent with the Dict and RLU,
+    /// and are logically immutable, so DictVX can be treated as a
+    /// value for many use cases. But VX entries won't always be in
+    /// memory.
+
+
+
 
 
