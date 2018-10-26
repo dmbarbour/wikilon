@@ -8,47 +8,39 @@ open Dict
 //
 // I can start with two basic indices:
 //
-//  reverse lookup index:   volume and symbols → words
-//  behavior version index: word → secure hash version
+//  reverse lookup index:   word → client words
+//  behavior version cache: word → secure hash version
 //
 // The reverse lookup index will allow us to quickly find all sites
-// where a word is used. This is valuable for a lot of use cases. 
-// Besides dependencies between words, we might track annotations
-// and parse errors. We can support multi-symbol lookups so we can
-// use words as tags or categories for discovery. We can filter our
-// search to a given volume of the dictionary, by prefix or range.
+// where a word is used. This can be leveraged for modeling tags and
+// categories, tagging words for automatic testing, etc.. 
 //
-// A behavior version index can give us a precise version for any
-// specific word and its transitive dependencies, useful for caching
-// and memoization tasks and reusable across similar dictionaries.
+// For convenience, we can track parse errors in reverse lookup. I've
+// also contemplated tracking annotations, but decided against it at
+// this layer.
 //
-// Given a version index, we can likely build other indices, such
-// as memoized evaluations. Alternatively, with a reverse lookup
-// index, we can directly maintain evaluated dictionaries, but the
-// sharing might be weaker.
+// A behavior version cache will provide a version for a word with
+// its transitive dependencies. The intention is to use as a key for
+// later cached computations. Importantly, it allows cache sharing
+// and centralizes cache invalidation problems.
 //
 
 // DictRLU combines a dictionary with a reverse-lookup index.
 module DictRLU =
 
-    /// implicit deps for natural numbers, texts, and binaries.
+    /// implicit deps for natural numbers, texts, binaries.
     let private w_zero : Word = BS.fromString "zero"
     let private w_succ : Word = BS.fromString "succ"
     let private w_null : Word = BS.fromString "null"
     let private w_cons : Word = BS.fromString "cons"
 
-    /// Support fast filter for Awelon parse-errors.
+    /// special dependency for Awelon parse-errors
     let depEPARSE : Symbol = BS.fromString "EPARSE"
-        // no need to optimize symbol, should be super rare
-
-    // wrap annotation words with parentheses as dependencies.
-    let inline private wrapParens (w:Word) : Symbol =
-        BS.append3 (BS.singleton (byte '(')) w (BS.singleton (byte ')'))
 
     let private addTokDeps (s:Set<Symbol>) (struct(tt,w) : Token) : Set<Symbol> =
         match tt with
         | TT.Word -> Set.add w s
-        | TT.Anno -> Set.add (wrapParens w) s
+        | TT.Anno -> s // not tracking annotations
         | TT.Nat -> 
             let bZero = (1 = BS.length w) && (byte '0' = w.[0])
             if bZero then s |> Set.add w_zero else
@@ -89,177 +81,125 @@ module DictRLU =
     let duDeps (du:Def option) : Set<Symbol> =
         match du with
         | Some def -> defDeps def
-        | None -> Set.empty
+        | None -> Set.empty // undefined words are not tracked
 
     /// The reverse-lookup index is represented as a Dictionary with
-    /// mangled keys representing locations of symbols in another
-    /// dictionary. The RLU dictionary value field is not used.
+    /// a `word!client` key for every client of every word. The value
+    /// field is not used. Definitions with parse errors are recorded
+    /// as `EPARSE!word` as the only dependency.
     ///
-    /// Reverse lookup can be leveraged for tag or topic search, via
-    /// tag words `tag-foo` and simple conventions `foo-meta-tags`.
-    /// But tags would be maintained by hand or external software.
+    /// RLU has many applications - cache invalidation, tags for topic
+    /// search or dictionary automation, renaming words, etc.. It is a
+    /// very useful index. And it can be maintained incrementally.
     type RLU = Dict
 
     module RLU =
-        // REPRESENTATION OF THE REVERSE-LOOKUP INDEX
-        //
-        // Naively, we could just use a trie or dictionary with keys like
-        // `symbol!word`. This would join all references to `symbol` at
-        // one location in the index. Simple! But inefficient for goals 
-        // like local or incremental update of the index, or merging a
-        // package index.
-        //
-        // To ensure locality, entries "near" in the dictionary must also
-        // be "near" in the index. Distance in a trie is matching prefix.
-        // We can align proximity in index with proximity in the dictionary
-        // by interleaving. Instead of `symbol!word` we try `wsoyrmdb!ol`,
-        // adding `!` separator to the shorter of word and symbol.
-        // 
-        // The disadvantage is that this complicates lookups, requiring
-        // multi-location search for a symbol. Further, structure sharing
-        // and prefix compression will suffer a little. But it's workable.
 
-        /// A separator byte is injected between a word and symbol in the
-        /// mangled key for the reverse lookup index. The chosen byte is
-        /// is '!' (33). This byte must not appear in our symbols or words.
+        /// Our symbol!client separator.
         let cSep = byte '!'
-        do assert((Dict.isValidSymbolChar cSep) && not (Parser.isWordChar cSep))
+        do assert((Dict.isValidSymbolChar cSep) 
+               && (not (Parser.isWordChar cSep)))
 
-        // Produce a key representing that a symbol can be found at the
-        // definition of word. Interleaves word and symbol bytes, starting
-        // with a word byte. Adds cSep to shorter of word or symbol.
-        let symbolAtWord symbol word =
-            let lS = BS.length symbol
-            let lW = BS.length word
-            let mem = Array.zeroCreate (1 + lS + lW)
-            let shLen = min lS lW
-            for ix = 0 to (shLen - 1) do
-                let off = (2 * ix)
-                mem.[off] <- word.[ix]
-                mem.[off+1] <- symbol.[ix]
-            let off = 2 * shLen // final offset
-            if (shLen = lW) then // logically add separator to word
-                mem.[off] <- cSep // terminate word
-                BS.blit (BS.drop shLen symbol) mem (off+1) // remaining symbol
-            else // logically add separator to symbol
-                mem.[off] <- word.[shLen]
-                mem.[off+1] <- cSep // terminate symbol
-                BS.blit (BS.drop (shLen+1) word) mem (off+2) // remaining word
-            BS.unsafeCreateA mem
+        /// Produce the symbol!client key.
+        let inline symbolAtWord symbol word = 
+            BS.append3 symbol (BS.singleton cSep) word
 
         /// empty or initial RLU index
         let empty = Dict.empty
 
-        // Implementing multi-symbol search
+        /// Find all instances of a word within a volume of dictionary
+        /// defined by a given prefix (e.g. search only in a package). 
+        let searchVolume (wp:Prefix) (k:Symbol) (rlu:RLU) : seq<Word> =
+            Seq.delay (fun () ->
+                rlu |> Dict.extractPrefix (symbolAtWord k wp)
+                    |> Dict.prependPrefix wp
+                    |> Dict.toSeq
+                    |> Seq.map fst)
+
+        /// Find all instances of a word starting from a given word.
+        let searchFrom (w0:Word) (k:Symbol) (rlu:RLU) : seq<Word> =
+            Seq.delay (fun () ->
+                rlu |> Dict.extractPrefix (BS.snoc k cSep)
+                    |> Dict.fromKey w0
+                    |> Dict.toSeq
+                    |> Seq.map fst)
+
+        /// Find all instances of a word, globally.
+        let inline search (k:Symbol) (rlu:RLU) : seq<Word> =
+            searchVolume (BS.empty) k rlu
+
+        // Multi-Word Search
         //
-        // This allows us to find one or more symbols, optionally restricted
-        // to a volume of the dictionary, with relative efficiency. Only the
-        // results with all symbols are matched. 
-        module internal Search =
-            type SP = ((Symbol option) * RLU)   // one symbol's search path
-            type SS = SP list                   // multi-symbol search path
-            type WS = (Prefix * SS) list        // word's search stack
+        // In this case, we'll attempt to find words that include ALL 
+        // words in a given non-empty set. This is mostly useful for
+        // tag-based filtering. Reasonably efficient.
+        module private MultiSearch =
+            type SP = Dict list          // search path (words after `symbol!` extracted)
+            type SS = (Prefix * SS) list // search stack (to support Seq.unfold)
 
-            // test for match on empty word suffix
-            let spMatchEmptySuffix ((sOpt,rlu):SP) : bool =
-                match sOpt with // match remainder of symbol, if needed
-                | None -> Dict.contains (BS.empty) rlu 
-                | Some s -> Dict.contains (BS.cons cSep s) rlu
-
-            let spMergeProto ((sOpt,rlu):SP) : SP = 
-                (sOpt, Dict.mergeProto rlu)
-
-            // step into symbol search path on a given word-byte
-            // filter on symbol byte, too, to recover SP RLU structure
-            let spStep (wb:byte) ((sOpt,rlu):SP) : SP =
-                assert(cSep <> wb) // cSep is not a valid word byte
-                let d = Dict.extractPrefix (BS.singleton wb) rlu
-                match sOpt with
-                | Some s -> // remove one symbol byte, too.
-                    if BS.isEmpty s // if is the final symbol byte?
-                      then (None, Dict.extractPrefix (BS.singleton cSep) d)
-                      else ((Some (BS.drop 1 s)), Dict.extractPrefix (BS.take 1 s) d) 
-                | None -> (None,d) // simple iteration through word bytes
-
-            /// Filter search path to a given word prefix. Only words with
-            /// the given prefix will be matched.
-            let rec spSkip (wp:Prefix) (sp:SP) : SP =
-                if (BS.isEmpty wp) then sp else
-                let sp' = spStep (BS.unsafeHead wp) sp
-                let wp' = BS.unsafeTail wp
-                spSkip wp' sp'
-
-            /// Filter search path lexicographically so we won't return
-            /// results earlier than the given initial word. This is for
-            /// browsing of search results.
-            let spFrom (w0:Word) ((sOpt,rlu):SP) : SP =
-                match sOpt with
-                | None -> (None, Dict.fromKey w0 rlu)
-                | Some s -> (Some s, Dict.fromKey (symbolAtWord s w0) rlu)
-
-            // expand an SS a single step, returning whether the empty
-            // suffix is accepted and a filtered child search. This is
-            // the primary logic for our multi-symbol search.  
-            let ssStep (ss0:SS) : struct(bool * List<struct(byte * SS)>) =
-                if List.isEmpty ss0 then struct(false,List.empty) else
-                let ss = List.map spMergeProto ss0 // merge up front
-                let found = List.forall spMatchEmptySuffix ss // accept wp
-                let onC ix _ ws =
-                    let ss' = List.map (spStep ix) ss // step all paths
-                    let skip = List.exists (snd >> isEmpty) ss' // fail fast 
-                    if skip then ws else (struct(ix,ss')::ws)
-                // indices of first RLU as initial search filter
-                let cs0 = (ss |> List.head |> snd).cs |> Map.remove cSep
-                let next = Map.foldBack onC cs0 (List.empty) 
+            // Expand a search step, and report whether the empty suffix
+            // should be included in the output. 
+            let spStep (sp0:SP) : struct(bool * List<struct(Prefix * SP)>) =
+                if List.isEmpty sp0 then struct(false,List.empty) else
+                let sp = sp0 |> List.map (Dict.mergeProto) 
+                let found = List.forall (fun d -> Option.isSome (d.vu)) sp
+                let onC ix (struct(cp,_)) lst =
+                    let p = BS.cons ix cp // maximal prefix
+                    let spc = List.map (Dict.extractPrefix p) sp 
+                    let skip = List.exists (Dict.isEmpty) spc
+                    if skip then lst else (struct(p,spc)::lst)
+                let next = Map.foldBack onC ((List.head sp).cs) (List.empty)
                 struct(found,next)
 
-            // Search large step. recursively steps to next output.
-            let rec searchStep (ws:WS) : (Word * WS) option =
-                match ws with
-                | ((wp,ss)::wsRem) ->
-                    let struct(found,searchC) = ssStep ss
-                    let onC (struct(ixC,ssC)) = ((BS.snoc wp ixC), ssC)
-                    let ws' = List.append (List.map onC searchC) wsRem
-                    if found then Some (wp,ws') else searchStep ws'
+            let rec ssStep (ss:SS) : (Word * SS) option =
+                match ss with
+                | ((wp,sp)::ssRem) ->
+                    let struct(found,next) = spStep sp
+                    let onC (struct(p,sp')) = ((BS.append wp p),sp')
+                    let ss' = List.append (List.map onC next) ssRem
+                    if found then Some (wp,ss') else ssStep ss'
                 | [] -> None
 
-            // TODO: consider a horizontal search for browsing, e.g.
-            // find several prefixes that are promising for a search.
-            // But this is much lower priority.
+            // initial search state for a multi-search volume
+            let initSearchVolume (wp:Prefix) (symbols:(Symbol list)) (rlu:RLU) : SS =
+                let initSym s = rlu |> Dict.extractPrefix (symbolAtWord s wp)
+                let sp = List.map initSym symbols
+                let skip = List.exists (Dict.isEmpty) sp
+                if skip then [] else ((wp,sp)::[])
 
-            /// construct the initial search state:
-            ///  - prefix for where to find symbols
-            ///  - a collection of symbols to find  
-            ///  - a reverse-lookup index to search
-            let initSearchVolume (p:Prefix) (symbols:Set<Symbol>) (rlu:RLU) : WS =
-                let sToSP s = (Some s, rlu) |> spSkip p 
-                let ss0 = symbols |> Set.toList |> List.map sToSP 
-                ((p,ss0)::[]) // skips to prefix p
+            // initial search state for a multi-search with starting point
+            let initSearchFrom (w0:Word) (symbols:(Symbol list)) (rlu:RLU) : SS =
+                let initSym s = rlu |> Dict.extractPrefix (BS.snoc s cSep)
+                                    |> Dict.fromKey w0
+                let sp = List.map initSym symbols
+                let skip = List.exists (Dict.isEmpty) sp
+                if skip then [] else ((BS.empty,sp)::[])
 
-            /// Like initSearchVolume, but lexicographic instead of prefix.
-            let initSearchFrom (w:Word) (symbols:Set<Symbol>) (rlu:RLU) : WS =
-                let sToSP s = (Some s, rlu) |> spFrom w
-                let ss0 = symbols |> Set.toList |> List.map sToSP
-                ((BS.empty,ss0)::[]) // no initial prefix
 
-        open Search
+        /// Search for words that contain all given symbols, restricted by
+        /// dictionary prefix (e.g. to search a specific package).
+        let multiSearchVolume (wp:Prefix) (allOf:Set<Symbol>) (rlu:RLU) : seq<Word> =
+            match Set.toList allOf with
+            | [] -> invalidArg "allOf" "multi-search requires non-empty set"
+            | (k::[]) -> searchVolume wp k rlu
+            | symbols -> Seq.delay (fun () -> 
+                let ss0 = MultiSearch.initSearchVolume wp symbols rlu
+                Seq.unfold (MultiSearch.ssStep) ss0)
+        
+        /// Search for words that contain all given symbols, starting from
+        /// a given word (e.g. to support page-level browsing).
+        let multiSearchFrom (w0:Word) (allOf:Set<Symbol>) (rlu:RLU) : seq<Word> =
+            match Set.toList allOf with
+            | [] -> invalidArg "allOf" "multi-search requires non-empty set"
+            | (k::[]) -> searchFrom w0 k rlu
+            | symbols -> Seq.delay (fun () ->
+                let ss0 = MultiSearch.initSearchFrom w0 symbols rlu
+                Seq.unfold (MultiSearch.ssStep) ss0)
 
-        /// Search a volume of the dictionary for a set of symbols.
-        let searchVolume (wp:Prefix) (symbols:Set<Symbol>) (rlu:RLU) : seq<Word> =
-            Seq.delay (fun () ->
-                let ws0 = initSearchVolume wp symbols rlu
-                Seq.unfold searchStep ws0)
+        /// Search for words whose definitions use all given symbols.
+        let inline multiSearch (allOf:Set<Symbol>) (rlu:RLU) : seq<Word> =
+            multiSearchVolume (BS.empty) allOf rlu
 
-        /// Search results start at the given word lexicographically.
-        /// This is suitable for incremental browsing of search results.
-        let searchFrom (w0:Word) (symbols:Set<Symbol>) (rlu:RLU) : seq<Word> =
-            Seq.delay (fun () ->
-                let ws0 = initSearchFrom w0 symbols rlu
-                Seq.unfold searchStep ws0)
-
-        let inline search symbols rlu = 
-            searchVolume (BS.empty) symbols rlu
-   
         // Constructing the RLU.
         let private blank : Dict.Def = Dict.Inline (BS.empty)
         let private addWordDeps (w:Word) (deps:Set<Symbol>) (rlu0:RLU) : RLU =
@@ -359,6 +299,38 @@ module DictRLU =
     /// Search dictionary for definition of a word.
     let inline tryFind w d = Dict.tryFind w (d.dict)
 
+    /// Find all words that are clients of a given word. 
+    let inline search (w:Word) (d:DictRLU) : seq<Word> = 
+        RLU.search w (d.rlu)
+
+    /// Find all clients of a word within a given prefix volume.
+    let inline searchVolume (inVolume:Prefix) (findThis:Word) (d:DictRLU) : seq<Word> =
+        RLU.searchVolume inVolume findThis (d.rlu)
+
+    /// Find clients of a word starting lexicographically from a given word.
+    let inline searchFrom (leastResult:Word) (findThis:Word) (d:DictRLU) : seq<Word> =
+        RLU.searchFrom leastResult findTHis (d.rlu)
+
+    /// Find all parse errors.
+    let inline parseErrors (d:DictRLU) : seq<Word> =
+        search (depEPARSE) d
+
+    /// Find clients of all symbols under a given volume.
+    let multiSearchVolume (inVolume:Prefix) (allOf:Set<Word>) (d:DictRLU) : seq<Word> =
+        if Set.isEmpty allOf 
+            then d.dict |> Dict.selectPrefix inVolume |> Dict.toSeq |> Seq.map fst
+            else RLU.multiSearchVolume inVolume allOf (d.rlu)
+
+    /// Find clients of all symbols starting from least lexicographic result.
+    let multiSearchFrom (leastResult:Word) (allOf:Set<Word>) (d:DictRLU) : seq<Word> =
+        if Set.isEmpty allOf 
+            then d.dict |> Dict.fromKey leastResult |> Dict.toSeq |> Seq.map fst
+            else RLU.multiSearchFrom leastResult allOf (d.rlu)
+
+    /// Find clients that use all the given symbols.
+    let inline multiSearch (allOf:Set<Word>) (d:DictRLU) : seq<Word> =
+        multiSearchVolume (BS.empty) allOf d
+
     /// Find words under a given prefix that depend on a set of symbols.
     let searchPrefix (p:Prefix) (s:Set<Symbol>) (d:DictRLU) : seq<Word> =
         if Set.isEmpty s // if no symbols, report all words matching prefix
@@ -378,7 +350,7 @@ module DictRLU =
     /// Find clients of a single word.
     let inline wordClients w d = search (Set.singleton w) d
 
-    /// Find words whose definitions suffer parse errors.
+    /// Find words whose definitions did not parse.
     let inline parseErrors d = wordClients depEPARSE d
 
     /// Encode DictRLU as a pair of size-prefixed dictionaries.
@@ -415,6 +387,34 @@ module DictVX =
     /// Those other caches can be shared across many dictionaries,
     /// and use simple expiration models instead of invalidation.
     type V = ByteString
+
+    /// version prefix for detected cycles
+    let cCyc = byte 'o'
+    do assert(not (RscHash.isHashByte cCyc))
+
+    /// Test for cyclic dependencies.
+    ///
+    /// Calculation of a word version involves cycle detection. We
+    /// do still compute a unique version in prsence of cycles, but
+    /// cyclic definitions aren't legal in Awelon. For convenience,
+    /// we record whether a word is part of a cycle in the version
+    /// string. 
+    ///
+    /// The details of the cycle (which words are involved) are not
+    /// tracked and may need to be recomputed.
+    let isCyclic (v:V) : bool =
+        if BS.isEmpty v 
+            then invalidArg "v" "empty string is not a valid version" 
+            else (cCyc = (BS.unsafeHead v))
+
+    /// versions with cyclic dependencies. However, cycles are not
+    /// legal in Awelon systems, and it's convenient to remem
+    /// safely c
+    /// computing versions. However, such definitions 
+    /// Versions can be safely computed for cyclic dependencies,
+    /// but cyclic definitions should not exist in Awelon systems.
+    /// For convenience, I
+
 
     // Note: We can leverage indirection, mapping from word version
     // to a version for a word's type or link-optimized behavior. 
@@ -468,25 +468,21 @@ module DictVX =
             let vx' = Dict.remove w vx 
             invalidationLoop rlu vx' ws' (q - 1) // continue!
 
-        /// Quota-Bounded Invalidation Step.
+        /// Invalidation Step.
         ///
         /// Returns final VX and remaining words to invalidate (if any).
-        /// This could be used for small step background invalidation.
-        let invalidationStep (quota:int) (rlu:RLU) (ws0:Set<Word>) (vx:VX) : struct(VX * Set<Word>) =
+        /// This could be used for limited step background invalidation.
+        let invalidationStep (quota:int) (rlu:RLU) (ws0:Set<Word>) (vx:VX) : struct(Set<Word> * VX) =
             let ws = Set.filter (hasVer vx) ws0 // for loop invariant
             let struct(vx',ws',_) = invalidationLoop rlu vx ws quota
-            struct(vx',ws')
+            struct(ws',vx')
 
-        /// Invalidation of VX.
-        ///
-        /// This will invalidate a set of word versions, including transitive
-        /// clients of the word according to the given RLU. For shallow updates
-        /// to a dictionary, this should complete easily. But if the update is
-        /// for a core element, we might reach quota and instead clear the VX.
+        /// Invalidation of VX. Either completely removes elements in given
+        /// set (and all transitive dependencies) or fails and returns the
+        /// empty version cache. Max count of removals equals given quota.
         let invalidate (quota:int) (rlu:RLU) (ws:Set<Word>) (vx:VX) : VX =
-            let struct(vx',ws') = invalidationStep quota rlu ws vx
+            let struct(ws',vx') = invalidationStep quota rlu ws vx
             if Set.isEmpty ws' then vx' else empty
-            let wsV = Set.filter (hasVer vx) ws // words with versions
 
         module private Calculate = 
             // Regarding Cyclic Definitions
@@ -502,11 +498,14 @@ module DictVX =
             //
             // Within computation, I represent cliques using three sets:
             //
-            //   (words in clique, external dependencies, unknowns)
+            //   (in clique, dependencies, unknowns)
             //
-            // Unknowns are the unprocessed task queue. We can version our
-            // clique when the unknown set is empty. To find cycles, we must
+            // Unknowns are our unprocessed task queue. Dependencies may
+            // include words within the clique (in case of cycles). 
+We can version our
+            // clique when our unknown set is empty. To find cycles, we can
             // check a full computation stack of cliques.
+            
             type WS = Set<Word>
             type C = (struct(WS * WS * WS)) // (internal, external, unknown)
             type CS = C list // stack of cliques
@@ -534,8 +533,8 @@ module DictVX =
             // 
             // Special attention: to avoid dictionary compaction from 
             // affecting versions, we can either inline remote defs or
-            // hash the inline defs or make a local decision. I chose
-            // to hash the inline defs.
+            // hash the inline defs or load and make a local decision.
+            // I choose to hash inline defs for now.
             // 
             // We can update this def, but update VX.ver to reset caches.
             let hashClique (d:Dict) (vx:VX) (clique:WS) (deps:WS) : RscHash =
@@ -558,14 +557,14 @@ module DictVX =
                                 ByteStream.writeByte (byte '%') dst
                                 ByteStream.writeBytes (ref.ID) dst
                         ByteStream.writeByte (byte '\n') dst)
-                    // write out each external `dep !ver\n`
+                    // write out each `dep !ver\n`
                     deps |> Set.iter (fun w ->
                         ByteStream.writeBytes w dst
                         ByteStream.writeByte (byte ' ') dst
                         ByteStream.writeByte (byte '!') dst
                         let v = match Dict.tryFind w vx with
-                                | None -> failwith "VX invariant violated: deps have versions"
                                 | Some def -> defV def
+                                | None -> failwith "VX invariant violated: deps have versions"
                         ByteStream.writeBytes v dst
                         ByteStream.writeByte (byte '\n') dst)
                 ) |> RscHash.hash
@@ -577,18 +576,61 @@ module DictVX =
                 let onIW w vx = Dict.add w (Inline (mkV hC w)) vx
                 vx0 |> Set.foldBack onIW iws  // add clique words to VX
 
+            let inline private inClique w (struct(iws,_,_):C) = 
+                Set.contains w iws
+            let inline private mergeC (struct(ai,ax,au):C) (struct(bi,bx,bu):C) =
+                let i' = Set.union ai bi
+                let x' = Set.union ax bx
+                let u' = Set.union au bu
+                struct(i',x',u')
+
+            // Collapse stack of cliques based on cycle index.
+            // Basically, all intermediate cliques are part of
+            // the interdependent cycle.
+            let rec private collapseCycle ix cs =
+                match cs with
+                | (a::b::cs') when (ix > 0) -> 
+                    collapseCycle (ix - 1) ((mergeC a b)::cs')
+                | _ -> cs
+
             let rec versionLoop (d:Dict) (vx:VX) (cs:CS) : VX =
                 match cs with
-                | (struct(i,x,u)::cs') ->
-                    if Set.isEmpty u then
-                        let vx' = finalizeClique d vx i x
-                        versionLoop d vx' cs 
-                    else
-                        let tgt = Set.minElement u
-                        let u' = Set.remove tgt u
-                        versionLoopW d vx (struct(i,x,u')::cs') w
-                | [] -> vx // all done
+                | (c::cs') -> versionLoopC d vx cs c
+                | [] -> vx // all done!
+            and versionLoopC d vx cs (struct(i,x,u)) =
+                if Set.isEmpty u then
+                    let vx' = finalizeClique d vx i x
+                    versionLoop d vx' cs
+                else
+                    let w = Set.minElement u // target word
+                    let u' = Set.remove w u
+                    if Dict.contains w vx then
+                        // has version, is external dep
+                        let x' = Set.add w x
+                        versionLoopC d vx cs (struct(i,x',u'))
+                    else // might be external or part of cycle
+                        
+
+// if has version, is external dep
+                        then versionLoopC d vx cs (struct(i,(Set.add w x),u')) 
+                        else versionLoopW d vx (struct(i,x,u')::cs) w
+                        
+(Set.add w x) u 
+                    let u' = Set.remove w u // remove from tasks
+                    versionLoopW d vx (struct(i,x,u')::cs') w
+
             and versionLoopW d vx cs w =
+                // don't version any word more than once
+                if Dict.contains w vx then versionloop d vx cs else
+                // recognize cycle if needed
+                let ixCycle = List.tryFindIndex (inClique w) cs
+                match ixCycle with
+                | None -> 
+                    let wi = Set.singleton w // initial clique
+                    let wx = Set.empty // initial external deps
+                    let wu = 
+versionLoop d 
+                
 
 
             

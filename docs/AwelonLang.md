@@ -79,13 +79,13 @@ Awelon does not constrain annotations beyond requirement for identity semantics.
 
 ## Accelerators
 
-Accelerators are built-in functions with reference implementations, controlled by annotation. Use of accelerators enables Awelon compilers or interpreters to extend the set of "performance primitives" available to Awelon programmers. With accelerators, we aren't restricted to just first-class function values and inefficient computation by Awelon's simple set of semantic primitives.
+Accelerators are built-in functions with reference implementations, accessed by annotation. Use of accelerators enables Awelon compilers or interpreters to extend the set of "performance primitives" available to Awelon programmers.
 
-For example, most Awelon systems will accelerate natural numbers. We might use `(nat32)` to indicate that a value should use an optimized representation for small natural numbers under the hood. A function to add two natural numbers could be annotated with `[reference impl] (accel-nat32-add)`, enabling an interpreter to symbolically substitute the reference implemementation by the built-in implementation. Separately, we can validate the reference implementation as part of a static system analysis.
+For example, most Awelon systems will accelerate natural numbers. We might use `(nat)` to indicate that a value should use an optimized representation for natural numbers under the hood. A function to add two natural numbers might be annotated as `[reference impl] (accel-nat-add)`, enabling our interpreter to symbolically substitute the built-in function. Validation of the given reference implementation doesn't need to be performed by the interpreter, but should be performed by a linter or other static analysis tool.
 
-Because acceleration is explicit via annotation, we can warn when an accelerator is not recognized or will soon be deprecated. Thus, performance with accelerators is predictable, stable, and will not rot silently. Modulo some minor hassles surrounding portability, programmers can confidently treat accelerators as language primitive.
+Because acceleration is explicitly accessed by annotation, our runtime can easily inform programmers if an accelerator is not recognized or has been scheduled for future deprecation. Thus, performance with accelerators can be predictable, stable, and will not silently degrade.
 
-*Aside:* Besides simple arithmetic, accelerators might support linear algebra or interpret a safe subset of OpenCL or Vulkan for GPGPU computation. Similarly, accelerated evaluation of Kahn process network models (which are observably deterministic) could support parallel distributed computation. There are some interesting directions we can take the idea of accelerators, although every choice should be weighed carefully against simplicity and stability of implementation.
+The cost of accelerators is that they complicate our runtimes and interfere with portability. Thus, acceleration should be used sparingly, targeting a few widely useful types and functions. We can also accelerate evaluation of a few carefully selected DSLs. For example, accelerate linear algebra or a safe subset of OpenCL to effectively leverage SIMD instructions or GPGPU hardware. But performance of most code should be left to a compiler.
 
 ## Dictionary
 
@@ -213,7 +213,7 @@ For expected or continuable errors, such as a parse or constraint error that mig
 
 ## Static Typing
 
-Awelon doesn't depend on types: there is no type-driven dispatch or overloading. However, the language implies a simple static type model. If users can discover errors earlier by using static type analysis, that's always a good thing. The stack-like environment can be typed as a tuple, and values as functions. Record constructors are typed using row polymorphism. Types for our primitive operations:
+Awelon doesn't depend on static types insofar as there is no type-driven dispatch or overloading. However, the language does imply a simple static type model. And if programmers can discover errors earlier by static analysis, that's a good thing. Awelon's stack-like environment can easily be typed as a tuple, and values as functions. Record constructors are typed using row polymorphism. Types for our primitive operations:
 
         a           ((s * x) * (s → s')) → (s' * x)
         b           ((s * x) * ((e * x) → e')) → (s * (e → e'))
@@ -231,16 +231,16 @@ In this context, we could develop a series of functions like `pick2nd` and `pick
 
 *Note:* Besides static types, termination analysis is also useful. As a purely functional language, non-termination or divergence is always an error for Awelon programs.
 
-### Opaque Data Types
+### Opaque and Abstract Data Types
 
 Implementation-hiding modularity in functional programming languages is frequently based around [opaque data types](https://en.wikipedia.org/wiki/Opaque_data_type) as a simplified approximation of [abstract data types](https://en.wikipedia.org/wiki/Abstract_data_type). Direct access to data representation is confined to a controlled volume of code. External code is limited to a subset of provided interfaces. Those interfaces enforce invariants, control coupling, partition programming tasks, and isolate bugs.
 
-For Awelon, we can support opaque data types via value sealer annotations:
+For Awelon, we can support opaque data types via seal-unseal annotations:
 
         (seal-foo)      (s * x) → (s * foo:x)
         (unseal-foo)    (s * foo:x) → (s * x)
 
-By themselves, these annotations serve as symbolic type wrappers, akin to `newtype` in Haskell, resisting accidental access to representation. To protect opaque data types, we further constrain direct access to these annotations to a codebase prefix: `(seal-foo)` and `(unseal-foo)` are only permitted in source definitions of words starting with `foo-`. This is trivially enforced by linter, and works well together with a policy for private functions, for example that `foo-local-*` may only be directly used from other words of form `foo-*`. A hyphenated prefix would then serve as a dictionary package or module, with ad-hoc opaque data types and hidden functions.
+A sealer serves as a symbolic type wrapper, to resist accidental access to data representation. But we can (via static analysis or linter) also enforce a simple rule: that these annotations are only directly accessible from words with a matching `foo-` prefix. Given this additional constraint, our sealers can isolate direct data access to a volume of code, support smart constructors, etc.. This should work nicely with similar constraints limiting external access to `foo-local-*`, and aligns nicely with dictionary packages.
 
 ## Structural Equivalence
 
@@ -264,9 +264,11 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Relative to built-in number support, there is some storage overhead - but it's relatively minor at larger scales (and compresses well). Besides numeric towers, editable views could feasibly support lists and matrices, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Problem specific languages can frequently be modeled as data-structures that we evaluate statically. Comments can easily be supported, e.g. `// comment == "comment"(a2)d`. Qualified namespaces are easy to support, e.g. such that `long-prefix-foo` can be abbreviated as `lp-foo`. It is feasible for projections to leverage color, such that `html-div` vs. `math-div` both render as `div` but in different colors, or other graphical expression of meaning.
+This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Relative to built-in number support, there is some storage overhead - but it's relatively minor at larger scales (and compresses well). Besides numeric towers, editable views could feasibly support lists and matrices, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Problem specific languages can frequently be modeled as data-structures that we evaluate statically. Comments can easily be supported, e.g. `// comment` via `"comment"(a2)d`. 
 
-Although our initial emphasis is plain text views, the eventual goal is to support richly interactive graphical views involving tables, graphs, canvases, music sheets, images, and so on. And for larger scales, although we could simply use huge definitions, we can also project edit sessions that view and edit multiple words together. For example, we might have `my-session = [foo][bar][baz]` so we can 'open' the session then edit those three words together. Or we might edit an prefix of words, perhaps using a spreadsheet-like view. A zoomable user interface is viable, allowing developers to drill into the definition of any component word. See also proposed [application models](ApplicationModel.md) for Awelon.
+Qualified namespaces are similarly easy to support, rendering `long-prefix-foo` as `lp-foo`, but might better be moved to an edit-session rather than individual definitions. Edit sessions can be supported as projections, e.g. such that `[foo][bar][baz]` expands to edit all three words in a single file. 
+
+Although our initial emphasis is plain text views, the eventual goal is to support richly interactive graphical views involving tables, graphs, canvases, music sheets, images, and so on. Projections could improve legibility by using color to distinguish prefixes or types, such that `html-div` and `math-div` can both be rendered as `div` but in different colors. A zoomable user interface is viable, allowing developers to drill into definitions of any word they see. The basic edit sessions could be extended to flexible spreadsheets. See also proposed [application models](ApplicationModel.md) for Awelon.
 
 ### Named Local Variables
 
