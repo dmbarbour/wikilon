@@ -1,32 +1,48 @@
 
 # Awelon Language
 
-Awelon is a Turing complete, purely functional language based on concatenative combinators with confluent rewrite rules. Awelon uses four primitive combinators:
+## Vision and Design Sketch
+
+TLDR: spreadsheets at scale with bots at border
+
+I want control over my computation environment. Given the opportunity, I would curate my sources, copy databases for personal use and archival, own my data processing algorithms, freely replay and trace computations to their sources to support comprehension, extend and customize my environment with new data or data processing, and selectively share my extensions and customizations with my community. To achieve this control, I would marginalize use of black-box services, remote databases, and walled-garden GUI applications.
+
+Other people also want to control my computation environment: to push advertising and propaganda, to manage and sell my private data, to hide the algorithms behind obfuscation and EULAs, to restrict unpurchased extension, to cultivate a dependency upon a corporate provider. There are several economic and political incentives that pull holistic software architecture design in a direction that marginalizes user control. But that isn't the direction I want to go, at least not as the default experience.
+
+Awelon is designed for user or community control of environments. Elements:
+
+* The Awelon environment - a *Dictionary* - is modeled as a [persistent tree structure](https://en.wikipedia.org/wiki/Persistent_data_structure) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage). This allows for lazy incremental downloads, efficient atomic backups, and (via proxy or [content delivery network](https://en.wikipedia.org/wiki/Content_delivery_network)) sharing of physical storage and network overheads between clients. We can efficiently download data from a trusted source, or even synchronize 'live' data, and we can feasibly do so at massive scales: weather histories, street maps, community wikis and forums, etc..
+
+* The Awelon language is [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) via local [rewriting](https://en.wikipedia.org/wiki/Rewriting) evaluation. We use a one simple language for structured data, data processing algorithms, and the binding of algorithms and data into computed views. Between local rewriting and purity, we can incrementally compute and cache computed views, safely replay computations, and render intermediate computation steps as code for user comprehension. In context of our environment, purity also makes it easy to embed tests, perform broad consistency analysis, and securely share algorithms or computed views.
+
+* The Awelon user interface will leverage [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). We can build rich text or graphical projections on top of Awelon's simple syntax (see *Editable Views*). We can render and edit our data and code using tables, graphs, sheet music, flow charts, textual DSLs - whichever is most appropriate to each problem. Importantly, because we evaluate by rewriting, we can also graphically render those intermediate and final computed results. This blurs the boundary between data, code, application, and debugger.
+
+* The Awelon user will delegate [bots](https://en.wikipedia.org/wiki/Software_agent) to automate maintenance and integration with external systems. Bot behavior and state will be represented in the dictionary, where they can be directly observed and manipulated by the user, captured in snapshots for debugging, or easily shared with the community.
+
+Modulo bots, we effectively have scalable spreadsheets with graphical UI. Bots can give us a stateful, collaborative environment that integrates real-world information sources. The [application models](ApplicationModel.md) document describes patterns for modeling applications within the Awelon environment via projections and bots. This document focuses on the Awelon language and dictionary.
+
+## Language Basics
+
+Awelon has four basic concatenative combinators with confluent rewrite rules:
 
         [B][A]a == A[B]         (apply)
         [B][A]b == [[B]A]       (bind)
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
 
-Awelon additionally has limited support for data - natural numbers, embedded texts, and large binaries. Beyond these few primitives, programmers may define words in a dictionary. Evaluation proceeds by rewriting according to primitive combinators and lazily rewriting words to their definitions when doing so permits further progress. Hence, the result of evaluation is an Awelon program equivalent to the input.
+Awelon additionally has limited support for data - natural numbers, embedded texts, binary large objects, which are treated as a syntactic sugar. Beyond these few primitives, programmers may define words in a dictionary. Evaluation proceeds by rewriting according to primitive combinators and rewriting words to their definitions when doing so contributes to further progress. Hence, the result of evaluation of an Awelon program is another Awelon program, equivalent to the input - but potentially simplified.
 
-Those `[]` square brackets represent first-class functions and contain Awelon code. Values in Awelon are always formally first-class functions, frequently using [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or variants thereof. However, Awelon compilers or interpreters (guided by annotations) will recognize and optimize common function and value types. This is a concept of software *Accleration* to support efficient use of CPU and memory, extending the set of language *performance primitives* relative to a reference implementation. Accelerators for collections-oriented operations, such as matrix multiplication and linear algebra, can feasibly leverage SIMD instructions or GPGPU.
+An Awelon runtime will also recognize a set of *Annotations*, represented by parenthetical words. For example, `[A](par)` might request parallel evaluation for the expression `A`, while `[F](trace)` might indicate that `[F]` should be written to a debugging log or console. Annotations formally have identity semantics: that is, ignoring or erasing annotations must not affect the internally observable result of a computation. However, annotations may affect external observations - parallelism, memoization, evaluation order, precise JIT control, static analysis, assertions, quotas, debugging, rendering in projectional editors, and so on.
 
-A runtime will recognize a set of *Annotations*, represented by parenthetical words. For example, `[A](par)` might request parallel evaluation for the expression `A`, while `[F](trace)` might indicate that `[F]` should be written to a debugging log or console. Annotations formally have identity semantics: erasing or ignoring them shouldn't affect observable behavior within a computation. Nonetheless, annotations can enhance performance, guide evaluation, express and enforce programmer assumptions, support static analysis or debugging.
-
-By itself, Awelon is a simplistic language - a purely functional assembly.
-
-Unlike conventional programming languages, Awelon encourages representing data within a codebase. The intention is to make data (weather, geography, music, congressional voting records, etc.) more accessible and composable compared to more conventional languages. The codebase, called a *Dictionary* because programmers define *Words*, serves as a smart filesystem, database, or wiki with spreadsheet-like characteristics. The Awelon dictionary has a simple representation designed for efficient update, versioning, and sharing at large scales.
-
-Awelon's simplistic syntax and rewrite semantics are intended to work nicely with [projectional editing tools](http://martinfowler.com/bliki/ProjectionalEditing.html), see *Editable Views*. It is feasible to edit a color value using a color picker, edit music using a music notation, edit a graph with nodes and edges. When we evaluate code, the result is more Awelon syntax which can be rendered using the same tools. The motive here is to reduce the separation between program and user-interface, make data and computed information more accessible and composable. Awelon is designed for non-conventional [application models](ApplicationModel.md). 
+An important class of performance annotations is *Accelerators*. Accelerators enable Awelon to leverage efficient representations under-the-hood, such as representing certain lists as arrays. Similarly, we can substitute accelerated functions with built-in functions - for example, to access or split an array at a given offset. Formally, Awelon only has first-class functions (in `[]` brackets), and developers must use [Church encodings](https://en.wikipedia.org/wiki/Church_encoding) or variants thereof to represent data. However, by leveraging accelerators, Awelon may use performance primitives comparable to more conventional languages.
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Syntactically, words consist of lower-case alphanumerics and hyphens, and start with an alpha - i.e. regex `[a-z][a-z0-9-]*`. This ensures words are URL-safe and visibly distinguishable as raw text. That said, a projectional editor could be configured to render a subset of words with graphics or unicode, e.g. displaying `iconic-cat-in-a-cup` with an appropriate icon.
+Words are the user-definable unit in Awelon. Syntactically, a word is a sequence of lower-case alphanumerics and hyphens, starting with an alpha: regex `[a-z][a-z0-9-]*`. The formal meaning of a word is a trivial equivalence to its definition. A rewriting evaluation of a word will lazily substitute the definition.
 
-The formal meaning of a word is a trivial equivalence to its definition in context of a *Dictionary*. The definition must have acyclic dependencies (see *Loops*), must be block-balanced (no unmatched `[` or `]`), and should be a well-typed, reusable function.
+Valid definitions must be acyclic, allowing for a simple inline expansion of all definitions (see *Loops*). Further, definitions must be block balanced - no unmatched `[` or `]` block delimiters. Environments may enforce additional constraints, such as reserving a volume of words for *Stowage* or modeling package private functions by restricting words `foo-local-*` to the corresponding prefix `foo-*`. 
 
-Beyond formal semantics, words may have informal connotations and conventions. For example, a development environment may present `foo-meta-doc` as documentation associated with `foo`, and might complain to the programmer if the type doesn't match what is expected from a `-meta-doc` suffix. Similarly, a development environment may complain if `foo-local-*` is used outside the context of `foo-*`.
+Words are not observable within Awelon computations, but will often have external meanings. For example, an editor might assume that `foo-meta-doc` should contain documentation for `foo`.
 
 ## Natural Numbers
 
@@ -89,7 +105,7 @@ The cost of accelerators is that they complicate our runtimes and interfere with
 
 ## Dictionary
 
-Awelon words are defined in a codebase called a "dictionary". A dictionary is essentially a key-value database, associating words to definitions. To support Awelon project's various goals, Awelon specifies a standard dictionary representation with convenient properties for import/export, versioning, sharing, scaling, etc.. Legibility is also a goal, to simplify debugging or inference of implementation. Awelon dictionaries can feasibly scale to many gigabytes or terabytes, and support distributed representation, like a variant file-system.
+Awelon words are defined in a codebase called a "dictionary". A dictionary is essentially a key-value database, associating words to definitions. To support Awelon project's various goals, Awelon specifies a standard dictionary representation with convenient properties for import/export, versioning, sharing, scaling, etc.. Legibility is also a goal, to simplify debugging or inference of implementation. Awelon dictionaries can feasibly scale to many gigabytes or terabytes, support distributed representation, and feasibly integrate with block-chains.
 
 The proposed representation:
 
@@ -135,26 +151,26 @@ The BLAKE2b algorithm could be replaced by another, simply rewriting the entire 
 
 ### Software Packaging and Distribution
 
-Awelon is designed for distribution of entire dictionaries. An advantage of whole-dictionary distribution is that everything can be curated, tested, known to work nicely together. There is no "version hell" of package maintenance. Awelon dictionaries can be very large, but *lazy download* of secure hash resources can enable working with dictionaries that contain more data han we use.
+Awelon is designed for distribution of entire dictionaries. An advantage of whole-dictionary distribution is that everything can be curated, tested, known to work nicely together. There is no "version hell" of package maintenance. Awelon dictionaries can be very large, but *lazy download* of secure hash resources can enable working with dictionaries that contain more data than we use.
 
-However, packages remain useful for access control, sale, or real-time update.
+Yet packages remain useful, e.g. for access control, commercial reasons, or real-time update of data packages. For these cases, we can conveniently align package names with a word prefix. This enables a one-line install or update `/packagename- secureHash`, and works nicely with static enforcement of local definitions and value sealers. Like conventional software package systems, we would likely develop a community package registry.
 
-In those cases, we might associate a package with a prefix `packagename-*`. This allows for convenient one-line update or install `/packagename- secureHash`, easily enforced package-local definitions via `packagename-local-*`, and package protected *Opaque Data Types* (via `(seal-packagename)` and `(unseal-packagename)`). 
-
-A community registry can resist name conflicts, and could also support curated distributions that ensure packages have stable types or are known to work together, similar to [Haskell Stackage snapshots](https://www.stackage.org/). If necessary, simple (albeit expensive) operation to rename a package including all internal references.
-
-So, Awelon can support conventional package-based distribution where needed. The `packagename-` prefix might prove a little verbose, but that's a problem for projectional editors to solve (cf. *Editable Views*).
+Awelon doesn't have built-in support for namespaces. We'll use the full `packagename-` prefix for internal and external references. Resulting verbosity can be ameliorated by *Editable Views*.
 
 ## Stowage
 
-Large scale computations frequently work with data that doesn't fit all at once into memory. These days, operating systems help address the issue using *virtual memory* where volumes of the address space are offloaded until accessed. Purely functional languages can take virtual memory a step further due to the absence of mutation, collapsing identical volumes of data to support structure sharing. We can make this explicit using a `(stow)` annotation:
+By annotation, large values could be moved from memory to environment:
 
         [large value](stow)    => [stow-id]
         [small value](stow)    => [small value]
 
-Here, `stow-id` is a word whose definition is `large value`. Effectively, we're allocating new words to extend a dictionary, or creating a supplementary dictionary. An evaluator that supports stowage will simply produce these words as an extra output. Words can be reused when the same value is stored. This is a 'safe' form of dictionary mutation, being monotonic in nature.
+Here `stow-id` must be a word representing `large value`. This will be a fresh word in the common case, though stowing the same value multiple times may reuse a word.
 
-Importantly, stowage can work nicely with caching and memoization of computations. Stowage identifiers offer a second-class form of reference equality that Awelon otherwise lacks. Stowage words can also serve as natural volumes for progressive disclosure when rendering. A disadvantage is that stowage identifiers will often need to be garbage collected.
+Stowage provides at least three benefits. First, it can serve as a controllable variation of [virtual memory](https://en.wikipedia.org/wiki/Virtual_memory), moving large data to a larger but slower storage medium. Second, it can simplify *progressive disclosure* for graphical or textual projections over computed data.  Third, assuming relatively stable stowage words, use of stowage can make memoization more efficient because it compares versioned names instead of large values.
+
+The disadvantage of stowage is that it is not locally obvious how long to keep stowage definitions. There are a few solutions. First, we can provide stowage definitions together with the result. Second, we can make our stowage cache an explicit part of a compute session model, such that its lifespan is under control. Third, we can use a clever naming scheme and stable stowage names, such that when `foo-stow-id` is not remembered we know to recompute `foo` then check again.
+
+Despite these disadvantages, I believe the benefits make stowage worth pursuing. 
 
 ## Evaluation
 
@@ -183,7 +199,7 @@ These annotations can be used to defer linking of words where a partial evaluati
 
 ## Loops
 
-Lacking recursive definitions, we express loops using fixpoint combinators:
+Awelon doesn't do recursive definitions. Instead, use fixpoint combinators:
 
         [X][F]z == [X][[F]z]F
         z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
@@ -195,7 +211,7 @@ Lacking recursive definitions, we express loops using fixpoint combinators:
 
 Other loop combinators can be built upon `z`. For example, we can develop a `foreach` function that processes a list or stream. The most common loop combinators may be accelerated for performance.
 
-*Aside:* I've frequently contemplated allowing recursive definitions in Awelon. Recursion is certainly more convenient than fixpoint combinators, although loop combinators mostly avoid the requirement. However, recursion entangles behavior semantics with a dictionary, and it does not occur naturally from refactoring lower level code.
+*Aside:* I've contemplated allowing recursion many times. Unfortunately, recursion isn't very helpful in-the-small where our loop combinators can do the job. In-the-large, recursion could allow us to model interactive applications in a second-class manner, but would also entangle all things and hinder sharing.
 
 ## Memoization
 

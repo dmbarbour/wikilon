@@ -1,6 +1,25 @@
 
 # Application Models for Awelon
 
+There are two basic kinds of applications for an Awelon environment:
+
+* software agents that interact with systems and maintain the dictionary
+* internal structures with live data and direct manipulation
+
+ two *kinds* of applications in an Awelon system:
+
+
+bots as
+* transactional scripts on repeat
+* system of constraint variables
+* RDP behaviors with shared sets
+* actors with mailboxes
+
+editors
+* scripts for macro edits
+* 
+
+
 ## Goals
 
 A goal for Awelon project is to integrate the programmer and user experiences. 
@@ -41,9 +60,83 @@ The concatenative structure of both Awelon and the dictionary allows us to conve
 
 Awelon's features offer a foundation to build upon, but we need more.
 
+## Stateful Applications
+
+To model stateful applications, we have a few basic options: 
+
+* directly maintain representation of app state in the dictionary
+* recompute state from temporal databases, input event histories
+* enable apps to manage explicit record of state, limited structure
+
+I'd prefer to eliminate the first option. Maintaining state with lazy evaluation of words is semantically awkward in context of a mutable dictionary. It also hinders debugging and repairing in case of an incorrect definition, which makes the system more fragile. Further, it's mechanically awkward because app states will tend to grow larger than their initial definitions (though *stowage* can help).
+
+Assuming we favor the second option, we'll be depending heavily on databases and time-series inputs. Fortunately, it's quite easy to model time-series data using an LSM-trie indexed on timestamps or a similar mechanism, and such representations should work very nicely together with memoization and caching. The main concern with keeping input histories is that they might become very large for long-running applications. For those cases, we must model *lossy* histories, e.g. using a windowed or exponential decay model or a probabilistic frame model, then carefully design our applications to be *robust* in context of these lossy records.
+
+While that's doable and fits many use-cases, I think programmers would complain it's too restrictive. 
+
+
+
+
+So we'll 
+
+Thus Awelon systems will normally use time-series data to compute the current application state. The "time-series" feature is important because it provides a common dimension to merge multiple independent input sources into a shared stream where the bulk is relatively stable and thus subject to *Memoization*. A weakness of this design is the inability to easily forget old data, but we could design for lossy history models (for example, probabilistic or monoidal), allowing us to summarize past events to recover space.
+
+*Aside:* At very large scales, we also require spatial partitioning of our stateful resources. This can be modeled by adding latency to logical timestamps based on the origin of data, simulating transmission or processing delays.
+
+
 ## Binding Live Data
 
-To serve as a "living sea of data", we first need live data in our dictionary.
+How should we get live data into our dictionary?
+
+One option is to have some live "packages" like a `weather-*` package for weather data. This package could be published through a shared server. Updates to the package would result in a later update to some dictionaries, potentially in near real-time. This seems useful for one-to-many distributions, but perhaps not for many-to-many communications.
+
+An ad-hoc option is software agents that interact with a network and a dictionary. For these agents we could try to record their state, or simply allow an agent reset at any time. Either way, the agents could be defined within the dictionary, and would allow flexible interactions with the real world.
+
+An intermediate option, perhaps, is to model publish-subscribe at the dictionary layer. The dictionary describes some subscriptions and published elements, and the system inputs and outputs some data accordingly. We might have an entire temporal database of published elements, and also receive a temporal database for each subscription.
+
+It's also feasible to represent mailboxes within a dictionary, allowing for incoming messages to be recorded and outgoing messages to be acknowledged. Although fire-and-forget message passing is a terribly awkward fit for Awelon, a monotonic temporal database with a full history of messages should work well enough, and limiting messages to binaries (or another constrained vocabulary) would mitigate issues related to incompatible definitions between dictionaries.
+
+
+ Although message-passing is an awkward fit, it is much less a problem if we can assume a monotonic system where all inputs and outputs are recorded isn't a bad fit. 
+
+As a specialization of publish-subscribe, we can support active message-passing dictionaries. We simply have a unique "input channel" for our incoming messages (perhaps based on a secure hash of a public key). And similarly, we publish to many output channels. 
+
+models with inboxes and outboxes. Basically, we just need publish-subscribe where 
+
+ of binary data, we could support networked dictionaries. Basically, all we need
+
+ 
+
+The network interaction would involve waits (to read a socket) while a transaction might involve explicit retries (wait for change in any definition read within transaction). Because it's a stateless agent, we don't need to record agent state - we simply restart as needed.
+
+
+
+
+
+ execute the same behavior: interact with a network and construct a transaction on a dictionary, potentially waiting on the network or waiting on an independent change within the dictionary. 
+
+
+ In this case, our "agent" might be a monadic script that interacts with a dictionary and a network, perhaps building one transactional dictionary update then repeating (with an option to wait for a read definition to change). These active agents could be defined within the dictionary and executed by an external system, and would be flexible in their external behavior.
+
+
+
+
+
+
+ that will, via network sockets and reflection, incrementally maintain the dictionary. 
+
+
+Agent state could be recorded back to the dictionary, or we could leave that ad-hoc and simply assume the agent can be reset at any time.
+
+
+
+ describe monadic "agents" that have access to sockets and reflective access to the dictionary. 
+
+These agents will obtain real-world data, publish it into a dictionary. But this approach has a lot of issues: where is agent state recorded? if we're synchronizing another dictionar
+
+An interesting option is to adapt publish-subscribe models. Some words within a dictionary could describe
+
+
 
 I assume there exist multiple agents maintaining a shared community dictionary. The different agents may be authorized to maintain different components or volumes, usually distinguished by prefix (like `weather-*` for a weather almanac). Definitions within the community may be automatically curated, e.g. via type checking, integration testing, enforcing locality constraints (e.g. that `foo-local-*` and `(seal-foo)` are only used from words of form `foo-*`), and so on. 
 
@@ -66,19 +159,6 @@ I favor the second option. It avoids any ad-hoc models at the Awelon layer, and 
 Conveniently, Awelon's dictionary representation makes live dictionaries or even live packages easy to update live via binary streams. We can easily distribute live data after it has been already formatted for the Awelon dictionary. Further, it's robust to disruption because the 'update events' contribute in such a simple way to the Awelon dictionary's current state.
 
 We would need external services to validate updates in real-time, e.g. to ensure type safety, guard against undesirable package dependencies, or even test correctness of data. In this sense, updates must go through proper 'channels' to be distributed.
-
-## Stateful Applications
-
-To model stateful applications, we have two basic options: 
-
-* maintain a representation of application state in the dictionary
-* recompute state from the time-series history of relevant events
-
-However, we can eliminate the first option. Maintaining state is semantically awkward because the current state will depend on *when* the application was evaluated. Further, it requires centralizing the "inputs" to the application in a manner that does not work nicely with data packages.
-
-Thus Awelon systems will normally use time-series data to compute the current application state. The "time-series" feature is important because it provides a common dimension to merge multiple independent input sources into a shared stream where the bulk is relatively stable and thus subject to *Memoization*. A weakness of this design is the inability to easily forget old data, but we could design for lossy history models (for example, probabilistic or monoidal), allowing us to summarize past events to recover space.
-
-*Aside:* At very large scales, we also require spatial partitioning of our stateful resources. This can be modeled by adding latency to logical timestamps based on the origin of data, simulating transmission or processing delays.
 
 ## Modeling Effects and Interactions
 
