@@ -5,7 +5,7 @@
 
 TLDR: spreadsheets at scale with bots at border
 
-I want control over my computation environment. Given the opportunity, I would curate my sources, copy databases for personal use and archival, own my data processing algorithms, freely replay and trace computations to their sources to support comprehension, extend and customize my environment with new data or data processing, and selectively share my extensions and customizations with my community. To achieve this control, I would marginalize use of black-box services, remote databases, and walled-garden GUI applications.
+I want control over my computation environment. Given the opportunity, I would curate my sources, copy databases for personal use and archival, own my data processing algorithms, freely replay and trace computations to their sources to support comprehension, extend and customize my environment with new data or data processing, and selectively share my extensions and customizations with my community.
 
 Other people also want to control my computation environment: to push advertising and propaganda, to manage and sell my private data, to hide the algorithms behind obfuscation and EULAs, to restrict unpurchased extension, to cultivate a dependency upon a corporate provider. There are several economic and political incentives that pull holistic software architecture design in a direction that marginalizes user control. But that isn't the direction I want to go, at least not as the default experience.
 
@@ -13,13 +13,15 @@ Awelon is designed for user or community control of environments. Elements:
 
 * The Awelon environment - a *Dictionary* - is modeled as a [persistent tree structure](https://en.wikipedia.org/wiki/Persistent_data_structure) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage). This allows for lazy incremental downloads, efficient atomic backups, and (via proxy or [content delivery network](https://en.wikipedia.org/wiki/Content_delivery_network)) sharing of physical storage and network overheads between clients. We can efficiently download data from a trusted source, or even synchronize 'live' data, and we can feasibly do so at massive scales: weather histories, street maps, community wikis and forums, etc..
 
-* The Awelon language is [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) via local [rewriting](https://en.wikipedia.org/wiki/Rewriting) evaluation. We use a one simple language for structured data, data processing algorithms, and the binding of algorithms and data into computed views. Between local rewriting and purity, we can incrementally compute and cache computed views, safely replay computations, and render intermediate computation steps as code for user comprehension. In context of our environment, purity also makes it easy to embed tests, perform broad consistency analysis, and securely share algorithms or computed views.
+* The Awelon language is [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) via local [rewriting](https://en.wikipedia.org/wiki/Rewriting) evaluation. We use this language to represent structured data, data processing algorithms, and the binding of algorithms and data into views. Between local rewriting and purity, we can incrementally compute and cache views, safely replay computations, and render intermediate computation steps for user comprehension. Our environment can also embed tests, perform consistency analysis, and securely share algorithms or views.
 
-* The Awelon user interface will leverage [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). We can build rich text or graphical projections on top of Awelon's simple syntax (see *Editable Views*). We can render and edit our data and code using tables, graphs, sheet music, flow charts, textual DSLs - whichever is most appropriate to each problem. Importantly, because we evaluate by rewriting, we can also graphically render those intermediate and final computed results. This blurs the boundary between data, code, application, and debugger.
+* The Awelon user interface is based on [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). We can leverage flexible graphical projections - tables, graphs, sheet music, flow charts, etc. - for editing code and data. Critically, due to rewriting evaluation, we can use the same projections to render computed values or intermediate debug steps. In context of live data, we can display live computed values like a dashboard or spreadsheets.
 
-* The Awelon user will delegate [bots](https://en.wikipedia.org/wiki/Software_agent) to automate maintenance and integration with external systems. Bot behavior and state will be represented in the dictionary, where they can be directly observed and manipulated by the user, captured in snapshots for debugging, or easily shared with the community.
+* The 'active' Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to interact with external systems and perform tedious maintenance chores. Awelon's bots are modeled as monadic transactions that repeat indefinitely, occasionally awaiting a relevant state change. Users control bots through direct manipulation of their definition. Real-world effects are supported by binding special variables to resources outside the dictionary, such as network sockets.
 
-Modulo bots, we effectively have scalable spreadsheets with graphical UI. Bots can give us a stateful, collaborative environment that integrates real-world information sources. The [application models](ApplicationModel.md) document describes patterns for modeling applications within the Awelon environment via projections and bots. This document focuses on the Awelon language and dictionary.
+The idea of projectional editors can easily be stretched - for example, collaborative development (suggestions, conflict avoidance) via interaction with auxiliary variables, or macro editing by invoking a transactional operation through an input form. But, essentially, effectful user actions are represented by edits. Through edits on 'active' environments, users control bots. Bots control everything else.
+
+The [application models](ApplicationModel.md) document describes patterns for modeling applications within the Awelon environment via projections and bots. This document focuses on the Awelon language and dictionary.
 
 ## Language Basics
 
@@ -145,17 +147,15 @@ Specifically, the current secure hash proposal is the 320-bit [BLAKE2b](https://
 
 The BLAKE2b algorithm could be replaced by another, simply rewriting the entire dictionary, if ever it proves inadequate. The proposed base32 alphabet is chosen to avoid accidental offense with pronounceable words.
 
-*Security Note:* A secure hash should be treated as a bearer token authorizing access to the associated resource. However, it's important that the system must not *leak* this authority. In particular, we should guard against timing attacks to discover stored secure hashes. Further, there is an attack of the form "does data with this secure hash exist?" where the  attacker might request millions of hashes to discover, for example, a partially known phone number within an otherwise predictable template. This attack can be resisted by including an entropy field (or comment) with random data together with the sensitive data.
-
-*Security Note 2:* To work with untrusted content distribution services, we can easily use half our secure hash for lookup and the other half as a symmetric encryption key. 
+*Security Notes:* A secure hash should be treated as a bearer token authorizing access to the associated resource. However, it's important that the system must not *leak* this authority. In particular, we should guard against timing attacks to discover stored secure hashes. Further, there is an attack of the form "does data with this secure hash exist?" where the  attacker might request millions of hashes to discover, for example, an unknown phone number within an otherwise predictable template. This can be resisted by including an entropy field within sensitive data. Finally, to work with untrusted content distribution services, we could encrypt data using the original hash, and lookup using a hash of hash.
 
 ### Software Packaging and Distribution
 
 Awelon is designed for distribution of entire dictionaries. An advantage of whole-dictionary distribution is that everything can be curated, tested, known to work nicely together. There is no "version hell" of package maintenance. Awelon dictionaries can be very large, but *lazy download* of secure hash resources can enable working with dictionaries that contain more data than we use.
 
-Yet packages remain useful, e.g. for access control, commercial reasons, or real-time update of data packages. For these cases, we can conveniently align package names with a word prefix. This enables a one-line install or update `/packagename- secureHash`, and works nicely with static enforcement of local definitions and value sealers. Like conventional software package systems, we would likely develop a community package registry.
+Packages remain useful, e.g. for access control, commercial reasons, or real-time update of data packages. For these cases, we can conveniently align package names with a word prefix. This enables a one-line install or update `/packagename- secureHash`, and works nicely with static enforcement of local definitions and value sealers. Like conventional software package systems, we would likely develop a community package registry.
 
-Awelon doesn't have built-in support for namespaces. We'll use the full `packagename-` prefix for internal and external references. Resulting verbosity can be ameliorated by *Editable Views*.
+However, Awelon doesn't optimize for packages. We must use the full `packagename-` prefix for both internal and external references. Forking or renaming a package will require rewriting those internal package references - fortunately, that's a simple linear-time operation. Verbosity and noise in the user-interface from repeated package prefixes can be ameliorated via *Editable Views*.
 
 ## Stowage
 
@@ -164,13 +164,11 @@ By annotation, large values could be moved from memory to environment:
         [large value](stow)    => [stow-id]
         [small value](stow)    => [small value]
 
-Here `stow-id` must be a word representing `large value`. This will be a fresh word in the common case, though stowing the same value multiple times may reuse a word.
+Here `stow-id` must be a word representing `large value`. The stowage word should also be much smaller than the value. Further, it should be *stable* in the sense that the the same word tends to correspond to the same value or location even after minor changes to a computation. Stability is valuable for reusable memoization and also simplifies stable layout when rendering live computed views.
 
-Stowage provides at least three benefits. First, it can serve as a controllable variation of [virtual memory](https://en.wikipedia.org/wiki/Virtual_memory), moving large data to a larger but slower storage medium. Second, it can simplify *progressive disclosure* for graphical or textual projections over computed data.  Third, assuming relatively stable stowage words, use of stowage can make memoization more efficient because it compares versioned names instead of large values.
+Stowage can serve as a controlled variation of [virtual memory](https://en.wikipedia.org/wiki/Virtual_memory) enabling larger than memory computations. Stowage also interacts nicely with *Memoization*, reducing large value comparisons to simple word version comparisons. Most importantly for Awelon's goals, stowage supports *progressive disclosure* when rendering large computed values in a user-interface. Without stowage, we have an inconvenient distinction between source data versus computed values.
 
-The disadvantage of stowage is that it is not locally obvious how long to keep stowage definitions. There are a few solutions. First, we can provide stowage definitions together with the result. Second, we can make our stowage cache an explicit part of a compute session model, such that its lifespan is under control. Third, we can use a clever naming scheme and stable stowage names, such that when `foo-stow-id` is not remembered we know to recompute `foo` then check again.
-
-Despite these disadvantages, I believe the benefits make stowage worth pursuing. 
+The main weakness of stowage: it is not locally obvious how long to remember stowed values after performing the computation that produces them. Viable solutions: report stowage together with an evaluated result, model stowage as an element of a stateful compute session so we can use the session life-cycle, or use a naming scheme that tracks origin such as `foo-stow-id` so we know to recompute `foo` if the value has been forgotten.
 
 ## Evaluation
 
@@ -319,23 +317,188 @@ With annotations, `[X](var-x)` might tag a value to simplify debugging.
 
 Named local variables offer a useful proof-of-concept for *Editable Views* as a viable alternative to built-in syntax features. But I believe that most views will be projections of data constructors. Sophisticated whole-program rewrites like named local variables would be the exception, not the rule.
 
-## Arrays
-
-Awelon doesn't have an array data type. But use of annotations and accelerators can impose an array representation for some lists, such that we can access data in near-constant time. In context of a purely functional language, *modifying* an array is naively O(N) - copy the array with the modification in place. 
-
-However, when we know we hold a unique reference to an array's representation, a runtime could modify the representation in-place without violating observable purity. This requires tracking whether we have more than one reference to an array, either dynamically or statically. Awelon's explicit copy operator makes dynamic tracking feasible, so we could flexibly use in-place mutation normally with copy-on-write for shared arrays.
-
-*Note:* Use of arrays is often better replaced by persistent data structures, such as finger-trees or int-maps. Persistent data structures are more flexible in their application, and integrate more readily with *Stowage* for larger-than-memory data. However, arrays do offer performance benefits if used well, so there are trade-offs to consider.
-
-## Labeled Data
+## Labeled Data and Records
 
 Labeled data types (such as records and variants) are weakly commutative, human meaningful, and extensible in comparison to spatially structured data (such as `(A*B)` pairs and `(A+B)` sums). Awelon does not provide built-in support for labeled data. However, it isn't difficult to encode records as association lists, for example. Between annotations, accelerators, and editable views, it should be feasible to implement labeled data within Awelon.
 
 An intriguing possibility is to work with *record constructor* functions, abstracting the actual record representation. A simple record constructor might look like `[[B] "b" put [A] "a" put ...]`. This preserves commutative structure within the record, permits flexible abstraction of records, and works conveniently with editable views. Updates would build the record, modify it, then rebuild the constructor - but this could be optimized away via accelerators.
 
-## Generic Programming in Awelon
+## Arrays and In-Place Mutation
+
+Awelon doesn't have an array data type. But between annotations and accelerators, we can impose an array representation for some lists, such that we can access data in near-constant time. 
+
+In context of a purely functional language, *modifying* an array is naively O(N) - we must copy the array with the modification applied to the copy. However, there is a way to bypass this: if we only have one reference to our array, then logically we can simultaneously construct the new array and garbage-collect the old array. It is feasible to optimize this into an in-place update.
+
+The challenge is knowing or ensuring that there is only one reference. For this, we could try dynamic tracking, or we could favor explicit annotations and static analysis. I favor explicit because it results in a more robust, predictable performance, warns developers if assumptions are violated, and avoids runtime overheads involved with tracking which values are shared. Further, in-place mutation of arrays is most valuable in context of tight loop algorithms - union-find, sorting, etc..
+
+In addition to arrays, we might also develop in-place mutation for records. 
+
+*Note:* Persistent data structures are more flexible than arrays. Besides preserving prior values, they play nicely with sparse data, stowage, memoization, and progressive disclosure. I would strongly recommend use of a persistent data structure unless in-place mutation is essential for performance.
+
+## Generic Programming
 
 A weakness of Awelon is lack of built-in support for generic programming. For example, we cannot implicitly overload an `add` word to use different functions for different types, such as natural numbers versus matrices. We can use explicit overloads, but such mechanisms are often syntactically awkward and difficult to integrate with type systems. Deferred typing and projectional editing should help, but we still require a model with concrete constructors and predictable behavior to project above.
 
 My intuition is to generalize generic programming as a constraint or search problem. For example, the choice of which `add` function to use is based on constraints in future input and result types, which may be provided later. It seems feasible to develop a monad with an implicit environment of constraints, then evaluate a monad to a program result at compile-time, i.e. staged metaprogramming. But I have not verified this intuition in practice.
+
+## Bots and Effects
+
+In the Awelon system, the user-interface is a projectional editor. Effectful user actions are represented as *edits*. External effects, such as controlling lights, are handled indirectly. The dictionary can define several software agents
+
+
+will have associated software agents, bots, that integrate with external systems.
+
+
+In the simplest case, we can try to synchronize real-world state (like the desired state for a light) with a computed value, which roughly corresponds to publish-subscribe output.
+
+By editing code that represents user intentions or policies, 
+
+ 
+
+ser intentions and policies are represented within the dictionary. Users can represent their inten
+
+ will not directly manipulate external systems. 
+
+ Effects on external systems are handled indirectly, by a collection of *bots* whose behavior and state can be controlled through the projectional editor
+
+
+In the Awelon system, our user-interface is a projectional editing system. We graphically displays data, algorithms, and live computed views. User intentions and policies are represented within the dictionary. Effectful user actions are represented as edits on the dictionary. Relevantly, users do not directly manipulate external devices, they only manipulate the dictionary  
+
+However, humans won't directly manipulate external devices. 
+
+
+ Effectful user actions are represented as edits. External effects, controlling the world outside the Awelon dictionary, can be indirectly supported by *bots*. 
+
+
+
+
+, which can display both source and live computed values (like a spreadsheet). User actions, intentions, and policies are always represented as *edits*. Most 
+
+
+
+ is encoded as an 'edit'. But 
+
+ humans control bots through projectional editor, 
+
+ and bot
+
+In Awelon systems, data processing is handled by a pure rewriting language, user-interfaces are the domain of a projectional editing system, and bots perform maintenance and effects in the background. The editing system will naturally involve effects related to display, user-input, user-model (navigation, focus, clipboard, file access), and so on. But relevant user actions should ultimately be encoded as *edits*. Most other effects will be handled by bots.
+
+Humans control bots, and bots control the programmable physical environment.
+
+For human control, bot behavior and state must be represented within the dictionary. This enables us to observe and manipulate bot behavior through the projectional editing system. However, this also limits our choice of suitable bot models. To easily comprehend and modify bot behavior, it should be stable
+
+
+ Bot behavior must be stable and internally stateless, such that we can easily edit and replace it. For safety and consistency, it's also preferable if bots are *atomic* in the sense that we can safely abort and replace at any time. 
+
+
+be scripts running on repeat, allowing us to replace the script between runs. Ideally, Awelon bots are *atomic* scripts, allowing for safe replacement at any time.
+
+
+
+
+ we must control bots via the given user-interface, a projectional editor. 
+
+To ensure human control over bots *via* the user-interface, a projectional editor, there are requirements. First, bot state and behavior must be fully represented within the dictionary.
+
+ Second, the bot behavior function should be stable: bots do not directly self-update. 
+
+
+Humans control the bots, bots control the physical environment.
+
+Most effects are left to bots. Humans control 
+
+To ensure human control over bots, bots behavior and state should be represented within the dictionary,  
+
+
+
+it shouldn't be operating outside its limited scope of human attention and action, and all human actions should  *edits*. 
+
+
+
+
+
+ and bots automate background maintenance. Although our editing system may involve ad-hoc effects - display, user-input, file uploads, edit macros, etc. - all such effects should be driven by human action and attention. Most effects will be handled by bots.
+
+
+ it should not directly interact with systems outside the user and dictionary. 
+
+
+We might upload a file, but that operation should go through the user.) 
+ - such as uploading a file or executing a macro edit-script - such effects should be driven by human attention and 
+
+ should always apply to the Awelon *dictionary*
+
+ driven by human act or intent, 
+
+
+ and the projectional editor shouldn't directly communicate with the 
+
+ communicate with external systems. 
+
+. Thus, bots are responsible for *most* effects. 
+
+
+
+
+
+. Our editing system will certainly be effectful to support display, user input, dictionary updates, file uploads, etc.. But, ultimately, effects through an editor should be fully driven by human attention. Bots are responsible for effects that should proceed independently of human attention.
+
+
+
+and so on. But it should 
+ effects are necessary to support video display, keyboard input, dictionary update, and so on. We might additionally support file uploads, import/export, and so on. 
+
+background effects
+
+But it should avoid direct interaction with external systems. There may be some special exceptions, 
+
+like using a file dialog to upload a binary, but 
+
+
+
+Our editing system will necessarily involve effects such as video display, keyboard input, update of dictionary storage. We might further support macro editing scripts or filesystem import and export. However, the editing system should avoi
+
+  , there should be no significant communications between the projectional editor and other systems. 
+
+
+
+
+The latter includes display of live data and computed views, and may broadly leverage external resources -  browser
+
+ and computations, like a spreadsheet. 
+
+
+by a projectional editing system. Projectional editing can broadly include live dashboards, web services, and so on, but should ultimately be driven by human attention.
+
+
+. In my vision of Awelon systems, users can control bots via direct manipulation: bot behavior and state will be represented in the dictionary, and manipulation of these behaviors will directly 
+
+
+
+
+In context of Awelon
+
+
+ but we'll assume that our dictionary specifies several 'bots' to perfor
+
+
+by the projectional editor, and integration with external systems will be handled by bots. 
+
+computation is handled by pure functions, GUIs are handled via projectional editor, 
+
+Bots will extend user control from the  dictionary to the outside world. 
+
+Users of the Awelon environment will ultimately  extend their control  external systems.
+
+
+we can represent effectful behaviors using a monad or similar. The 
+
+This is insufficient for a broad class of application programming - specifically, those applications that will interact with the real-world. 
+
+Awelon is a purely functional language. 
+
+
+Bots are an important part of Awelon's vision
+
 
