@@ -11,17 +11,17 @@ Other people also want to control my computation environment: to push advertisin
 
 Awelon is designed for user or community control of environments. Elements:
 
-* The Awelon environment - a *Dictionary* - is modeled as a [persistent tree structure](https://en.wikipedia.org/wiki/Persistent_data_structure) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage). This allows for lazy incremental downloads, efficient atomic backups, and (via proxy or [content delivery network](https://en.wikipedia.org/wiki/Content_delivery_network)) sharing of physical storage and network overheads between clients. We can efficiently download data from a trusted source, or even synchronize 'live' data, and we can feasibly do so at massive scales: weather histories, street maps, community wikis and forums, etc..
+* The Awelon environment (the *Dictionary*) is modeled as a [persistent tree structure](https://en.wikipedia.org/wiki/Persistent_data_structure) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage). This supports huge volumes, lazy downloads, incremental synchronization, atomic manipulations, and (via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network)) amortizing physical storage and network costs across users.
 
-* The Awelon language is [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) via local [rewriting](https://en.wikipedia.org/wiki/Rewriting) evaluation. We use this language to represent structured data, data processing algorithms, and the binding of algorithms and data into views. Between local rewriting and purity, we can incrementally compute and cache views, safely replay computations, and render intermediate computation steps for user comprehension. Our environment can also embed tests, perform consistency analysis, and securely share algorithms or views.
+* The Awelon language is [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) with local [rewriting](https://en.wikipedia.org/wiki/Rewriting) evaluation. This language is used for structured data and data processing, including binding of data into computed views. We can cache and [compute incrementally](https://en.wikipedia.org/wiki/Incremental_computing) over live data. We can safely replay computations. Intermediate computation states can be written in the same language as initial source and final results, which simplifies tooling and debugging. We can automate testing and global consistency analysis.
 
 * The Awelon user interface is based on [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). We can leverage flexible graphical projections - tables, graphs, sheet music, flow charts, etc. - for editing code and data. Critically, due to rewriting evaluation, we can use the same projections to render computed values or intermediate debug steps. In context of live data, we can display live computed values like a dashboard or spreadsheets.
 
-* The 'active' Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to interact with external systems and perform tedious maintenance chores. Awelon's bots are modeled as monadic transactions that repeat indefinitely, occasionally awaiting a relevant state change. Users control bots through direct manipulation of their definition. Real-world effects are supported by binding special variables to resources outside the dictionary, such as network sockets.
+* The active Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to interact with external systems and perform tedious maintenance chores. Awelon's bots are modeled as monadic transactions that repeat indefinitely, occasionally awaiting a relevant state change. Real-world effects are integrating by binding special variables to external resources, such as network sockets. Users control bots through editing their definition, which enables [interactive programming](https://en.wikipedia.org/wiki/Interactive_programming) and [live coding](https://en.wikipedia.org/wiki/Live_coding). 
 
-The idea of projectional editors can easily be stretched - for example, collaborative development (suggestions, conflict avoidance) via interaction with auxiliary variables, or macro editing by invoking a transactional operation through an input form. But, essentially, effectful user actions are represented by edits. Through edits on 'active' environments, users control bots. Bots control everything else.
+The idea of projectional editors can safely be stretched - for example, we can support collaborative development (suggestions, conflict avoidance) via interaction with auxiliary variables, or macro-edits might be supported through editing a form then pressing a button to invoke a transactional script. But, essentially: Effectful user actions are represented by edits. Through edits, users control bots. Bots control everything else.
 
-The [application models](ApplicationModel.md) document describes patterns for modeling applications within the Awelon environment via projections and bots. This document focuses on the Awelon language and dictionary.
+The [application models](ApplicationModel.md) document describes patterns for modeling applications within the Awelon environment via projections and bots. This document focuses more on the Awelon language and dictionary.
 
 ## Language Basics
 
@@ -343,162 +343,13 @@ My intuition is to generalize generic programming as a constraint or search prob
 
 ## Bots and Effects
 
-In the Awelon system, the user-interface is a projectional editor. Effectful user actions are represented as *edits*. External effects, such as controlling lights, are handled indirectly. The dictionary can define several software agents
+Logically, an Awelon bot is an infinite loop that transactionally reads and executes a bot definition. The bot definition should be a simple script to read and write variables in the environment. If the transaction fails, we can wait for a relevant state change before we retry. In practice, bots will be draining task queues or pushing to bounded-capacity channels, and will *voluntarily* fail if inputs are empty or outputs are full. This allows bots to spend most of their time waiting for a relevant change.
 
+Effects are supported by through special system variables. For example, a network socket might be represented as a pair of binary data variables for separate input and output. The system knows to move data between variables and network. Modeling synchronous effects in this design is very awkward, but it's adequate for queues, streams, mailboxes, publish-subscribe, constraint systems, tuple spaces, and many other models. 
 
-will have associated software agents, bots, that integrate with external systems.
+Which effects are supported will depend on context. For example, if the Awelon environment is hosted on a virtual machine, it might directly control the network device. If hosted by a web server that has one environment per user, we could still model useful effects above HTTP requests, web-sockets, and perhaps a simple e-mail service.
 
+System variables will often be ephemeral. We can model a 'system reset' in terms of resetting all system variables.
 
-In the simplest case, we can try to synchronize real-world state (like the desired state for a light) with a computed value, which roughly corresponds to publish-subscribe output.
-
-By editing code that represents user intentions or policies, 
-
- 
-
-ser intentions and policies are represented within the dictionary. Users can represent their inten
-
- will not directly manipulate external systems. 
-
- Effects on external systems are handled indirectly, by a collection of *bots* whose behavior and state can be controlled through the projectional editor
-
-
-In the Awelon system, our user-interface is a projectional editing system. We graphically displays data, algorithms, and live computed views. User intentions and policies are represented within the dictionary. Effectful user actions are represented as edits on the dictionary. Relevantly, users do not directly manipulate external devices, they only manipulate the dictionary  
-
-However, humans won't directly manipulate external devices. 
-
-
- Effectful user actions are represented as edits. External effects, controlling the world outside the Awelon dictionary, can be indirectly supported by *bots*. 
-
-
-
-
-, which can display both source and live computed values (like a spreadsheet). User actions, intentions, and policies are always represented as *edits*. Most 
-
-
-
- is encoded as an 'edit'. But 
-
- humans control bots through projectional editor, 
-
- and bot
-
-In Awelon systems, data processing is handled by a pure rewriting language, user-interfaces are the domain of a projectional editing system, and bots perform maintenance and effects in the background. The editing system will naturally involve effects related to display, user-input, user-model (navigation, focus, clipboard, file access), and so on. But relevant user actions should ultimately be encoded as *edits*. Most other effects will be handled by bots.
-
-Humans control bots, and bots control the programmable physical environment.
-
-For human control, bot behavior and state must be represented within the dictionary. This enables us to observe and manipulate bot behavior through the projectional editing system. However, this also limits our choice of suitable bot models. To easily comprehend and modify bot behavior, it should be stable
-
-
- Bot behavior must be stable and internally stateless, such that we can easily edit and replace it. For safety and consistency, it's also preferable if bots are *atomic* in the sense that we can safely abort and replace at any time. 
-
-
-be scripts running on repeat, allowing us to replace the script between runs. Ideally, Awelon bots are *atomic* scripts, allowing for safe replacement at any time.
-
-
-
-
- we must control bots via the given user-interface, a projectional editor. 
-
-To ensure human control over bots *via* the user-interface, a projectional editor, there are requirements. First, bot state and behavior must be fully represented within the dictionary.
-
- Second, the bot behavior function should be stable: bots do not directly self-update. 
-
-
-Humans control the bots, bots control the physical environment.
-
-Most effects are left to bots. Humans control 
-
-To ensure human control over bots, bots behavior and state should be represented within the dictionary,  
-
-
-
-it shouldn't be operating outside its limited scope of human attention and action, and all human actions should  *edits*. 
-
-
-
-
-
- and bots automate background maintenance. Although our editing system may involve ad-hoc effects - display, user-input, file uploads, edit macros, etc. - all such effects should be driven by human action and attention. Most effects will be handled by bots.
-
-
- it should not directly interact with systems outside the user and dictionary. 
-
-
-We might upload a file, but that operation should go through the user.) 
- - such as uploading a file or executing a macro edit-script - such effects should be driven by human attention and 
-
- should always apply to the Awelon *dictionary*
-
- driven by human act or intent, 
-
-
- and the projectional editor shouldn't directly communicate with the 
-
- communicate with external systems. 
-
-. Thus, bots are responsible for *most* effects. 
-
-
-
-
-
-. Our editing system will certainly be effectful to support display, user input, dictionary updates, file uploads, etc.. But, ultimately, effects through an editor should be fully driven by human attention. Bots are responsible for effects that should proceed independently of human attention.
-
-
-
-and so on. But it should 
- effects are necessary to support video display, keyboard input, dictionary update, and so on. We might additionally support file uploads, import/export, and so on. 
-
-background effects
-
-But it should avoid direct interaction with external systems. There may be some special exceptions, 
-
-like using a file dialog to upload a binary, but 
-
-
-
-Our editing system will necessarily involve effects such as video display, keyboard input, update of dictionary storage. We might further support macro editing scripts or filesystem import and export. However, the editing system should avoi
-
-  , there should be no significant communications between the projectional editor and other systems. 
-
-
-
-
-The latter includes display of live data and computed views, and may broadly leverage external resources -  browser
-
- and computations, like a spreadsheet. 
-
-
-by a projectional editing system. Projectional editing can broadly include live dashboards, web services, and so on, but should ultimately be driven by human attention.
-
-
-. In my vision of Awelon systems, users can control bots via direct manipulation: bot behavior and state will be represented in the dictionary, and manipulation of these behaviors will directly 
-
-
-
-
-In context of Awelon
-
-
- but we'll assume that our dictionary specifies several 'bots' to perfor
-
-
-by the projectional editor, and integration with external systems will be handled by bots. 
-
-computation is handled by pure functions, GUIs are handled via projectional editor, 
-
-Bots will extend user control from the  dictionary to the outside world. 
-
-Users of the Awelon environment will ultimately  extend their control  external systems.
-
-
-we can represent effectful behaviors using a monad or similar. The 
-
-This is insufficient for a broad class of application programming - specifically, those applications that will interact with the real-world. 
-
-Awelon is a purely functional language. 
-
-
-Bots are an important part of Awelon's vision
-
+*Aside:* Useful performance techniques for transactional systems: Heuristic scheduling to avoid conflicts and waits. Batch many small transactions to amortize storage overheads. A combined read-eval can avoid read conflicts when evaluated result is unchanged. A combined write-apply could blindly modify a variable without introducing a read dependency.
 
