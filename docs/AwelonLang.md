@@ -11,17 +11,17 @@ Other people also want to control my computation environment: to push advertisin
 
 Awelon is designed for user or community control of environments. Elements:
 
-* The Awelon environment (the *Dictionary*) is modeled as a [persistent tree structure](https://en.wikipedia.org/wiki/Persistent_data_structure) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage). This supports huge volumes, lazy downloads, incremental synchronization, atomic manipulations, and (via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network)) amortizing physical storage and network costs across users.
+* The Awelon environment - the *Dictionary* - is represented as a [persistent tree structure](https://en.wikipedia.org/wiki/Persistent_data_structure) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage). This supports huge volumes, lazy downloads, incremental synchronization, lightweight backups, atomic updates, and (via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network)) amortizing physical storage and network costs for shared volumes.
 
 * The Awelon language is [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) with local [rewriting](https://en.wikipedia.org/wiki/Rewriting) evaluation. This language is used for structured data and data processing, including binding of data into computed views. We can cache and [compute incrementally](https://en.wikipedia.org/wiki/Incremental_computing) over live data. We can safely replay computations. Intermediate computation states can be written in the same language as initial source and final results, which simplifies tooling and debugging. We can automate testing and global consistency analysis.
 
 * The Awelon user interface is based on [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). We can leverage flexible graphical projections - tables, graphs, sheet music, flow charts, etc. - for editing code and data. Critically, due to rewriting evaluation, we can use the same projections to render computed values or intermediate debug steps. In context of live data, we can display live computed values like a dashboard or spreadsheets.
 
-* The active Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to interact with external systems and perform tedious maintenance chores. Awelon's bots are modeled as monadic transactions that repeat indefinitely, occasionally awaiting a relevant state change. Real-world effects are integrating by binding special variables to external resources, such as network sockets. Users control bots through editing their definition, which enables [interactive programming](https://en.wikipedia.org/wiki/Interactive_programming) and [live coding](https://en.wikipedia.org/wiki/Live_coding). 
+* An active Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to model stateful or effectful behavior. Awelon's bots are modeled as transactions that repeat indefinitely, frequently awaiting a relevant state change. Users can control bots through manipulation of their definitions, allowing for [live coding](https://en.wikipedia.org/wiki/Live_coding).
 
-The idea of projectional editors can safely be stretched - for example, we can support collaborative development (suggestions, conflict avoidance) via interaction with auxiliary variables, or macro-edits might be supported through editing a form then pressing a button to invoke a transactional script. But, essentially: Effectful user actions are represented by edits. Through edits, users control bots. Bots control everything else.
+The idea of projectional editing can be stretched a little: macro-editing by invoking transactional scripts via command shell or form submission, uploading a file or camera stream as a user edit action, collaborative editing by sharing user intention or activity through auxiliary variables in the environment. But the essential structure should remain: Effectful user actions are represented as edits. Through edits, users control bots. Bots control everything else.
 
-The [application models](ApplicationModel.md) document describes patterns for modeling applications within the Awelon environment via projections and bots. This document focuses more on the Awelon language and dictionary.
+The [application models](ApplicationModel.md) document describes useful patterns for modeling applications in the Awelon system via projections and bots. This document focuses on Awelon language and dictionary.
 
 ## Language Basics
 
@@ -40,11 +40,11 @@ An important class of performance annotations is *Accelerators*. Accelerators en
 
 ## Words
 
-Words are the user-definable unit in Awelon. Syntactically, a word is a sequence of lower-case alphanumerics and hyphens, starting with an alpha: regex `[a-z][a-z0-9-]*`. The formal meaning of a word is a trivial equivalence to its definition. A rewriting evaluation of a word will lazily substitute the definition.
+Words are the user-definable unit in Awelon. Syntactically, a word is a sequence of lower-case alphanumerics and hyphens, starting with an alpha. Regex: `[a-z][a-z0-9-]*`. The formal meaning of a word is a trivial equivalence to its definition. Evaluation will lazily substitute a word by its definition.
 
-Valid definitions must be acyclic, allowing for a simple inline expansion of all definitions (see *Loops*). Further, definitions must be block balanced - no unmatched `[` or `]` block delimiters. Environments may enforce additional constraints, such as reserving a volume of words for *Stowage* or modeling package private functions by restricting words `foo-local-*` to the corresponding prefix `foo-*`. 
+Valid definitions must be acyclic, allowing for a simple inline expansion of all definitions (see *Loops*). Further, definitions must be block balanced - no unmatched `[` or `]` block delimiters. 
 
-Words are not observable within Awelon computations, but will often have external meanings. For example, an editor might assume that `foo-meta-doc` should contain documentation for `foo`.
+Environments may enforce additional constraints, reserving or restricting definitions. For example, an environment might complain if `*-meta-doc` does not evaluate to the expected documentation type or words of form `foo-local-*` are referenced outside of `foo-*`. 
 
 ## Natural Numbers
 
@@ -181,9 +181,9 @@ Primitives rewrite by simple pattern matching:
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated (and potentially optimized) definitions. However, this rewrite should be *lazy* in the sense that a rewrite is avoided when it does not contribute to further progress. The motive is to retain human-meaningful symbols and structure within the evaluated result, which may be flexibly rendered via *Editable Views*. We may also support nouns - words defined by a single first-class value - such as `true = [a d]` or `unit = [(error)]` - which can be bound like values `true [] b == [true]`. An undefined word is equivalent to the trivial loop, like `:foo foo`, and does not rewrite further. 
+Words rewrite to their evaluated (and potentially optimized) definitions. However, this rewrite should be *lazy* in the sense that a rewrite is avoided when it does not contribute to further progress. The motive is to retain human-meaningful symbols and structure within the evaluated result, which may be flexibly rendered using *Editable Views*. 
 
-Evaluation strategy is unspecified. The default may be a heuristic mix of lazy, eager, and parallel. Annotations may guide the strategy. Valid, terminating computations will always converge on the same final result regardless of strategy. If we halt early, which is possible with a quota or error, evaluation details and optimizations might be exposed.
+Evaluation strategy is unspecified. The default may be ad-hoc and heuristic. Annotations may guide the strategy. Valid, terminating computations will always converge on the same final result regardless of strategy. If we halt early, due to quota or error, evaluation strategy and other optimizations might be exposed.
 
 ### Arity Annotations
 
@@ -343,13 +343,15 @@ My intuition is to generalize generic programming as a constraint or search prob
 
 ## Bots and Effects
 
-Logically, an Awelon bot is an infinite loop that transactionally reads and executes a bot definition. The bot definition should be a simple script to read and write variables in the environment. If the transaction fails, we can wait for a relevant state change before we retry. In practice, bots will be draining task queues or pushing to bounded-capacity channels, and will *voluntarily* fail if inputs are empty or outputs are full. This allows bots to spend most of their time waiting for a relevant change.
+An Awelon bot is modeled as a monadic transaction, repeated indefinitely. To wait for changes, we can abort the transaction. Rather than repeat an obviously unproductive behavior, we will wait for observed conditions to change before retrying. Similarly, we would wait after a read-only transaction. To ensure liveness and robust process control, we'll implicitly read the bot's definition at the start of each transaction.
 
-Effects are supported by through special system variables. For example, a network socket might be represented as a pair of binary data variables for separate input and output. The system knows to move data between variables and network. Modeling synchronous effects in this design is very awkward, but it's adequate for queues, streams, mailboxes, publish-subscribe, constraint systems, tuple spaces, and many other models. 
+A dynamic set of bots would too easily escape user control. Thus, Awelon is limited to a static set of bots. This limitation can be ameliorated by hierarchical transactions, which would enable us to fractally model bots within bots. To support this, I propose an alternative combinator like [Haskell STM `orElse`](http://hackage.haskell.org/package/stm-2.5.0.0/docs/Control-Monad-STM.html#v:orElse): if the preferred behavior aborts, we try the alternative.
 
-Which effects are supported will depend on context. For example, if the Awelon environment is hosted on a virtual machine, it might directly control the network device. If hosted by a web server that has one environment per user, we could still model useful effects above HTTP requests, web-sockets, and perhaps a simple e-mail service.
+Variables are represented within the dictionary. I propose to represent a variable as a reference `[ref-1123]` to a corresponding location `mem-1123`, where the value is written. The reference is an opaque, implicitly defined, easily recognized word to simplify type analysis, dataflow analysis, precise garbage collection, and specialized rendering in a projectional editor. Variables can be allocated by a transaction, or statically declare a symbolic reference (like `[ref-alicebot-status]`).
 
-System variables will often be ephemeral. We can model a 'system reset' in terms of resetting all system variables.
+Effects are implemented through asynchronous interaction with system-defined variables. For example, we can add a request to a system task queue. After we commit, the system can extract the request and handle it. The request will often include a variable to receive an asynchronous reply. A reply may contain new variables, perhaps representing the input and output channels for a duplex network socket.
 
-*Aside:* Useful performance techniques for transactional systems: Heuristic scheduling to avoid conflicts and waits. Batch many small transactions to amortize storage overheads. A combined read-eval can avoid read conflicts when evaluated result is unchanged. A combined write-apply could blindly modify a variable without introducing a read dependency.
+For performance reasons, transactions are not durable by default. We can feasibly pipeline parallel or lazy values through queues and multiple transactions. A synch request will instead be modeled as an effect, with a reply after synch completes. Multiple pending synch requests can be amortized.
+
+A goal for bots is maintenance of the dictionary. However, bots don't have direct access to the dictionary. Reflective operations on the dictionary will be modeled effectfully. This allows reflection to be restricted or disabled. If reflection is disabled, it should be feasible to "separately compile" bot-based applications in context of an immutable dictionary.
 
