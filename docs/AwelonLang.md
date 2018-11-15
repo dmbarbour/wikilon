@@ -17,7 +17,7 @@ Awelon is designed for user or community control of environments. Elements:
 
 * The Awelon user interface is based on [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). We can leverage flexible graphical projections - tables, graphs, sheet music, flow charts, etc. - for editing code and data. Critically, due to rewriting evaluation, we can use the same projections to render computed values or intermediate debug steps. In context of live data, we can display live computed values like a dashboard or spreadsheets.
 
-* An active Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to model stateful or effectful behavior. Awelon's bots are modeled as transactions that repeat indefinitely, frequently awaiting a relevant state change. Users can control bots through manipulation of their definitions, allowing for [live coding](https://en.wikipedia.org/wiki/Live_coding).
+* An active Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to model stateful or effectful behavior. Awelon's bots are modeled as transactions that repeat indefinitely, awaiting a relevant state change if unproductive. Users can control bots through the projectional editor, via manipulation of bot definitions or state, allowing for [live coding](https://en.wikipedia.org/wiki/Live_coding).
 
 The idea of projectional editing can be stretched a little: macro-editing by invoking transactional scripts via command shell or form submission, uploading a file or camera stream as a user edit action, collaborative editing by sharing user intention or activity through auxiliary variables in the environment. But the essential structure should remain: Effectful user actions are represented as edits. Through edits, users control bots. Bots control everything else.
 
@@ -343,17 +343,36 @@ My intuition is to generalize generic programming as a constraint or search prob
 
 ## Bots and Effects
 
-An Awelon bot process is modeled as a monadic transaction, repeated indefinitely. Coordination is implicit: if a bot reads an empty input queue, it can abort. Rather than deterministically repeat an obviously unproductive behavior, the bot will implicitly wait for observed conditions to change. There is no need for explicit waits, signals, locks, or polling.
+An Awelon bot process is modeled as a monadic transaction, repeated indefinitely. Coordination is implicit: if a bot reads an empty input queue, or perhaps a full output queue, it can abort. Rather than deterministically repeat an obviously unproductive behavior, the bot will implicitly wait for observed conditions to change. There is no need for explicit waits, signals, locks, or polling.
 
-Awelon bots are statically defined in the dictionary. We implicitly read the bot definition at the start of each transaction. Thus, changes to the definition are immediately applied. This ensures liveness and robust user control over system behavior. Dynamic bots would too easily escape user control. But we can feasibly simulate dynamic bots through hierarchical transactions.
+Awelon bots are statically named and defined in the dictionary. Dynamic bots would too easily escape user control. We implicitly read the bot definition at the start of each transaction. Thus, changes to a bot's definition are immediately applied. This ensures liveness and robust user control over system behavior.
 
-Lacking dynamic bots for subtasks, we'll do more work within one bot. We can ameliorate this using several strategies. First, we can leverage queues or signals to focus bots on productive work. Second, we can limit work per step with ad-hoc quotas to ensure sufficient opportunity for intervention or interaction. Third, we can heuristically schedule bots to avoid concurrency conflict and rework. Fourth, we can support pipelining of parallel computations through variables.
+To solve large, dynamic problems with a static set of bots, we can use several strategies: First, we can implement channels, signals, callbacks, or dirty-bits to focus transactions on productive work. Normal OOP patterns apply! Second, we can use ad-hoc quotas and voluntarily yield, providing opportunity for intervention and limiting rework in case of conflict. Third, we can leverage hierarchical transactions to support partial failure and simulate dynamic bots. Fourth, we can optimize for data parallelism, allowing programmers to pipe parallel computations through our variables and even through a batch of transactions.
 
-Variables are modeled within the dictionary: we have an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. A reference is implicitly defined (not defined in dictionary) to simplify auxiliary features like type inference, security analysis, performance, precise garbage collection, and specialized support from projectional editors. Variables may be allocated in transactions or declared by developers (like `[ref-alicebot-status]`). Our transaction API should support working with undefined variables.
+Variables are modeled within the dictionary: we have an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. A reference is implicitly defined (not defined in dictionary) to simplify auxiliary features like type inference, security analysis, performance, precise garbage collection, and specialized support from projectional editors. Variables may be allocated in transactions or declared by developers (like `[ref-alicebot-status]`). For convenience of initialization (and manual memory management), I will model variables as option types: the empty value corresponds to an undefined location.
 
-Effects are implemented as asynchronous interactions with declared system variables (like `[ref-sys-log]`). For example, we can add a request to a system task queue. After we commit, the system can extract the request and handle it. The request would likely include a channel to push the reply. Compared to conventional imperative programming, the main limitation with transactions is that we cannot model synchronous requests: waiting for a reply before we even commit the request is doomed to fail.
+A preliminary API (in pseudo-Haskell):
 
-Transactions are not durable by default. A synch request should be modeled as an effect. This gives us more freedom to batch transactions, pipeline parallel or lazy computations through variables, and avoid serialization of intermediate states or stowage. Reflective access to the larger dictionary is also modeled as an effect, and might be excluded if we want separate compilation of a bot-based application.
+        type T v e r 
+        instance Monad (T v e)
+        alloc   :: T v e (v a) -- fresh variable
+        read    :: v a -> T v e (Maybe a)
+        write   :: v a -> Maybe a -> T v e ()
+        try     :: T v e r -> (e -> T v e' r) -> T v e' r
+        fail    :: e -> T v e r
+        type Bot v = T v () ()
 
-Sharing bots through a community or app market introduces security concerns. Users should be able to control a distrusted bot, limit its behavior without deep knowledge of its implementation. I propose two mechanisms: First, a `[code](norefs)` annotation (and type attribute) can require that code does not embed any `ref-*` words. This enables authority to be configured and provided separately. Second, we can support static package private state, such that we are warned if `ref-foo-private-x` is directly used outside of `foo-*`, enabling us to model static objects or stateful APIs.
+        -- optimizable to avoid some read-write conflicts
+        modify  :: v a -> (Maybe a -> Maybe a) -> T v e ()
+        modify v f = read v >>= write v . f
+
+Here `try` supports hierarchical transactions and exceptions. By nature, exceptions are fail safe: the writes are undone. It's feasible to extend this API with resumable exceptions, but not critical. We might also optimize the `modify` operation to improve precision of read-write conflict detection.
+
+Effects are modeled as asynchronous interactions with system variables, e.g. writing a request to a system task queue. After we commit, the system can extract the request and handle it. The request would include a variable or channel to receive the response, which would be input in a later transaction. The response could involve new system variables, e.g. for established network channels. The main restriction is that we cannot directly model synchronous effects: waiting on a response before we even commit the request is doomed to fail.
+
+Transactions are not durable by default, and a synch request should be modeled as an effect. And although our bots are ultimately intended to be custodians of our dictionary, reflective access to the dictionary is also modeled as an effect. This gives us an opportunity to disable reflection and enable separate compilation, or to secure reflection and limit it to trusted bots.
+
+Security is a relevant concern! Bot behaviors will be shared through communities, with varying levels of trust. Users must be able to control distrusted behavior without deep knowledge or invasive manipulation of the implementation. To support this, I propose two lightweight security policy mechanisms. First, package-scope private variables: `ref-foo-private-x` may only be directly used from `foo-*` (or we raise a warning). This allows us to model static objects and stateful APIs. Second, no-reference zones: a `[code](norefs)` annotation (and type attribute) can forbid references from a bot's behavior definition, allowing a configurable package of authorities to be bound upon installation.
+
+A repeating transaction offers a live, resilient, extensible, securable, and simple foundation for application and service modeling. It's possible to implement conventional user-interfaces, too, via effects for rendering and user input. Although Awelon's overall vision relies more on projectional editors for user-interface, a conventional UI might be more suitable for games or telepresence. I look forward to seeing where we take this.
 
