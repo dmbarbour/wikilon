@@ -44,7 +44,7 @@ Words are the user-definable unit in Awelon. Syntactically, a word is a sequence
 
 Valid definitions must be acyclic, allowing for a simple inline expansion of all definitions (see *Loops*). Further, definitions must be block balanced - no unmatched `[` or `]` block delimiters. 
 
-Environments may enforce additional constraints, reserving or restricting definitions. For example, an environment might complain if `*-meta-doc` does not evaluate to the expected documentation type or words of form `foo-local-*` are referenced outside of `foo-*`. 
+Environments may enforce additional constraints, reserving words or restricting definitions. For example, a linter might complain if a `*-meta-doc` word does not evaluate to an expected documentation type. To represent local definitions, words in `foo-local-*` should only be referenced from `foo-*`. Volumes `ref-*` or `mem-*` may be reserved for *Bots and Effects*.
 
 ## Natural Numbers
 
@@ -347,32 +347,36 @@ An Awelon bot process is modeled as a monadic transaction, repeated indefinitely
 
 Awelon bots are statically named and defined in the dictionary. Dynamic bots would too easily escape user control. We implicitly read the bot definition at the start of each transaction. Thus, changes to a bot's definition are immediately applied. This ensures liveness and robust user control over system behavior.
 
-To solve large, dynamic problems with a static set of bots, we can use several strategies: First, we can implement channels, signals, callbacks, or dirty-bits to focus transactions on productive work. Normal OOP patterns apply! Second, we can use ad-hoc quotas and voluntarily yield, providing opportunity for intervention and limiting rework in case of conflict. Third, we can leverage hierarchical transactions to support partial failure and simulate dynamic bots. Fourth, we can optimize for data parallelism, allowing programmers to pipe parallel computations through our variables and even through a batch of transactions.
+To solve large, dynamic problems with a static set of bots, we can use several strategies: First, we can implement channels, signals, callbacks, or dirty-bits to focus transactions on productive work. Normal OOP patterns apply! Second, we can use ad-hoc quotas and voluntarily yield, providing opportunity for intervention and limiting rework in case of conflict. Third, we can leverage hierarchical transactions to support partial failure and simulate dynamic bots. Fourth, we can optimize for data parallelism, allowing programmers to pipe parallel computations through our variables and even across multiple transactions.
 
-Variables are modeled within the dictionary: we have an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. A reference is implicitly defined (not defined in dictionary) to simplify auxiliary features like type inference, security analysis, performance, precise garbage collection, and specialized support from projectional editors. Variables may be allocated in transactions or declared by developers (like `[ref-alicebot-status]`). For convenience of initialization (and manual memory management), I will model variables as option types: the empty value corresponds to an undefined location.
+A variable is represented by an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. The `ref-*` and `mem-*` volumes are reserved for this purpose. Reference words are implicitly defined and never evaluated, which simplifies auxiliary tooling like type inference, security analysis, performance, precise garbage collection, and support from projectional editors. References may be allocated by a transaction or declared in user code, e.g. `[ref-alicebot-status]`. To simplify initialization, we read and write optional values: `[definition some]` vs `[none]`, with the empty value representing undefined location.
 
 A preliminary API (in pseudo-Haskell):
 
-        type T v e r 
-        instance Monad (T v e)
-        alloc   :: T v e (v a) -- fresh variable
-        read    :: v a -> T v e (Maybe a)
-        write   :: v a -> Maybe a -> T v e ()
-        try     :: T v e r -> (e -> T v e' r) -> T v e' r
-        fail    :: e -> T v e r
-        type Bot v = T v () ()
+        type T e r -- opaque transaction
+        type Ref a -- opaque variable
+        instance Monad (T e)
+        alloc   :: T e (Ref a) -- unused ref
+        read    :: Ref a -> T e (Maybe a)
+        write   :: Ref a -> Maybe a -> T e ()
+        try     :: T e r -> (e -> T e' r) -> T e' r
+        fail    :: e -> T e r
+        type Bot = T () ()
 
         -- optimizable to avoid some read-write conflicts
-        modify  :: v a -> (Maybe a -> Maybe a) -> T v e ()
+        modify  :: Ref a -> (Maybe a -> Maybe a) -> T e ()
         modify v f = read v >>= write v . f
 
-Here `try` supports hierarchical transactions and exceptions. By nature, exceptions are fail safe: the writes are undone. It's feasible to extend this API with resumable exceptions, but not critical. We might also optimize the `modify` operation to improve precision of read-write conflict detection.
+Commit is implicit upon returning successfully - no `fail` operation. And `try` supports hierarchical transactions and exceptions. Exceptions are fail safe: the writes are canceled. It's feasible to extend this API with resumable exceptions, but not critical. We can optimize a `modify` operation to improve precision of read-write conflict detection, and thus potential for task parallelism.
 
-Effects are modeled as asynchronous interactions with system variables, e.g. writing a request to a system task queue. After we commit, the system can extract the request and handle it. The request would include a variable or channel to receive the response, which would be input in a later transaction. The response could involve new system variables, e.g. for established network channels. The main restriction is that we cannot directly model synchronous effects: waiting on a response before we even commit the request is doomed to fail.
+Effects are modeled as asynchronous interactions with system variables. The simplest case is writing a request to a system task queue. After we commit, the system will extract the request for handling. After handling, a response would be written to a designated variable or channel. Very often our response will include new variables, perhaps representing input and output channels for an established network connection. This is all very conventional modulo a minor restriction regarding synchronous requests: waiting on a response before we even commit a request is doomed to fail. It will not be difficult to support web applications or even general network access.
 
-Transactions are not durable by default, and a synch request should be modeled as an effect. And although our bots are ultimately intended to be custodians of our dictionary, reflective access to the dictionary is also modeled as an effect. This gives us an opportunity to disable reflection and enable separate compilation, or to secure reflection and limit it to trusted bots.
+For performance reasons, transactions will not be durable by default. A synch request, writing updates to durable storage, would be modeled as an effect. Waiting for synch to complete would be explicit. Multiple transactions can be batched, amortizing synchronization costs. 
 
-Security is a relevant concern! Bot behaviors will be shared through communities, with varying levels of trust. Users must be able to control distrusted behavior without deep knowledge or invasive manipulation of the implementation. To support this, I propose two lightweight security policy mechanisms. First, package-scope private variables: `ref-foo-private-x` may only be directly used from `foo-*` (or we raise a warning). This allows us to model static objects and stateful APIs. Second, no-reference zones: a `[code](norefs)` annotation (and type attribute) can forbid references from a bot's behavior definition, allowing a configurable package of authorities to be bound upon installation.
+Bots are the custodians of our dictionary. Besides network access and synch requests, we will develop an effectful API for reflection on the larger dictionary. This reflection API will provide all features required for projectional editing environments - access to binaries, cached computations, signaling changes, and so on. I intend to implement most of our projectional editors via reflection and web applications. Further, this ensures a sufficiently intelligent bot could serve any role a human maintainer could.
 
-A repeating transaction offers a live, resilient, extensible, securable, and simple foundation for application and service modeling. It's possible to implement conventional user-interfaces, too, via effects for rendering and user input. Although Awelon's overall vision relies more on projectional editors for user-interface, a conventional UI might be more suitable for games or telepresence. I look forward to seeing where we take this.
+We can disable reflection to support separate compilation. We can also leverage security patterns to restrict which bots have access to reflection.
 
+Security is a relevant concern. Bot behaviors will be shared through communities, with varying levels of distrust. Users should be able to control distrusted behavior without deep knowledge of implementation. To support this, I propose two lightweight security policy features. First, package-scope private variables: We can raise a warning if `ref-foo-local-*` is used outside of `foo-*`. This allows us to model static objects and stateful APIs. Second, a `[code](norefs)` annotation (and type attribute) can forbid references from a bot's behavior definition. A separate, configurable package of authorities could then be bound upon installation, ensuring precise control.
+
+*Note:* I contemplated specialized syntax for references: `[ref-1123]` would become `@1123`. However, I did not wish to fully bake this effects model into Awelon's simple syntax or semantics. I also considered concrete signed or sealed values. But references as reserved words are more convenient for associative tooling, e.g. garbage collection or directly binding runtime state.
