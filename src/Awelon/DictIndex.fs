@@ -89,9 +89,12 @@ module DictRLU =
     /// as `EPARSE!word` as the only dependency.
     ///
     /// RLU has many applications - cache invalidation, tags for topic
-    /// search or dictionary automation, renaming words, etc.. It is a
-    /// very useful index. And it can be maintained incrementally.
+    /// search, dictionary automation and todos, renaming words, etc.. 
     type RLU = Dict
+
+    // NOTE: RLU cannot be maintained lazily. If we want lazy download
+    // of a dictionary, we will also need to couple with lazy download
+    // of its RLU to avoid per-client indexing in a distributed system.
 
     module RLU =
 
@@ -406,6 +409,9 @@ module DictVX =
         if BS.isEmpty v 
             then invalidArg "v" "empty string is not a valid version" 
             else (cCyc = (BS.unsafeHead v))
+
+    // Other attributes? It might be useful to track whether a word
+    // binds any references (ref-*). But it isn't critical. 
 
     /// versions with cyclic dependencies. However, cycles are not
     /// legal in Awelon systems, and it's convenient to remem

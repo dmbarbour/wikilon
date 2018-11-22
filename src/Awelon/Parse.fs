@@ -17,8 +17,10 @@ open Stowage
 //   Nat = '0' | [1-9][0-9]*
 //   Text = '"' (not '"')* '"'
 //
-// An Awelon dictionary may also include ad-hoc binary resources, but
-// we won't even attempt to parse those. Texts are limited binaries.
+// Awelon uses spaces (SP) to separate adjacent words and numbers. We
+// do not use tabs or linefeeds: formatting is not part of definitions.
+// Besides code, Awelon definitions may be ad-hoc binary values so we
+// can embed file data. Texts are modeled as limited binaries.
 //
 // TODO: separate lexer and parser operation? It would be convenient
 // for stuff like finding all word dependencies or renaming a word.

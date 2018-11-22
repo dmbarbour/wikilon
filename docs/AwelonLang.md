@@ -197,7 +197,7 @@ These annotations can be used to defer linking of words where a partial evaluati
 
 ## Loops
 
-Awelon doesn't do recursive definitions. Instead, use fixpoint combinators:
+Awelon disfavors recursive definitions. Instead, use fixpoint combinators:
 
         [X][F]z == [X][[F]z]F
         z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
@@ -343,13 +343,13 @@ My intuition is to generalize generic programming as a constraint or search prob
 
 ## Bots and Effects
 
-An Awelon bot process is modeled as a monadic transaction, repeated indefinitely. Coordination is implicit: if a bot reads an empty input queue, or perhaps a full output queue, it can abort. Rather than deterministically repeat an obviously unproductive behavior, the bot will implicitly wait for observed conditions to change. There is no need for explicit waits, signals, locks, or polling.
+An Awelon bot process is modeled as a monadic transaction, repeated indefinitely. Coordination is implicit: if a stream-processing bot reads an empty input queue, or a full output queue, it can abort. Rather than deterministically repeat an obviously unproductive behavior, the bot will implicitly wait for observed conditions to change. There is no need for explicit waits, signals, locks, or polling.
 
-Awelon bots are statically named and defined in the dictionary. Dynamic bots would too easily escape user control. We implicitly read the bot definition at the start of each transaction. Thus, changes to a bot's definition are immediately applied. This ensures liveness and robust user control over system behavior.
+Awelon bots are defined in the dictionary. We implicitly read the bot definition at the start of each transaction. Thus, changes to a bot's definition are immediately applied. This ensures liveness and robust user control over system behavior.
 
-To solve large, dynamic problems with a static set of bots, we can use several strategies: First, we can implement channels, signals, callbacks, or dirty-bits to focus transactions on productive work. Normal OOP patterns apply! Second, we can use ad-hoc quotas and voluntarily yield, providing opportunity for intervention and limiting rework in case of conflict. Third, we can leverage hierarchical transactions to support partial failure and simulate dynamic bots. Fourth, we can optimize for data parallelism, allowing programmers to pipe parallel computations through our variables and even across multiple transactions.
+For dynamic problems, divide-and-conquer tactics are desirable. I propose attached hierarchical bots: a tree of read-fork transactions, with read-write loops at the leaves. If a variable we observe before we fork changes, we must recompute the entire subtree. For graceful degradation to fallback behavior under problematic conditions, I propose hierarchical transactions. We can model safe exceptions that undo tentative writes then proceed on an alternative route.
 
-A variable is represented by an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. The `ref-*` and `mem-*` volumes are reserved for this purpose. Reference words are implicitly defined and never evaluated, which simplifies auxiliary tooling like type inference, security analysis, performance, precise garbage collection, and support from projectional editors. References may be allocated by a transaction or declared in user code, e.g. `[ref-alicebot-status]`. To simplify initialization, we read and write optional values: `[definition some]` vs `[none]`, with the empty value representing undefined location.
+A variable is represented by an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. The environment reserves the `ref-*` and `mem-*` volumes for this purpose. Reference words are implicitly defined, and should never be evaluated. This simplifies auxiliary tooling like type inference, security analysis, precise garbage collection, and support from projectional editors. References may be allocated by a read-write transaction or declared in user code, e.g. `[ref-alicebot-status]`. To simplify initialization, we read and write optional values, with the empty value representing undefined location.
 
 A preliminary API (in pseudo-Haskell):
 
@@ -359,24 +359,22 @@ A preliminary API (in pseudo-Haskell):
         alloc   :: T e (Ref a) -- unused ref
         read    :: Ref a -> T e (Maybe a)
         write   :: Ref a -> Maybe a -> T e ()
-        try     :: T e r -> (e -> T e' r) -> T e' r
         fail    :: e -> T e r
-        type Bot = T () ()
+        try     :: T e r -> T e' (Either e r)
+        fork    :: T () () -> T e ()
 
-        -- optimizable to avoid some read-write conflicts
+        -- optimizable to remove a read dependency
         modify  :: Ref a -> (Maybe a -> Maybe a) -> T e ()
         modify v f = read v >>= write v . f
 
-Commit is implicit upon returning successfully - no `fail` operation. And `try` supports hierarchical transactions and exceptions. Exceptions are fail safe: the writes are canceled. It's feasible to extend this API with resumable exceptions, but not critical. We can optimize a `modify` operation to improve precision of read-write conflict detection, and thus potential for task parallelism.
+This API isn't ideal: It doesn't enforce a separation of read-write vs read-fork transactions. The exceptions aren't resumable. Caching is left to ad-hoc user code. But it's a starting point.
 
 Effects are modeled as asynchronous interactions with system variables. The simplest case is writing a request to a system task queue. After we commit, the system will extract the request for handling. After handling, a response would be written to a designated variable or channel. Very often our response will include new variables, perhaps representing input and output channels for an established network connection. This is all very conventional modulo a minor restriction regarding synchronous requests: waiting on a response before we even commit a request is doomed to fail. It will not be difficult to support web applications or even general network access.
 
 For performance reasons, transactions will not be durable by default. A synch request, writing updates to durable storage, would be modeled as an effect. Waiting for synch to complete would be explicit. Multiple transactions can be batched, amortizing synchronization costs. 
 
-Bots are the custodians of our dictionary. Besides network access and synch requests, we will develop an effectful API for reflection on the larger dictionary. This reflection API will provide all features required for projectional editing environments - access to binaries, cached computations, signaling changes, and so on. I intend to implement most of our projectional editors via reflection and web applications. Further, this ensures a sufficiently intelligent bot could serve any role a human maintainer could.
+Bots are custodians of an Awelon dictionary. We will develop an effectful API for reflection on the greater dictionary. This reflection API should provide features required for efficient projectional editing environments - access to binaries, cached computations, signaling changes, and so on. Bots can perform the same maintenance a human could. Later, our projectional editors might be implemented by bots via reflection and web apps. Reflection can be disabled for full ahead-of-time compilation, or secured so distrusted bots have limited access.
 
-We can disable reflection to support separate compilation. We can also leverage security patterns to restrict which bots have access to reflection.
-
-Security is a relevant concern. Bot behaviors will be shared through communities, with varying levels of distrust. Users should be able to control distrusted behavior without deep knowledge of implementation. To support this, I propose two lightweight security policy features. First, package-scope private variables: We can raise a warning if `ref-foo-local-*` is used outside of `foo-*`. This allows us to model static objects and stateful APIs. Second, a `[code](norefs)` annotation (and type attribute) can forbid references from a bot's behavior definition. A separate, configurable package of authorities could then be bound upon installation, ensuring precise control.
+Security is a relevant concern! Bot behavior will be shared through communities with varying degrees of distrust. Users should be able to control distrusted behavior without deep knowledge of implementation. To support this, I propose a `[F](norefs)` annotation, representing a dynamic assertion or static type attribute that passes only if `F` transitively contains no `ref-*` words. With this, we can encourage communities to share 'pure' bot behaviors separate from a configurable collection of static authorities. More conventionally, a linter can support static objects by warning whenever references to private state `ref-foo-local-v` are mentioned outside the corresponding `foo-*` prefix.
 
 *Note:* I contemplated specialized syntax for references: `[ref-1123]` would become `@1123`. However, I did not wish to fully bake this effects model into Awelon's simple syntax or semantics. I also considered concrete signed or sealed values. But references as reserved words are more convenient for associative tooling, e.g. garbage collection or directly binding runtime state.

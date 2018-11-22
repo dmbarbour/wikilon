@@ -61,11 +61,15 @@ module Dict =
     ///
     /// - inline definition - byte string
     /// - remote definition via $secureHash
-    /// - binary resource via %secureHash
+    /// - binary resources via %secureHash
     ///
-    /// Each definition is a single line, and should parse correctly
-    /// and be normalized. Secure hashes should not appear in normal
-    /// Awelon code.
+    /// Inline definitions must be a single line - no LF. A remote
+    /// definition isn't restricted, but Awelon language only uses
+    /// one line definitions regardless. The main purpose of remote 
+    /// definitions is to control size of dictionary index nodes.
+    ///
+    /// Small binary data could be encoded in Awelon as hexadecimal
+    /// or base-64 text, but most binaries use resource references.
     type Def = 
         | Inline of ByteString
         | Remote of VRef<ByteString>
@@ -554,18 +558,18 @@ module Dict =
         let struct(ln,_) = size d 
         ln
 
-    // write entry, excluding LF
+    // write entry, excludes terminal LF
     let private writeEnt (e:DictEnt) (dst:ByteDst) : unit =
         match e with
-        | Direct (p, dirOpt) ->
+        | Direct (p, dirOpt) -> // /prefix (secureHash|empty)
             ByteStream.writeByte cDir dst
             ByteStream.writeBytes p dst
             match dirOpt with
             | Some ref ->
                 ByteStream.writeByte cSP dst
                 ByteStream.writeBytes (ref.Addr) dst
-            | None -> ()
-        | Define (s, Some def) ->
+            | None -> () 
+        | Define (s, Some def) -> // :symbol definition
             ByteStream.writeByte cDef dst
             ByteStream.writeBytes s dst
             match def with
@@ -581,7 +585,7 @@ module Dict =
                 ByteStream.writeByte cSP dst
                 ByteStream.writeByte cBinary dst
                 ByteStream.writeBytes (ref.Addr) dst
-        | Define (s, None) ->
+        | Define (s, None) -> // ~symbol
             ByteStream.writeByte cDel dst
             ByteStream.writeBytes s dst
 
@@ -611,10 +615,11 @@ module Dict =
         if (cBinary = c0) then Binary (binRef db (BS.unsafeTail s)) else
         Inline s
 
+    // TODO: use ephemeron table for Dict refs to improve memory sharing?
+    //  not a huge deal if I don't, but could save some redundant work.
     let private parseDir (c:Codec<Dict>) (db:Stowage) (s:ByteString) : Dir =
         if BS.isEmpty s then None else
         if (RscHash.size <> BS.length s) then raise ByteStream.ReadError else
-        // TODO: use ephemeron table for Dict refs to improve memory sharing
         Some (LVRef.wrap (VRef.wrap c db s))
 
     /// Parse a single line from a dictionary. May raise ByteStream.ReadError.
@@ -640,34 +645,35 @@ module Dict =
     let inline private parseDict mkDef mkDir s : Dict =
         fromSeqEnt (parseDictEnts mkDef mkDir s)
 
-    // divide huge prefixes into manageable fragments. Simplifies worst
-    // case behavior, but shouldn't be relevant for normal dictionaries.
-    let inline private limitPrefix lim struct(p,c) =
+    // divide huge prefixes into manageable fragments. Controls the worst
+    // case behavior, but irrelevant for normal dictionaries.
+    let inline private limitPrefix lim (struct(p,c)) =
         struct(BS.take lim p, prependChildPrefix (BS.drop lim p) c)
 
-    // Heuristic compaction algorithm. Upon compaction, updates propagate
-    // down the tree and large nodes are rewritten to `/ secureHash`. The
-    // log-structured merge tree aspect is from buffering updates near to
-    // the root node until sufficient updates are available. 
+    // heuristic constants used for compaction.
+    let nodeThresh = 25UL * uint64 (RscHash.size) // minimum node size
+    let flushThresh = 9UL * thresh // per-node update buffer 
+
+    // Heuristic compaction algorithm.
+    //
+    // My goal is to keep relatively large nodes in Stowage, closer
+    // in size to flushThresh than to nodeThresh. Thus, aggressively
+    // storing child nodes is probably not the right solution. 
+
+    // node smaller than a "flush" threshold.
     let rec private nodeCompact (cD:Codec<Dict>) (db:Stowage) (d0:Dict) =
-        // heuristic constants
-        let thresh = 25UL * uint64 (RscHash.size) // minimum node size
-        let flushThresh = 9UL * thresh // per-node update buffer 
-        let defThresh = int (flushThresh >>> 2) // def at most 25% of buffer
         let bNoUpdates = Map.isEmpty (d0.cs) && Option.isNone (d0.vu)
-        if bNoUpdates then
-            // trivial case, no updates buffered at this node
-            match (d0.pd) with
-            | Some (Some _) -> struct(d0,1UL,protoRefSize)
-            | _ -> struct(empty,0UL,0UL)
-        else
-            let dM = mergeProto d0 // apply updates 
+        if bNoUpdates then // already compact
+            let struct(ct,sz) = sizePD (d0.pd)
+            struct(d0,ct,sz)
+        else 
+            let dM = mergeProto d0 
             let struct(ctM,szM) = size dM
-            let struct(dF,ctF,szF) = // flush to child nodes if oversized
+            let struct(dF,ctF,szF) = 
                 let skipFlush = (szM < flushThresh) || (Map.isEmpty (dM.cs))
                 if skipFlush then struct(dM,ctM,szM) else
                 let compactChild (struct(cs,ct,sz)) ix pc0 =
-                    let struct(p,c) = limitPrefix (int (thresh >>> 1)) pc0 
+                    let struct(p,c) = limitPrefix (int (nodeThresh >>> 1)) pc0 
                     let struct(c',ctC,szC) = nodeCompact cD db c
                     let szP = uint64 (1 + BS.length p)
                     let szPS = ctC * szP
@@ -685,13 +691,12 @@ module Dict =
                         struct(cs',ct',sz')
                 let struct(cs',ctCS,szCS) = // compact and compute sizes
                     Map.fold compactChild (struct(Map.empty,0UL,0UL)) (dM.cs)
-                let vu' = 
+                let vu' = // flush large inline value to Stowage
                     match dM.vu with
-                    | Some (Some (Inline s)) when ((BS.length s) > defThresh) ->
-                        // move oversized definitions into separate node
+                    | Some (Some (Inline s)) when (uint64 (BS.length s) >= nodeThresh) ->
                         let ref = VRef.stow (EncBytesRaw.codec) db s
                         Some (Some (Remote ref))
-                    | vu -> vu
+                    | okVU -> okVU
                 let struct(ctVU,szVU) = sizeVU vu'
                 let dF = mkDict None vu' cs'
                 let ctF = ctVU + ctCS
@@ -708,9 +713,9 @@ module Dict =
     // be useful to treat the tree root differently, e.g. require a
     // larger update at the root before we flush.
 
-    /// A reasonable default codec for Dictionary nodes. Heuristic.
-    /// After compaction, dictionary size is small (at most a couple
-    /// kilobytes). Big dictionaries are compacted to `/ secureHash`.
+    /// A default codec for Dictionary nodes. Assumes all remaining
+    /// data belongs to dictionary. Compaction will always merge the
+    /// available updates into the node
     let node_codec : Codec<Dict> =
         { new Codec<Dict> with
             member __.Write d dst = 
@@ -723,6 +728,11 @@ module Dict =
                 let struct(d',_,sz') = nodeCompact cD db d0
                 struct(d',sz')
         }
+
+    /// A Dictionary codec for Dict values in context of Stowage data
+    /// structures. Adds a size prefix to the root node!
+    let codec = Stowage.EncSized.codec node_codec
+
 
     /// Compact a dictionary via the default codec. 
     let inline compact (db:Stowage) (d:Dict) : Dict =
@@ -742,9 +752,6 @@ module Dict =
             let sz = sizeBytes d
             Some (LVRef.stow node_codec db d (sz <<< 2))
 
-    /// A Dictionary codec for Dict values in context of Stowage data
-    /// structures. Adds a size prefix to the root node!
-    let codec = Stowage.EncSized.codec node_codec
 
     // PERFORMANCE NOTES
     //

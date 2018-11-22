@@ -1,64 +1,95 @@
 
 # Application Models for Awelon
 
-There are two basic kinds of applications for an Awelon environment:
+Awelon's vision proposes projectional editing for most user-interfaces. Essentially, spreadsheets at scale, with live data and graphical projections. Users can manipulate definitions or view computed data through the same projections. This design has many nice properties, and the results are easily shared or reused. Importantly, projectional editing ensures a more computation environment more accessible and controllable by the user, contributing to an empowered user experience. Projectional editing should be favored where feasible.
 
-* software agents that interact with systems and maintain the dictionary
-* internal structures with live data and direct manipulation
+However, projectional editing isn't a good fit for every problem.
 
- two *kinds* of applications in an Awelon system:
+Awelon proposes bots for background services. A bot is modeled as a transaction, repeating indefinitely, implicitly waiting when unproductive. This also has nice properties - liveness, resilience, extensibility. Effects are modeled via asynchronous sharing of transaction variables, such as task queues. An effectful reflection API enables a bots to maintain a dictionary, and effectful network APIs can connect to remote services or listen on a network.
+
+Where projectional editing is an awkward fit, we can fall back on web applications or hybrid native apps (perhaps via [Jasonette](https://jasonette.com/)). It's also feasible to use the reflection API to cross-compile native applications.
+
+This document sketches how various applications might be modeled in Awelon.
+
+## Spreadsheet Applications
+
+I mentioned "spreadsheets at scale". Let's start with plain old spreadsheets! 
+
+We can project `foo-a2`, `foo-a3`, `foo-b2`, `foo-b3`, and so on as a spreadsheet `foo` with definitions in cells `a2`, `a3`, `b2`, and `b3`. Like most spreadsheets, under normal conditions we would render evaluated normally, and source only for cells with user focus. When we project source, we can treat `foo-` as an implicit namespace, using `$a2` or `A2` to name a local cell.
+
+Awkwardly, a spreadsheet projection can rewrite formulas on copy-paste (in violation of [DRY](https://en.wikipedia.org/wiki/Don%27t_repeat_yourself)), and support a shorthand for ranges so `$a2:b6` expands to a second-class table select (which hinders extension). This semantic awkwardness is intrinsic to conventional spreadsheets, not a fault of the projection.
+
+Awelon supports structured data and graphical projections at individual cells, both for source and results. We could use a [zooming UI](https://en.wikipedia.org/wiki/Zooming_user_interface) to effectively interact with such data through a spreadsheet.
+
+## Database Applications
+
+Modeling a database doesn't require any special effort in Awelon, assuming suitable collection types for modeling tables (tries, maps, arrays, records). Data tables could then be constructed at `mydb-goods` or `mydb-sales`, and we can also name computed views (which filter, join, or summarize tables). Conveniently, we can easily integrate external data resources like `yourdb-sales` insofar as they are represented in our dictionary. 
+
+A projectional editor, then, would enable users to browse tables and views, and support editing data or development of views. This is both simpler than spreadsheets and more convenient for collections processing. But the user experience would be closer to browsing and managing a database.
+
+The main challenge with database applications is sheer scale. To help address this, we can leverage annotations for *Stowage* and *Memoization*, and favor monoidal computations over persistent data structures.
+
+## REPL Applications
+
+A pure REPL can be modeled as a context and a sequence of commands with a head:
+
+        :myrepl-0 defines initial context
+        :myrepl-1 myrepl-0 command1
+        :myrepl-2 myrepl-1 command2
+        ...
+        :myrepl-42 myrepl-41 command42
+        :myrepl-head myrepl-42
+
+A projectional editor can render context and command at each step. This may involve graphical projections similar to a [Jupyter notebook](https://jupyter.org/). Insofar as we reference live data or unstable definitions, the REPL context can be recomputed automatically. We can edit prior commands, undo commands (move `myrepl-head` back to a prior command), or add new commands (add `myrepl-43` then redirect `myrepl-head` to `myrepl-43`). An observer of the REPL can either operate on the current state `myrepl-42` or on the mutable `myrepl-head`.
+
+Many single-user applications can easily be modeled as pure REPLs via projectional editor: calculators, querying an expert system, interactive fiction. It's feasible for multiple users to take turns operating on a REPL. But there are some inherent limitations: computation is pure, and users aren't structurally restricted in observation or action.
+
+## Forum Applications
+
+Assuming a reverse-lookup index, we can extend pure REPLs with branching. For each node like `myrepl-17`, we perform a reverse-lookup to discover replies or reactions. These replies could be rendered as a massive tree, with progressive disclosure where needed. Instead of a singular 'head' we can maintain a set of 'tags' at branches of interest in the tree.
+
+I find this intriguing. To raise the level of discussion between humans, it is useful to directly include the evidence and statistics, graphs and graphics, and chains of reasoning that lead to a conclusion, and to verify these arguments remain reasonable under the light of new or corrected evidence. It seems that forums modeled as purely functional code could help with this. Awelon's dictionary representation is scalable, so embedding enormous hierarchical forums is feasible.
+
+We're only missing a suitable DSL for *Natural Language Programming*, to make encoding such discussions comfortable for humans.
+
+## Command Shells and Orchestration
+
+In Awelon, effectful behavior implies bot participation.
+
+Bots may reflect on REPL contexts and contribute opportunistically. Users essentially do the same via projectional editors. Thus, users and bots would participate in a conversation. Of course, unlike natural language contexts, our REPL contexts can be structured in a manner friendly to bot participation.
+
+Depending on the context model, we can flexibly support one-off requests or queries and long-lived behavior policies.
+
+*Aside:* We should exclude references from our REPL or forum contexts. But we might use a few associated references to coordinate behavior.
+
+## Temporal Data
 
 
-bots as
-* transactional scripts on repeat
-* system of constraint variables
-* RDP behaviors with shared sets
-* actors with mailboxes
 
-editors
-* scripts for macro edits
-* 
+## Large Volumes of Live Data
 
 
-## Goals
+## Worksheet Applications
 
-A goal for Awelon project is to integrate the programmer and user experiences. 
+We could discard a lot of structure from a spreadsheet and instead model a session where we define a few local variables.
 
-Today, using conventional application models and programming languages, the programmer exists "above" the program and "before" its execution. In contrast, the user exists "within" living seas of data, shared with other users. Programmers have flexible and fine-grained control over how data is integrated or analyzed. In contrast, users have coarse-grained "user interfaces" that are inflexible, and it's awkward to share results between these interfaces. 
+        :scratch-x      
+        :scratch-y
 
-If successfully integrated, the programmer-user lives within the program, which is also a living sea of data shared with other programmer-users. The programmer-user can integrate and analyze data in a flexible, fine-grained manner. Source data is composed transparently with computed information. Yet, for aesthetics and convenience, it must be possible to overlay attractive interfaces with coarse-grained views and manipulations of a system. Data and computation should both be more accessible.
 
-## Regarding Conventional Models
+scratch-x
 
-Although I have some lofty goals, I believe it's best to get started swiftly with conventional application models. In purely functional languages, conventional applications can be modeled using simple functions with continuations. For example:
+ - just define some local variables
 
-        -- imperative process with synchronous effects
-        type Imperative eff r = ((eff a) * (a → Imperative eff r)) + r
+and still have a spreadsheet-like application.
 
-        -- blackboard systems, concurrent shared state rewriting
-        type BB st = st * List of (st → (1 + BB st))
 
-Besides these, we can model state machines, component entity systems, mobile processes navigating a map, multi-threaded imperative systems with channels or rendezvous, stream processing pipelines or Kahn process networks, and so on. In any case, 'effects' must be modeled in terms of incremental exchange of *values* between application and environment.
 
-With conventional models, we can develop useful software artifacts, whether it's a web-server or interactive fiction. We could compile and run the application outside the dictionary, or embed it within the dictionary.
+A worksheet is like a spreadsheet with a lot less structure.
 
-It's feasible to compile programs for conventional operating systems. Further, because these models are first-class values, it isn't difficult to simulate or checkpoint a process within the dictionary by checkpointing the current state (and stowage dependencies) back into the dictionary. 
+A spreadsheet sometimes has too much structure. 
 
-The main disadvantage is that most conventional models don't remain attached to the user very well. Fortunately, multi-agent systems (like the blackboard, mobile processes, or a publish-subscribe environment) can help, since we can treat the users as some of the agents.
 
-*Aside:* Object identity is semantically awkward in purely functional languages. It isn't difficult to represent, e.g. using natural numbers. But it requires fine-grained effects, manual memory management, and a relatively 'flat' namespace. I would not favor application models or effect APIs that rely heavily on object identity. But an exception can be made for component entity systems and similar data-driven designs, which are a pretty good fit for purely functional computations.
-
-## Foundation
-
-The dictionary can serve as a spreadsheet-like filesystem or database, with structured data and transparent procedural generation of data. Its representation is a persistent LSM-trie, which allows for efficient writing, sharing, scaling, and versioning. It's feasible to shove both code and data into the dictionary, and to freely compose computed data with source data.
-
-With *Stowage* and *Memoization*, it's feasible to support large-scale computations and spreadsheet-like incremental updates without requiring an external database and explicit caching. These features stretch the limits of what purely functional languages can do without explicit side-effects.
-
-The lightweight syntax, local rewriting semantics, and lazy linking of words will simplify projectional editing, rendering of results, debugging, and immediate reuse of results for further computation. These properties allow us to treat code as a user interface, for example.
-
-The concatenative structure of both Awelon and the dictionary allows us to conveniently model programs or user-inputs as streams, append-only logs. It's feasible to treat the user actions as continuously extending a program or editing a dictionary.
-
-Awelon's features offer a foundation to build upon, but we need more.
 
 ## Stateful Applications
 
@@ -213,6 +244,16 @@ If we compute reactions to some depth (such as five levels), we might render it 
 
 Compared to the linear REPL or Notebook, the forum tree structure is relatively awkward to render. But it's much more amenable to multi-party discussion.
 
+# Effectful APIs for Bots
+
+The [Awelon language document](AwelonLang.md) specifies how we'll represent transaction variables, and a basic API for bots. Effectful APIs rely on asynchronous communication through variables known by the host system. For example, a variable may contain a system task queue for asynchronous request-response. A full API should be specified in terms of concrete types for queues and requests and how responses are provided, and the system's behavior contract. Here, I'll only provide a general abstract sketch.
+
+Our main communication effect is network access. Bots could initiate connections or listen for connections. Access might be provided at a few "layers" such as IP sockets vs. requesting or serving HTTP. A significant motive for higher layers is to support multi-hosting - we might share one HTTP socket across several Awelon environments based on URL.
+
+Our host may support a few simple effects - current time, clock driven signals, variables for describing or configuring the host environment. I do not intend to support host FFI or filesystem access - doing so makes me nervous about security and portability. Accelerated computation, such as via GPGPU, may be implicit, via accelerator annotations.
+
+Reflection is our final class of effects. A reflection API must support sharing and synchronization of dictionary volumes, versioning and caching, alerts on change, and so on. This will become a significant development for Awelon in the future.
+
 # Managed Dictionaries
 
 We may need to perform garbage collection at the dictionary level, eliminating words and collapsing command histories that are no longer relevant. This could be performed by a software agent, e.g. assume three attributes:
@@ -241,7 +282,14 @@ I believe this would offer a powerful basis for generic programming, adaptive pr
 
 This is a long-term goal for Awelon. It's not a complete application model, but could be used to construct other application models that are more robust and adaptive to changes in data or definition.
 
-# Brainstorming
+
+
+
+
+
+
+
+# Brainstorming Extensions
 
 ## Hierarchical Dictionary Structure (Rejected)
 
@@ -260,4 +308,5 @@ Assume we're defining `very-long-prefix-x` and we want to reference `very-long-p
 What are the benefits of this feature at the Awelon layer? A moderate space savings (but not as much as compressed stowage, and only up to a hundred bytes per reference). A potential benefit for copying or renaming prefixes (but we must be careful about renaming prefixes containing hyphens, and we must still search for the full version of a word). 
 
 It seems to me the potential benefits aren't worth the overheads and complexities this would introduce. If the storage is tempting, it would seem much wiser to simply use compressed storage, like LevelDB. But even uncompressed, we aren't working with overly large entries - the longest words in practice should be around a hundred bytes.
+
 
