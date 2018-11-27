@@ -349,16 +349,16 @@ Awelon bots are defined in the dictionary. We implicitly read the bot definition
 
 For dynamic problems, divide-and-conquer tactics are desirable. I propose attached hierarchical bots: a tree of read-fork transactions, with read-write loops at the leaves. If a variable we observe before we fork changes, we must recompute the entire subtree. For graceful degradation to fallback behavior under problematic conditions, I propose hierarchical transactions. We can model safe exceptions that undo tentative writes then proceed on an alternative route.
 
-A variable is represented by an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. The environment reserves the `ref-*` and `mem-*` volumes for this purpose. Reference words are implicitly defined, and should never be evaluated. This simplifies auxiliary tooling like type inference, security analysis, precise garbage collection, and support from projectional editors. References may be allocated by a read-write transaction or declared in user code, e.g. `[ref-alicebot-status]`. To simplify initialization, we read and write optional values, with the empty value representing undefined location.
+A variable is represented by an opaque reference `[ref-1123]` to a corresponding storage location `mem-1123` where the value is represented. The environment reserves the `ref-*` and `mem-*` volumes for this purpose. Reference words are implicitly defined, and should never be evaluated. This simplifies auxiliary tooling like type inference, security analysis, precise garbage collection, and support from projectional editors. References may be allocated by a read-write transaction or declared in user code, e.g. `[ref-alicebot-status]`.
 
 A preliminary API (in pseudo-Haskell):
 
         type T e r -- opaque transaction
         type Ref a -- opaque variable
         instance Monad (T e)
-        alloc   :: T e (Ref a) -- unused ref
+        alloc   :: T e (Ref a)
         read    :: Ref a -> T e (Maybe a)
-        write   :: Ref a -> Maybe a -> T e ()
+        write   :: Ref a -> (Maybe a) -> T e ()
         fail    :: e -> T e r
         try     :: T e r -> T e' (Either e r)
         fork    :: T () () -> T e ()
@@ -367,7 +367,7 @@ A preliminary API (in pseudo-Haskell):
         modify  :: Ref a -> (Maybe a -> Maybe a) -> T e ()
         modify v f = read v >>= write v . f
 
-This API isn't ideal: It doesn't enforce a separation of read-write vs read-fork transactions. The exceptions aren't resumable. Caching is left to ad-hoc user code. But it's a starting point.
+This API isn't ideal: It doesn't enforce a separation of read-write vs read-fork transactions. The exceptions aren't resumable. Caching is left to ad-hoc user code. I'm uncertain whether optional values are the best way to work with undefined memory locations. But it's a starting point.
 
 Effects are modeled as asynchronous interactions with system variables. The simplest case is writing a request to a system task queue. After we commit, the system will extract the request for handling. After handling, a response would be written to a designated variable or channel. Very often our response will include new variables, perhaps representing input and output channels for an established network connection. This is all very conventional modulo a minor restriction regarding synchronous requests: waiting on a response before we even commit a request is doomed to fail. It will not be difficult to support web applications or even general network access.
 
