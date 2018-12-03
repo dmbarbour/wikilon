@@ -3,7 +3,9 @@
 
 Awelon proposes projectional editing for most user-interfaces. Essentially, spreadsheets at scale, with live data and graphical projections. Users can manipulate definitions or view computed data through the same projections. This design has many nice properties, and the results are easily shared or reused. Importantly, projectional editing ensures a more computation environment more accessible and controllable by the user, contributing to an empowered user experience. Projectional editing should be favored where feasible.
 
-Where projectional editing is an awkward fit - such as automating dictionary maintenance, or bootstrapping the projectional editor - Awelon proposes use of bots. Awelon's bot are modeled as transactions, repeating indefinitely, implicitly waiting when repetition would obviously be unproductive. These transactions may interact with a subset of 'system' variables to access a network or reflect upon a greater dictionary. This design also has many nice properties - liveness, idempotence, extensibility, securability. Through networking and reflection, we can support ad-hoc web applications or hybrid native apps (cf. [Jasonette](https://jasonette.com/)). Projectional editors and games can feasibly be modeled in this manner.
+Where projectional editing is an awkward fit - such as automating dictionary maintenance, or bootstrapping the projectional editor - Awelon proposes use of bots. 
+
+Awelon's bot are modeled as transactions, repeating indefinitely, implicitly waiting when repetition would obviously be unproductive. These transactions interact with a subset of 'system' variables to access a network or reflect upon the dictionary. This design also has many nice properties - liveness, idempotence, extensibility, securability. Through networking and reflection, we can support ad-hoc web applications or hybrid native apps (cf. [Jasonette](https://jasonette.com/)). Projectional editors and games can feasibly be modeled in this manner.
 
 This document sketches how various applications might be modeled in Awelon.
 
@@ -60,11 +62,9 @@ An improved design: model a shared conversational context as a first-class value
 
 This essentially gives us a simple [blackboard system](https://en.wikipedia.org/wiki/Blackboard_system). We can easily extend this design to multiple bots and users. 
 
-*Aside:* We should avoid embedding `[ref-*]` words (which represent local capabilities) within our context, because any embedded references will severely hinder sharing or forking the context, or modeling and sharing applications as an initial context.
-
 ## Conventional GUI Applications
 
-We can combine a command shell context for our back-end state and a dedicated editor/view widget for our front-end. This combination can directly model conventional GUI applications while preserving Awelon's goals for a high degree of user control and extensibility. Interestingly, we get transactional GUI operations for free, since any sequence of operations may reduce to a pure update to a dictionary.
+We can combine a command shell context for our back-end state and a specialized editor/view widget for a front-end. This combination can directly model conventional GUI applications while preserving Awelon's goals for a high degree of user control and extensibility. Interestingly, we get transactional GUI operations for free, since any sequence of operations may reduce to a pure update to a dictionary.
 
 All effects in this design are asynchronous. A button press will edit the context, which controls the bot, which performs the effect and eventually injects a response. But it's feasible to simulate synchronous behavior, e.g. by disabling a submit button (leaving it in the 'pressed' position) until a bot acknowledges the request.
 
@@ -92,6 +92,14 @@ I'm uncertain how much Awelon systems will rely on temporal data. However, it's 
 
 Projectional editors *usually* won't be involved in this. Most live data should be managed by bots. However, there might be some exceptions where we can reasonably consider 'live data' to be a form of continuous user editing, like pushing a live stream from a user's camera. In any case, the projectional editor shouldn't directly modify anything outside of the bound Awelon environment.
 
+# Why Not Bot Scripts?
+
+I had initially imagined use of bot-scripts: one-off transactions with the same type as a bot (`∀v.Env v -> TX v e a`). The transaction would succeed or fail or be canceled by a user, retrying only in the special case where failure is due to concurrency conflict. It is not technically difficult to implement this pattern.
+
+However, this is insufficient for most use-cases, even for simple form submission, because we cannot wait for results or integrate network access. Instead, we'll be modeling those things awkwardly by adding a request for another bot to handle, then somehow observing the `Env` for a request. And entangling `Env`, which is a communication context designed for local Awelon bots, would be awkward for external bots and humans. It's also likely to hinder sharing and security.
+
+I would propose instead that we favor command shells, and GUIs built above them. We can abstract scripts in terms of functions that perform macro-manipulations on the context.
+
 # Managed Dictionaries
 
 We may need to perform garbage collection at the dictionary level, eliminating words and collapsing command histories that are no longer relevant. This could be performed by a software agent, e.g. assume three attributes:
@@ -112,7 +120,9 @@ Representation of these attributes is ad-hoc, subject to de-facto standardizatio
 
 # Natural Language Inspired Meta-Programming
 
-A context for a REPL or command shell is usually a solid, unambiguous data type. A context for a natural language discussion, however, is full of gaps, heuristic assumptions that rely on rich world knowledge, and iterative refinement where past ambiguities become clearer with future sentences.
+An intriguing opportunity is to model a REPL or command shell context that simulates a natural language context. A context for natural language discussion is full of vagueness and ambiguity, heuristic assumptions and associated world knowledge. We can iteratively refine, extend, retract, and correct prior statements with future sentences. This is technically feasible by using soft constraint logics, and some means to ignore or delay interpretations with trivial or irrelevant differences so we can focus attention on useful distinctions.
 
-I find intriguing the opportunity to model a REPL or command shell context closer in nature to a natural language context. This can feasibly be achieved with soft, weighted logics. If we pursue this, it's feasible to support rapid application developments and iterative refinement in application models. Further, by developing widgets above such a context, we can support applications that are more robust to user imprecision, and more adaptive to a changing environment.
+It is feasible to develop edit and view widgets for a probabilistic context. We could render multiple interpretations side-by-side, and help users select between them by refining the context. We could make it easy for users or bots to highlight the variables that need attention before a decision can be made, modeling an implicit query. 
+
+I believe such a context would support rapid application development, allowing refinement and extension of the application concurrent with its use. Vagueness and ambiguity can be utilized as features, enabling a applications to adapt to different or changing 'environments' insofar as information about the greater environment constrains those unknown variables. With staged computing (meta-programming), we could still optimize specific instances of the context as a concrete application.
 
