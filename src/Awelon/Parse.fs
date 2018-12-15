@@ -238,8 +238,10 @@ module Parser =
     /// Write a program to a byte stream.
     ///
     /// Note: This writer normalizes spaces, injecting SP between
-    /// adjacent actions. `1(nat)[4]b` becomes `1 (nat) [4] b`. I
-    /// believe this should have negligible impact on performance.
+    /// adjacent actions even if unnecessary. `1(nat)[4]b` becomes 
+    /// `1 (nat) [4] b`. This should have a negligible impact on
+    /// performance, and won't affect aesthetics if we're using a
+    /// projectional editor anyway.
     let write' p dst = wloop [] p dst
 
     /// Write to byte string. (Trivially wraps write'.)

@@ -2,10 +2,9 @@ namespace Data.ByteString
 
 open System.Runtime.InteropServices
 
-// The FSharpX ByteString has errors and inefficiencies, and my issue reports
-// have been ignored for over a week, so I've rolled my own. Reluctantly.
-// Hopefully, one of these days, the F# ecosystem will mature a bit more for
-// such basic data structures. 
+// Note: since I wrote this, .Net has introduced a standard ReadOnlySpan
+// which is very similar - except it assumes external mutability of the
+// underlying array, so it still isn't quite what I want.
 
 /// A ByteString represents an immutable slice of a byte array.
 [< CustomEquality; CustomComparison; Struct >]

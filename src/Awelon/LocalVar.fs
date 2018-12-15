@@ -1,7 +1,46 @@
 namespace Awelon
 open Data.ByteString
 
-// This module will implement a bi-directional program rewrite:
+// This module implements a bi-directional program rewrite to support
+// local variables and lambdas. I'll want to keep this consistent and
+// widely usable, so we'll use the following scheme:
+//
+// The canonical program will include `(local-x)` annotations for each
+// variable. For our view, we rewrite this to `(lambda-x)` then inject
+// `x` into the program as a word. After we edit, we can restore our
+// initial program by finding `(lambda-x)`, rewriting to `(local-x)`
+// then extracting the word `x`. 
+//
+// This design allows local vars to be phase-compatible with any other
+// editable view. Further, it's obvious which "phase" we are in by 
+// peeking at the annotations, and we can easily raise an exception if
+// annotations are used incorrectly. The disadvantage is that lambda
+// 'annotations' are not valid annotations - they do not have identity
+// semantics, and are effectively a hack to fit the Awelon parser.
+//
+// 
+
+
+ just
+// by looking for `(lambda-*)` vs `(local-*)` (and if we find neither,
+// then it doesn't matter which phase we're in). Also, the `(local-x)`
+// annotations at runtime might be prove convenient for debugging. But
+
+
+The disadvantage is 
+// that `(lambda-x)` is not a *valid* annotation in the sense of having
+// identity semantics.
+
+The disadvantage is that `(lambda-x)` is not a true
+// annotation, does not have identity semantics. So we'll need to be
+// careful about 
+//
+// If the program contains annotations in the wrong phase, or if it
+// would shadow an existing use of a word, we can simply raise an 
+// exception. Consequently, our programs should never contain lambda
+// annotations normally.
+//
+// The basic algorithm as a set of rewrite rules:
 //
 //     EXPR == X T(X,EXPR) for value X
 //
@@ -12,6 +51,9 @@ open Data.ByteString
 //        | only F contains X             => T(X,F) G
 //        | only G contains X             => [F] a T(X,G)
 //        | F and G contain X             => c [T(X,F)] a T(X,G)
+//
+// Of course, we need to reverse the direction on those arrows in
+// the general case.
 //
 module LocalVar =
     open Parser

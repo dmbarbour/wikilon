@@ -1,27 +1,23 @@
 
 # Awelon Language
 
-## Vision and Design Sketch
+## Vision and Design Overview
 
-TLDR: spreadsheets at scale with bots at border
+Awelon is a programming language and environment designed to empower individuals to create, customize, comprehend, control, and share computation artifacts.
 
-I want control over my computation environment. Given the opportunity, I would curate my sources, copy databases for personal use and archival, own my data processing algorithms, freely replay and trace computations to their sources to support comprehension, extend and customize my environment with new data or data processing, and selectively share my extensions and customizations with my community.
+Major design elements:
 
-Other people also want to control my computation environment: to push advertising and propaganda, to manage and sell my private data, to hide the algorithms behind obfuscation and EULAs, to restrict unpurchased extension, to cultivate a dependency upon a corporate provider. There are several economic and political incentives that pull holistic software architecture design in a direction that marginalizes user control. But that isn't the direction I want to go, at least not as the default experience.
+* A scalable concrete environment, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This filesystem-like structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, atomic updates, and prefix-aligned sharing. Further, we can amortize physical storage and network costs within a community via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network).
 
-Awelon is designed for user or community control of environments. Elements:
+* A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated by simple [term rewriting](https://en.wikipedia.org/wiki/Rewriting) to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering intermediate and final terms. Static analysis is possible but not required by the language.
 
-* The Awelon environment - the *Dictionary* - is represented as a [persistent tree structure](https://en.wikipedia.org/wiki/Persistent_data_structure) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage). This supports huge volumes, lazy downloads, incremental synchronization, lightweight backups, atomic updates, and (via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network)) amortizing physical storage and network costs for shared volumes.
+* User interfaces leverage [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). Users can graphically manipulate code or data through tables, graphs, forms, flow charts, maps, and sheet music. The editor should be extensible with user-defined widgets. Computed terms can use the same view widgets as source, and live data should result in live displays. Because all user actions are modeled as edits, we can uniformly support undo and transactional macro-edits. 
 
-* The Awelon language is [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) with local [rewriting](https://en.wikipedia.org/wiki/Rewriting) evaluation. This language is used for structured data and data processing, including binding of data into computed views. We can cache and [compute incrementally](https://en.wikipedia.org/wiki/Incremental_computing) over live data. We can safely replay computations. Intermediate computation states can be written in the same language as initial source and final results, which simplifies tooling and debugging. We can automate testing and global consistency analysis.
+* Automation is achieved by defining [bots](https://en.wikipedia.org/wiki/Software_agent). Bots can access the network and manipulate the Awelon environment. Concretely, bots are modeled as transactions that repeat indefinitely, implicitly waiting when unproductive, operating on system variables for auxiliary state and effects. This design is fail-safe, resilient, idempotent, securable, extensible, and safe to modify at runtime - which further supports live coding, runtime upgrade, and robust process control.
 
-* The Awelon user interface is based on [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). We can leverage flexible graphical projections - tables, graphs, sheet music, flow charts, etc. - for editing code and data. Critically, due to rewriting evaluation, we can use the same projections to render computed values or intermediate debug steps. In context of live data, we can display live computed values like a dashboard or spreadsheets.
+Applications are modeled as users and bots operating in the shared environment. Users view and manipulate the environment through suitable projections. We can extend our projectional editor with widgets specific to an application's data model, enabling ad-hoc front-end GUIs. User requests or tasks are written into the environment where a bot would see them. Bots would operate on structured data. Frequently, we'll want to model the shared context as a first-class value.
 
-* An active Awelon environment defines [bots](https://en.wikipedia.org/wiki/Software_agent) to model stateful or effectful behavior. Awelon's bots are modeled as transactions that repeat indefinitely, awaiting a relevant state change if unproductive. Users can control bots through the projectional editor, via manipulation of bot definitions or state, allowing for [live coding](https://en.wikipedia.org/wiki/Live_coding).
-
-The idea of projectional editing can be stretched a little: macro-editing by invoking transactional scripts via command shell or form submission, uploading a file or camera stream as a user edit action, collaborative editing by sharing user intention or activity through auxiliary variables in the environment. But the essential structure should remain: Effectful user actions are represented as edits. Through edits, users control bots. Bots control everything else.
-
-The [application models](ApplicationModel.md) document describes useful patterns for modeling applications in the Awelon system via projections and bots. This document focuses on Awelon language and dictionary.
+However, we may also model conventional web applications via bots interacting with the network. We might eventually bootstrap our projectional editors as web applications. And even without bot support, we can model many useful applications - REPLs, spreadsheets, forums, calculuators, image processing, simulators, document editors. 
 
 ## Language Basics
 
@@ -32,7 +28,7 @@ Awelon has four basic concatenative combinators with confluent rewrite rules:
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
 
-Awelon additionally has limited support for data - natural numbers, embedded texts, binary large objects, which are treated as a syntactic sugar. Beyond these few primitives, programmers may define words in a dictionary. Evaluation proceeds by rewriting according to primitive combinators and rewriting words to their definitions when doing so contributes to further progress. Hence, the result of evaluation of an Awelon program is another Awelon program, equivalent to the input - but potentially simplified.
+Awelon additionally has limited support for data - natural numbers, embedded texts, binary large objects. These are treated as syntactic sugar. Beyond these few primitives, programmers may define words in a dictionary. Evaluation proceeds by rewriting according to primitive combinators and rewriting words to their definitions when doing so contributes to further progress. Hence, the result of evaluation of an Awelon program is another Awelon program, equivalent to the input - but potentially simplified.
 
 An Awelon runtime will also recognize a set of *Annotations*, represented by parenthetical words. For example, `[A](par)` might request parallel evaluation for the expression `A`, while `[F](trace)` might indicate that `[F]` should be written to a debugging log or console. Annotations formally have identity semantics: that is, ignoring or erasing annotations must not affect the internally observable result of a computation. However, annotations may affect external observations - parallelism, memoization, evaluation order, precise JIT control, static analysis, assertions, quotas, debugging, rendering in projectional editors, and so on.
 
@@ -44,7 +40,7 @@ Words are the user-definable unit in Awelon. Syntactically, a word is a sequence
 
 Valid definitions must be acyclic, allowing for a simple inline expansion of all definitions (see *Loops*). Further, definitions must be block balanced - no unmatched `[` or `]` block delimiters. 
 
-Environments may enforce ad-hoc constraints, reserving words or restricting definitions. For example, a linter might complain if a `*-meta-doc` word does not evaluate to an expected documentation type. To support local definitions, a linter could warn when words of form `foo-local-*` are referenced from outside `foo-*`.
+Awelon environments may enforce some ad-hoc structure on usage of words in the dictionary. For example, to support module local definitions, we might reject code where `foo-local-*` is used outside `foo-*`. When looking for documentation for a word, we might heuristically check `*-meta-doc`. We could reserve `tag-*` and `todo-*` words for reverse lookups. A projectional editor might even render some words using CJK characters or iconography. Essentially, the environmental context provides an implicit connotation for many words, but should not be overly restrictive.
 
 ## Natural Numbers
 
@@ -76,10 +72,11 @@ Embedded texts are limited to ASCII minus control characters and double-quote. T
 
 Annotations are special parenthetical words, such as `(par)` or `(error)`.
 
-Annotations always have the same formal semantics: identity. That is, adding annotations to a program must not affect its formal behavior. However, within this limitation, annotations are assigned ad-hoc *informal* semantics by the runtime or compiler. For example, `[A](par)` can request parallel evaluation of `[A]`, `(trace)` could print to a debug console, and observing `(error)` can cause evaluation to fail fast. In general, annotations augment performance, safety, debugging, and display of programs. They encode any *programmer intentions* other than functional behavior.
+Annotations always have the same formal semantics: identity. That is, adding annotations to a program should not affect its formal behavior. However, within this limitation, annotations are assigned ad-hoc *informal* semantics by the runtime or compiler. For example, `[A](par)` can request parallel evaluation of `[A]`, `(trace)` could print to a debug console, and observing `(error)` can cause evaluation to fail fast. In general, annotations augment performance, safety, debugging, and display of programs. They encode any *programmer intentions* other than functional behavior.
 
 Some potential annotations:
 
+* `(a2)` to `(a7)`
 * `(trace)` - print argument to debug console or log
 * `(error)` - prevent progress within a computation
 * `(par)` - evaluate argument in parallel, in background
@@ -91,7 +88,7 @@ Some potential annotations:
 * `(nat)` - assert argument should be a natural number
 * `(type)` - describe type of stack at given location
 * `(quota)` - impose limits on argument evaluation effort
-* `(static)` - assert value is constant within a definition
+* `(static)` - assert value is constant in scope of definition
 
 Awelon does not constrain annotations beyond requirement for identity semantics.
 
@@ -168,11 +165,11 @@ Here `stow-id` must be a word representing `large value`. The stowage word shoul
 
 Stowage can serve as a controlled variation of [virtual memory](https://en.wikipedia.org/wiki/Virtual_memory) enabling larger than memory computations. Stowage also interacts nicely with *Memoization*, reducing large value comparisons to simple word version comparisons. Most importantly for Awelon's goals, stowage supports *progressive disclosure* when rendering large computed values in a user-interface. Without stowage, we have an inconvenient distinction between source data versus computed values.
 
-The main weakness of stowage: it is not locally obvious how long to remember stowed values after performing the computation that produces them. Viable solutions: report stowage together with an evaluated result, model stowage as an element of a stateful compute session so we can use the session life-cycle, or use a naming scheme that tracks origin such as `foo-stow-id` so we know to recompute `foo` if the value has been forgotten.
+The main weakness of stowage: it is not obvious how long to remember stowed values after performing a computation that produces them. This would depend very much on our evaluation context. We might need to model evaluation 'sessions' which can track `(stow)` and `(trace)` outputs. 
 
 ## Evaluation
 
-Evaluation will rewrite an Awelon program to an equivalent Awelon program. In context of annotations like `(stow)` or `(memo)` or `(trace)`, we might supply a few auxiliary outputs. Awelon is a pure language, but interactions with external agents provides a basis for effects.
+Evaluation will rewrite an Awelon program to an equivalent Awelon program. In context of annotations like `(stow)` or `(trace)`, we might produce auxiliary outputs, but not in a way that can be observed within the Awelon computation. Awelon is a pure language, but effects will be modeled explicitly in some limited contexts (cf. *Bots and Effects*). 
 
 Primitives rewrite by simple pattern matching:
 
@@ -181,9 +178,11 @@ Primitives rewrite by simple pattern matching:
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated (and potentially optimized) definitions. However, this rewrite should be *lazy* in the sense that a rewrite is avoided when it does not contribute to further progress. The motive is to retain human-meaningful symbols and structure within the evaluated result, which may be flexibly rendered using *Editable Views*. 
+Words simply rewrite to their evaluated definitions. However, this rewrite should be lazy, deferred if it does not result in progress of the computation. The motive for lazy rewriting of words is to retain human-meaningful symbols and structure in the evaluated results, enabling humans to grok the result and supporting *Editable Views*. By 'progress' we certainly need more than inlining a word's definition. Preferably, rewriting a word results in at least one value available for further computation.
 
-Evaluation strategy is unspecified. The default may be ad-hoc and heuristic. Annotations may guide the strategy. Valid, terminating computations will always converge on the same final result regardless of strategy. If we halt early, due to quota or error, evaluation strategy and other optimizations might be exposed.
+Developers will guide evaluation strategy through annotations. For example, we might use `(par)` to request parallel computation of a value. We might use `[F](jit)` to request compilation for a function or loop body. We could use `(lazy)` and `(eval)` to recommend call-by-need or eager evaluation. Further, annotations may result in certain rewrites that cannot be performed by language primitives. For example, `(nat)` could rewrite `[41 succ]` to the equivalent `42`. 
+
+*Aside:* We can feasibly support user-defined optimizations similar to GHC Haskell's rewrite rules, activated by annotations. The typical example is stream fusion: `[F] map [G] map == [F G] map`. The burden of correctness - preserving identity semantics of annotations - would then be shifted to our developers and debuggers. However, ad-hoc rewrites are not robust to abstraction or modularity. Instead, I would favor developing a DSL data structure for stream processing, and an optimizer-compiler function for the DSL. Between rewriting and `(jit)`, Awelon is very friendly to DSLs.
 
 ### Arity Annotations
 
@@ -193,11 +192,13 @@ Arity annotations are useful for Awelon, and have simple rewrite rules:
         [C][B][A](a3) == [C][B][A]
         ...
 
-These annotations can be used to defer linking of words where a partial evaluation isn't useful. For example, consider a swap function `w = (a2) [] b a`. Ignoring the arity annotation, we'd rewrite `[A]w => [[A]]a`, which isn't useful progress. With the arity annotation, `[A]w` does not evaluate further, but `[B][A]w` evaluates directly to `[A][B]`. Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior as `[[A]F]`, but the former defers computation until the result is required.
+Arity annotations can be used to help control rewriting and partial evaluation. For example, consider a swap function `w = (a2) [] b a`. If our runtime has a naive view of 'progress', we might rewrite `[A]w => [[A]]a`, which is not useful progress. With the arity annotation, `[A]w` does not evaluate further, instead `[B][A]w` evaluates directly to `[A][B]`. 
+
+Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior and type of `[[A]F]`, but the former defers computation until the result is required.
 
 ## Loops
 
-Awelon disfavors recursive definitions. Instead, use fixpoint combinators:
+Awelon disfavors recursive definitions. Instead, we use fixpoint combinators:
 
         [X][F]z == [X][[F]z]F
         z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
@@ -209,7 +210,7 @@ Awelon disfavors recursive definitions. Instead, use fixpoint combinators:
 
 Other loop combinators can be built upon `z`. For example, we can develop a `foreach` function that processes a list or stream. The most common loop combinators may be accelerated for performance.
 
-*Aside:* I've contemplated allowing recursion many times. Unfortunately, recursion isn't very helpful in-the-small where our loop combinators can do the job. In-the-large, recursion could allow us to model interactive applications in a second-class manner, but would also entangle all things and hinder sharing.
+*Aside:* I've contemplated allowing recursion many times. Unfortunately, recursion isn't very helpful in-the-small where common loop combinators can do the job. And in-the-large recursion is just a recipe for entangling code with the environment, hindering sharing and comprehension, which is not congruent with Awelon's goals. Further, I hope that we'll gradually elevate Awelon code above explicit loops, instead favoring collections-processing combinators or DSLs. Thus, recursion is rejected.
 
 ## Memoization
 
@@ -243,7 +244,7 @@ Unfortunately, simple static type systems are sometimes too simplistic and restr
 
 In this context, we could develop a series of functions like `pick2nd` and `pick3rd`, at cost of much boiler-plate. Or we could try to defer typing until after we've specialized on the first parameter, treating `pick` as a dynamically typed macro. Intention to defer type checking might be indicated by annotation, e.g. adding a `(dyn)` comment to the subprogram with `[A](dyn) => [A]` behavior.
 
-*Note:* Besides static types, termination analysis is also useful. As a purely functional language, non-termination or divergence is always an error for Awelon programs.
+*Note:* Besides static types, termination analysis is also useful. As a purely functional language, non-termination or divergence is an error for Awelon functions.
 
 ### Opaque and Abstract Data Types
 
@@ -268,9 +269,9 @@ Structural equivalence assertions are certainly convenient for lightweight unit 
 
 ## Editable Views
 
-Awelon's simple syntax must be augmented by [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) techniques to support richer programming interfaces, DSLs, namespaces, application models, and larger programs. As a simple example, we could support a numeric tower:
+Awelon's simple syntax must be augmented by [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) techniques to support richer programming interfaces, DSLs, namespaces, application models, and larger programs. As a simple example, we could develop a numeric tower:
 
-        #42         == (Awelon's 42)
+        #42         == (Awelon's natural 42)
         42          == [#42 int]
         -7          == [7 int-neg]
         3.141       == [3141 -3 decimal]
@@ -278,9 +279,13 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-This builds one view upon another, which is convenient for extending views. If our view left out rational numbers, we'd still render a sensible `[-4 #6 rational]`. Relative to built-in number support, there is some storage overhead - but it's relatively minor at larger scales (and compresses well). Besides numeric towers, editable views could feasibly support lists and matrices, continuation-passing style, Haskell-inspired do-notation, generators with yield, and other features. Problem specific languages can frequently be modeled as data-structures that we evaluate statically. Embedded comments can also be represented, e.g. `("comment")` via `"comment"(a2)d`.
+In this example, I build one view upon another, but we also have a comprehensible representation in without the view. For example, if our projectional editor lacks support for rationals, users would still see the `[-4 #6 rational]` representation. This is convenenient for iterative development of extensible views. Further, if carefully designed our views such as `[7 int-neg]` should be normal forms such that we can also render `-7` as an *output* from a computation. This may involve careful use of arity annotations.
 
-A projectional editor can display multiple definitions at once, allowing users to work on related code. If we wish, we could explicitly represent edit sessions within the dictionary, such that `[foo][bar][baz]` is rendered and edited as a file that displays all three definitions. We could also use prefix-oriented sessions, e.g. such that all words under `foo-*` are displayed as a spreadsheet or worksheet. (See [application models](ApplicationModel.md).)
+Besides numeric towers, editable views could feasibly support lists and matrices, monadic programming, and other features. Problem specific languages can frequently be modeled as data-structures that we evaluate statically. Embedded comments can also be represented, e.g. as a view of `"comment"(a2)d`.
+
+Besides textual views, projectional editors can support graphical editor-viewer widgets. For example, to edit a color or date-time, we might provide a color-picker or calendar widget. Intriguingly, we can support multiple widgets for a given volume of code, with an edit in one reactively affecting the others. Further, we can feasibly support *specialized* view or editor widgets for an application's data model - thus providing Awelon's version of a GUI application front end.
+
+Our projectional editors may further support views of the dictionary, not just views of a specific program. Ad-hoc sessions could perhaps be encoded as `[foo][bar][baz]`, loading all three definitions into an editor. But we can also use structured sessions, e.g. render `foo-c1`, `foo-b3`, etc. as a spreadsheet `foo` with each cell as a separate word. A REPL or notebook application might use a word per line, implicitly continuing the prior line (e.g. `:repl-3 repl-2 command3`). 
 
 ### Namespaces
 
@@ -290,9 +295,11 @@ It is not difficult to recognize a comment as declaring a qualified namespace.
             becomes
         "using long-prefix as lp"(a2)d long-prefix-foo
 
-However, namespace declarations too easily become a form of boiler-plate. It's inefficient to specify them at the scope of an individual function's definition, and even for a small edit session. I believe it wiser to shift namespaces to the editor layer. A user could personalize namespaces as part of the user model, or switch between packages of namespaces based on choice or context. This also transitions naturally to DSL support packages - essentially, a namespace is a simplistic DSL view.
+However, I don't recommend this! Namespace declarations in code too easily become a form of boiler-plate (especially for one-liner functions). They also interact awkwardly with copy-paste. Further, namespaces fixated in code don't allow for much user customization.
 
-If our editor is capable of color, we could use color to distinguish namespaces. For example, `html-div` and `math-div` might simply be written as `div` in distinct colors, with a namespace legend off to the side.
+Instead, I propose to move namespaces to the editor layer: an editor can track a user's set of preferred nicknames together with other user-model data like a clipboard. Users can manage this set, perhaps switch between packages based on current project. It's up to each user and the editor's feature set. Further, it blends nicely into richer views - namespaces are essentially a very limited form of user-defined, pluggable view.
+
+*Aside:* I'm interested in use of color as an alternative to prefixes, e.g. such that `html-div` is written in a different color from `math-div`. This would give us a more concise notation.
 
 ### Named Local Variables
 
@@ -323,9 +330,7 @@ Variable names could be recorded using a comment or annotation. Example:
 
         -> x; EXPR
             becomes
-        "\X"(a2)d T(X,EXPR)
-            or perhaps
-        (var-x) T(X,EXPR)
+        (local-x) T(X,EXPR)
 
 *Aside:* For me, named local variables were the first convincing proof-of-concept that *Editable Views* can serve adequately (although awkwardly) as an alternative to a rich built-in syntax. However, I hope to avoid sophisticated rewrites in most view. Editable views are a nicer fit for hierarchical data constructors, upon which we might build DSLs.
 
@@ -351,37 +356,39 @@ In addition to arrays, we might also develop in-place mutation for records.
 
 ## Generic Programming
 
-A weakness of Awelon is lack of implicit support for generic programming. For example, we cannot implicitly overload an `add` word based on argument type. We'll instead use a separate `nat-add` vs `int-add` vs `matrix-add`. Implicit generic programming can entangle too easily with static type inference, and require commitment to a specific model of static types - which I would prefer to avoid for Awelon. 
+Awelon lacks implicit support for generic programming. For example, we cannot implicitly overload a central `add` word based on argument type. We'll instead use a separate `nat-add` vs `int-add` vs `matrix-add`. If we want a generic `add` word that works for many types, we'll need to explicitly model the typeful context through our program, and leverage partial or multi-stage evaluation for performance.
 
-But it is feasible to explicitly model generic programs as polymorphic programs, providing the appropriate `[int-add]` as an argument or part of a record. And we could do this ahead of time, if we model a multi-stage program or assume deep constant propagation in our optimizer. If we have records of methods representing our types, we could use `(eq)` to represent equivalence assumptions. 
+It seems feasible to develop editable views and a monadic type to make tracking the type context mostly implicit. And in the absence of built-in type system support, we might rely more heavily on static staging with deferred type analysis. However, the solution is not obvious and I have not yet worked through the details. I hope to get back to this feature later.
 
-It should be possible to design monads or editable views that track context and make generic programming relatively convenient. However, I haven't worked out the details. Meanwhile, I would focus on building useful things from a few, simple data types.
+*Aside:* Between polymorphism and a standard set of collections, generic programming is not essential. But it's sometimes convenient.
 
 ## Bots and Effects
 
-An Awelon bot process is modeled as a deterministic transaction repeated indefinitely, but implicitly waiting when repetition is obviously unproductive. These implicit waits support process coordination, replacing locks, signals, polling. For example, repeating an aborted transaction is obviously unproductive. So a stream-processing bot might abort when the input channel is empty or the output channel is full, to implicitly wait for these conditions to change.
+An Awelon bot process is modeled as a deterministic transaction, repeated indefinitely, but implicitly waiting when repetition is obviously unproductive. The implicit wait supports process coordination, replacing locks, signals, polling. For example, a stream processing bot can abort when the input channel is empty or the output channel is full. An aborted transaction is obviously unproductive, so the bot would implicitly wait for the observed condition to change.
 
 A preliminary API:
 
         type TX v e a -- opaque, monadic
+        type Env v = ... -- model of host system
+        type Bot = forall v e a . Env v -> TX v e a
+
         alloc   : a -> TX v e (v a)
         read    : v a -> TX v e a
         write   : v a -> a -> TX v e ()
+        modify  : v a -> (a -> a) -> TX v e ()
         try     : TX v e a -> TX v e' (Either e a)
         abort   : e -> TX v e a
-        fork    : DebugName -> TX v e a -> TX v e' ()
+        fork    : TaskName -> TX v e a -> TX v e' ()
 
-        type Bot = forall v e a . Env v -> TX v e a
+Here, `try` and `abort` support hierarchical transactions, exceptions, graceful degradation. Meanwhile, `fork` supports task-parallel divide-and-conquer tactics: after we commit, forked transactions are applied repeatedly, but only until the parent must be recomputed. Conveniently, forking also enables us to package cliques of bot behaviors as larger bots.
 
-Here, `try` and `abort` support hierarchical transactions, exceptions, graceful degradation. Meanwhile, `fork` supports task-parallel divide-and-conquer tactics: after we commit, forked transactions are applied repeatedly, but only until the parent must be recomputed. Conveniently, forking also enables us to compose cliques of concurrent bots into larger bots.
+Bots operate on the `Env` type, which models an abstract host environment. Concretely, this environment will be a simple record of system variables. Effects such as network access, reflection, auxiliary state are achieved asynchronously through manipulation of these variables. For example, we may have a system task queue, which is processed by the host after we commit our request. The environment type must be carefully documented.
 
-Bots operate on an `Env` type, which models an abstract host environment. This environment provides access to system variables. However, these variables may be hidden behind imperative object models in `TX`, to protect invariants. A runtime can easily provide a set of built-in methods for `Env`, rather than directly exposing system variables. Effects are then modeled as asynchronous interaction with the system variables underlying `Env`.
+A relevant security assumption is that bot definitions do not contain variables. This is represented by that `forall v` type constraint. This enables us to restrict direct access to effects by restricting access to `Env`. We can hide those system variables behind abstract methods or objects in `TX`. We can refactor, abstract, and configure common bot containment patterns. We can distribute bot behaviors through a community despite limited trust.
 
-For example, network access might be requested through a system task queue. After we commit, a host system could observe this request, establish the network channels, and later respond. The request should include a variable or channel object to receive the response. An established network connection may involve new fine-grained variables or objects, to avoid a scenario where the task queue becomes a bottleneck. Besides network access effects, our host environment can provide filesystem-like state resources or reflective access to the dictionary.
+We don't depend on a specific model of variables. For convenience, variables could be concretely represented by symbolic reference `[ref-1123]` to corresponding location `mem-1123`. Use of plain old words simplifies integration with external tooling such as parsers, stowage, memoization, precise garbage collection, orthogonal persistence, and debugging via projectional editors. At larger scales, we might favor hierarchical memory and reference models (`ref-location-1123`). I propose to reserve `ref-*` and `mem-*` for this purpose - a simple static analysis can reject code that depends on `ref-*` or `mem-*` words.
 
-Users should easily control the set of installed bots. I propose to 'install' bots by predictably defining them at `bot-*`, such that that users can easily discover, observe, and manipulate their definitions. Reading the bot's definition is then implicitly part of each transaction, so any manipulations are applied immediately. This enables live coding, and runtime upgrade or debugging. Further `Env` is easily wrapped or sandboxed to work with distrusted bot definitions. Common installation wrappers can easily be developed to configure authority of each bot.
+Bots will be installed by simply defining `bot-*` words. The bot's definition is implicitly read as part of each transaction to support live coding, runtime upgrade, and robust process control. We can easily provide a task manager, with a tree of bots rooted at `bot-*` and children named upon `fork`, to support discovery and debugging. For each name, we could track recent values upon return or abort, or special failure status for parse errors, type errors, quota limits. We would also track transaction frequency, CPU efforts, efficiency (portion of productive efforts), common wait or contention variables, and so on.
 
-Bots conveniently have built-in 'status' values: If the bot halts successfully, we will have an error or return value. Otherwise, we can report parse errors, runtime type errors, halting on quota, etc.. For each bot, we can track recent status and many other statistics: CPU usage, transaction size and frequency, efficiency (productive work vs rework), conflicts and causes, and so on. Forked bots will also have these statuses, so a debugger or task manager view could render a tree of bots, rooted at `bot-*`, each with recent statuses and statistics. (This is where `DebugName` at `fork` comes in handy.)
-
-This design has many nice properties - liveness, idempotence, resilience, security, extensibility. We can feasibly prioritize user-input transactions. However, the cost is frequent rework or wasted effort. We'll want to mitigate this with smarter scheduling, perhaps performing a topological sort of bots based on variables read and written, etc.. Developers can also favor the usual OOP patterns (channels or callbacks, dirty bits, etc.) to notify about relevant changes so we can focus most transactions on useful labor.
+This design has many nice properties. In addition to the many benefits named so far, it's not difficult to prioritize user input over background tasks. The main concern is potential for wasted efforts. But that can also be mitigated between heuristic scheduling (e.g. based on conflict history) and design patterns (e.g. modeling channels for change notifications).
 

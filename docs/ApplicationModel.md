@@ -64,9 +64,11 @@ This essentially gives us a simple [blackboard system](https://en.wikipedia.org/
 
 We can combine a command shell context for our back-end state and a specialized editor/view widget for a front-end. This combination can directly model most conventional GUI applications while preserving Awelon's goals for a high degree of user control and extensibility. 
 
-Widgets in GUI command shells will only update the pure value of our context. We can atomically apply multiple updates, model checkpoints and resets and undo, etc.. However, effects are still asynchronous, requiring the background bots to observe the changed context. Buttons should only edit the context, never have a hidden effect. However, we could simulate 'synchronous' effect buttons by disabling the button in our editor depending on the context state (such as awaiting a response).
+Widgets in GUI command shells should only update two things: the pure value of our context, and potential auxiliary state representing the user-model (clipboard, navigation status, presence tracking for coordination with other users, etc.). Importantly, there should be no communication effects aside from these updates. Background bots may observe the command context or user-model, and react appropriately. If we desire, we can simulate "synchronous" GUIs by disabling parts of a GUI while awaiting response from a bot.
 
-*Aside:* We can use a generic context model with a problem-specific view widget. This would allow a standard back-end process, and only specialize the front-ends. It would also simplify debugging, since one debugger widget could work for most applications.
+This design has many nice properties: lightweight support for atomic updates, checkpoints, undo, and support for multiple local reactive views (edits to one view of the context are observed in all others). With a relatively generic context model, we can develop some standard views for debugging, and standard language for macro manipulations.
+
+This does require a sub-language for quickly constructing widget models for our projectional editors. Perhaps something based on lenses?
 
 ## Forum Applications
 
@@ -89,6 +91,29 @@ I'm uncertain how much Awelon systems will rely on temporal data. However, it's 
 ## Binding Live Data
 
 Projectional editors *usually* won't be involved in this. Most live data should be managed by bots. However, there might be some exceptions where we can reasonably consider 'live data' to be a form of continuous user editing, like pushing a live stream from a user's camera. In any case, the projectional editor shouldn't directly modify anything outside of the bound Awelon environment.
+
+# Code Completion in Awelon
+
+Code completion is a valuable HCI feature for a programming language, doubly so if projectional editors are a primary user-interface model. So I'd like to support code completion in Awelon. Code completion requires a *context* that usefully limits a set of *operations*.
+
+We can consider Awelon a stack-based language for this purpose. The top elements on the stack, or the inferred types for those elements, provide an input context for code completion. We might also have an output context, based on observable usage of the program we define. We could use these contexts to present some suggestions. Missing parameters seem relatively awkward, however. 
+
+
+
+However, stack-based programming can be a little awkward. Mostly, the problem
+
+
+ for code completion. We might also have a 'right context' based on where our code is used, so we know the final type of our context. However, there is some unfortunate awkwardness to deal with missing parameters: after we select an operation, we must move our focus backwards to attend those missing details. 
+
+For contrast, OOP offers a convenient `object .method( parameters ) .method2( more params )` pattern. The object type can give us a context restricting the choice of methods. Each method gives us a context of typed holes for parameters. It's all left-to-right. Very nice, when it fits. 
+
+
+
+ The parameters further provide a typed context. If we can arrange code carefully, our cursor can mostly move from left to right. Of course, this also has its awkward cases. It doesn't nicely handle methods producing a pair of objects, or a computation producing a pair of parameters that we'd prefer to divide across methods, or a conditional choice of methods.
+
+I'm certain we can do better. But it may be specialized to certain projections. 
+
+In general, code completion is essentially the anticipation of the user. We could reasonably argue that widget-based projectional editors are already providing this, albeit in a more ad-hoc and explicit manner. The developer of each widget is anticipating a use-case. It seems feasible to approach code completion the same way, developing a registry for automated suggestions (each with a mini-widget) based on knowing what we have and what we need.
 
 # Managed Dictionaries
 
@@ -118,9 +143,7 @@ I believe such a context would support rapid application development, allowing r
 
 # Bot Scripts? Rejected.
 
-I had earlier imagined use of bot-scripts: one-off transactions with the same *type* as a bot transaction (currently `∀v.Env v -> TX v e a`). The transaction would succeed or fail or be canceled by a user, retrying only in the special case where failure is due to concurrency conflict. It is not technically difficult to implement this pattern.
+I had earlier imagined use of bot-scripts: one-off transactions with the same *type* as a bot transaction (type `forall v . Env v -> TX v e a`). The transaction would retry in case of concurrency conflict (unless canceled by a user), but otherwise would succeed or fail. This is easy to implement. However, this is insufficient for most use-cases because a single transaction cannot wait for effects or model interaction with the user, and it's even unclear how to bind such effects with our application models. 
 
-However, this is insufficient for most use-cases, even for simple form submission, because we cannot wait for results or integrate network access. Instead, we'll be modeling those things awkwardly by adding a request for another bot to handle, then somehow observing the `Env` for a request. And entangling `Env`, which is a communication context designed for local Awelon bots, would be awkward for external bots and humans. It's also likely to hinder sharing and security.
-
-I would propose instead that we favor command shells, and GUIs built above them. For user-meaningful operations, we can abstract scripts in terms of functions that perform macro-manipulations on the context. Widgets might still use something like bot scripts, to perform edits.
+Command shells over a blackboard system are a simple and superior mechanism to model scripting. We can 'script' macro-updates to our blackboard context. And, via projectional editors, we can render GUI widgets or application front-ends if doing so is appropriate.
 

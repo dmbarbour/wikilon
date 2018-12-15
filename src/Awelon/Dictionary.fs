@@ -652,15 +652,8 @@ module Dict =
 
     // heuristic constants used for compaction.
     let nodeThresh = 25UL * uint64 (RscHash.size) // minimum node size
-    let flushThresh = 9UL * thresh // per-node update buffer 
+    let flushThresh = 9UL * nodeThresh // per-node update buffer 
 
-    // Heuristic compaction algorithm.
-    //
-    // My goal is to keep relatively large nodes in Stowage, closer
-    // in size to flushThresh than to nodeThresh. Thus, aggressively
-    // storing child nodes is probably not the right solution. 
-
-    // node smaller than a "flush" threshold.
     let rec private nodeCompact (cD:Codec<Dict>) (db:Stowage) (d0:Dict) =
         let bNoUpdates = Map.isEmpty (d0.cs) && Option.isNone (d0.vu)
         if bNoUpdates then // already compact
@@ -677,7 +670,7 @@ module Dict =
                     let struct(c',ctC,szC) = nodeCompact cD db c
                     let szP = uint64 (1 + BS.length p)
                     let szPS = ctC * szP
-                    if (szPS < thresh) then
+                    if (szPS < nodeThresh) then
                         // acceptable worst-case prefix redundancy
                         let cs' = updChild ix p c' cs
                         let ct' = ct + ctC
@@ -704,7 +697,7 @@ module Dict =
                 struct(dF,ctF,szF)
 
             // small nodes do not require a remote reference
-            if (szF < thresh) then struct(dF,ctF,szF) else
+            if (szF < nodeThresh) then struct(dF,ctF,szF) else
             let ref = LVRef.stow cD db dF (szF <<< 2)
             struct(fromProto (Some ref), 1UL, protoRefSize)
 
