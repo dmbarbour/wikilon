@@ -15,9 +15,9 @@ open Dict
 // where a word is used. This can be leveraged for modeling tags and
 // categories, tagging words for automatic testing, etc.. 
 //
-// For convenience, we can track parse errors in reverse lookup. I've
-// also contemplated tracking annotations, but decided against it at
-// this layer.
+// For convenience, we can track parse errors and annotations in our
+// reverse lookup. We won't invalidate these, but they're still of 
+// some potential use. 
 //
 // A behavior version cache will provide a version for a word with
 // its transitive dependencies. The intention is to use as a key for
@@ -32,6 +32,29 @@ open Dict
 // DictRLU combines a dictionary with a reverse-lookup index.
 module DictRLU =
 
+    /// A reverse-lookup index is represented as a Dictionary with
+    /// a `word!client` key for every client of every word. The value
+    /// field is not used. This index has many applications: caching,
+    /// tags and todos, renaming words, and dictionary development.
+    /// The primary motive is to support caching. We can maintain this
+    /// index incrementally.
+    type RLU = Dict
+
+    // Thoughts:
+    //
+    // A weakness of RLU as defined is that it does not support separate
+    // indexing of packages. Modulo lazy downloads, this isn't a problem.
+    // We can perform a `diff` on the dictionary for incremental indexing.
+    // But we cannot lazily maintain the RLU as it's currently designed.
+    // At most, we can lazily download the RLU for a community dictionary.
+    // 
+    // I've contemplated solutions to this, but I think it won't be solved
+    // without a signficant redesign. 
+    //
+    // Fortunately, maintaining an index eagerly isn't a problem during
+    // normal development, which is when we'd want the index regardless.
+
+
     // implicit dependencies for natural numbers, texts, binaries.
     let private w_zero : Word = BS.fromString "zero"
     let private w_succ : Word = BS.fromString "succ"
@@ -44,12 +67,12 @@ module DictRLU =
     let private addTokDeps (s:Set<Symbol>) (struct(tt,w) : Token) : Set<Symbol> =
         match tt with
         | TT.Word -> Set.add w s
-        | TT.Anno -> s // not tracking annotations
-        | TT.Nat -> 
+        | TT.Anno -> s // annotations are not tracked
+        | TT.Nat -> // zero, succ
             let bZero = (1 = BS.length w) && (byte '0' = w.[0])
             if bZero then s |> Set.add w_zero else
             s |> Set.add w_zero |> Set.add w_succ
-        | TT.Text -> 
+        | TT.Text -> // null, zero, succ, cons
             if BS.isEmpty w then s |> Set.add w_null else
             s |> Set.add w_null |> Set.add w_cons 
               |> Set.add w_zero |> Set.add w_succ
@@ -87,26 +110,25 @@ module DictRLU =
         | Some def -> defDeps def
         | None -> Set.empty // undefined words are not tracked
 
-    /// The reverse-lookup index is represented as a Dictionary with
-    /// a `word!client` key for every client of every word. The value
-    /// field is not used. This index has many applications: caching,
-    /// tags and todos, renaming words, and dictionary development.
-    /// We can maintain this index incrementally.
-    type RLU = Dict
-
-    // Thoughts: I've considered other representations for RLU.
-    //
-    // We could feasibly reduce storage overheads using a lossy index.
-    // And we can feasibly support incremental indexing by interleaving
-    // `word` and `client` like `cwloitedn!t` - assuming we have union,
-    // intersect, and diff functions on dictionaries. It might be worth 
-    // excluding some words from our index, based on reference count. 
-    //
-    // However, I've decided to favor simplicity for now. I don't believe
-    // the storage will be a significant limit or benefit - at most, we
-    // are roughly doubling the cost compared to dictionary alone.
-
     module RLU =
+
+        let ver = byte '1'
+        let inline fromV1 (rlu:Dict) : RLU = rlu
+        let codec = 
+            { new Codec<RLU> with
+                member __.Write rlu dst =
+                    ByteStream.writeByte ver dst
+                    Dict.codec.Write rlu dst
+                member __.Read db src =
+                    let cVer = ByteStream.readByte src
+                    if (cVer = byte '1') then
+                        Dict.codec.Read db src |> fromV1
+                    else raise ByteStream.ReadError // unknown ver
+                member __.Compact db rlu = 
+                    let struct(rlu',sz) = Dict.codec.Compact db rlu
+                    struct(rlu', 1UL + sz) // add ver byte
+            }
+
 
         /// Our symbol!client separator.
         let cSep = byte '!'
@@ -344,7 +366,7 @@ module DictRLU =
 
     /// Encode DictRLU as a pair of size-prefixed dictionaries.
     let codec = 
-        let cP = EncPair.codec' (Dict.codec) (Dict.codec)
+        let cP = EncPair.codec' (Dict.codec) (RLU.codec)
         let fromP (struct(dict,rlu)) = { dict = dict; rlu = rlu }
         let toP d = struct(d.dict, d.rlu)
         Codec.view cP fromP toP
@@ -405,23 +427,25 @@ module DictVX =
         let empty : VX = Dict.empty
 
         /// the version of our versioning function
-        let ver : byte = byte '1'
+        let ver = byte '1'
+        let inline fromV1 (d:Dict) : VX = 
+            if (ver = byte '1') then d else empty
 
         /// VX codec will write out a VX together with the VX ver value.
         /// On reading, we reset VX if versioning function has changed.
         let codec = 
-            let cD = Dict.codec
             { new Codec<VX> with
                 member __.Write vx dst =
-                    cD.Write vx dst
                     ByteStream.writeByte ver dst
+                    Dict.codec.Write vx dst
                 member __.Read db src =
-                    let vx = cD.Read db src
                     let cVer = ByteStream.readByte src
-                    if (ver = cVer) then vx else empty
+                    if (cVer = byte '1') then 
+                        Dict.codec.Read db src |> fromV1
+                    else raise ByteStream.ReadError // unknown ver
                 member __.Compact db vx = 
-                    let struct(vx',sz) = cD.Compact db vx
-                    struct(vx', 1UL + sz) // add verVX byte
+                    let struct(vx',sz) = Dict.cocec.Compact db vx
+                    struct(vx', 1UL + sz) // add ver byte
             }
 
         // using a stack of stateful enumerators during invalidation. It's

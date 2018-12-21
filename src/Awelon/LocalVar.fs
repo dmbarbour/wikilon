@@ -7,53 +7,32 @@ open Data.ByteString
 //
 // The canonical program will include `(local-x)` annotations for each
 // variable. For our view, we rewrite this to `(lambda-x)` then inject
-// `x` into the program as a word. After we edit, we can restore our
+// `x` into the program as a word. After edit, we can restore our
 // initial program by finding `(lambda-x)`, rewriting to `(local-x)`
-// then extracting the word `x`. 
+// then extracting the word `x`.
 //
-// This design allows local vars to be phase-compatible with any other
-// editable view. Further, it's obvious which "phase" we are in by 
-// peeking at the annotations, and we can easily raise an exception if
-// annotations are used incorrectly. The disadvantage is that lambda
-// 'annotations' are not valid annotations - they do not have identity
-// semantics, and are effectively a hack to fit the Awelon parser.
+// This design allows local vars to be phase-compatible with other views,
+// because the input and output are both represented as plain old Awelon
+// code. But `(lambda-x)` is not a valid annotation. Properly, we should
+// render it in a specialized manner, such as `\x`. This is left to higher
+// layer views.
 //
-// 
-
-
- just
-// by looking for `(lambda-*)` vs `(local-*)` (and if we find neither,
-// then it doesn't matter which phase we're in). Also, the `(local-x)`
-// annotations at runtime might be prove convenient for debugging. But
-
-
-The disadvantage is 
-// that `(lambda-x)` is not a *valid* annotation in the sense of having
-// identity semantics.
-
-The disadvantage is that `(lambda-x)` is not a true
-// annotation, does not have identity semantics. So we'll need to be
-// careful about 
+// The local variable view involves a simple set of rewrite rules:
 //
-// If the program contains annotations in the wrong phase, or if it
-// would shadow an existing use of a word, we can simply raise an 
-// exception. Consequently, our programs should never contain lambda
-// annotations normally.
+//     (lambda-x) EXPR == (local-x) T(x,EXPR) 
+//       assuming `x` represents a value
 //
-// The basic algorithm as a set of rewrite rules:
+//     T(x,E) | E does not contain x      => d E
+//     T(x,x)                             => 
+//     T(x,[E])                           => [T(x,E)] b
+//     T(x,F G)                            
+//        | only F contains x             => T(x,F) G
+//        | only G contains x             => [F] a T(x,G)
+//        | F and G contain x             => c [T(x,F)] a T(x,G)
 //
-//     EXPR == X T(X,EXPR) for value X
-//
-//     T(X,E) | E does not contain X      => d E
-//     T(X,X)                             => 
-//     T(X,[E])                           => [T(X,E)] b
-//     T(X,F G)                            
-//        | only F contains X             => T(X,F) G
-//        | only G contains X             => [F] a T(X,G)
-//        | F and G contain X             => c [T(X,F)] a T(X,G)
-//
-// Of course, we need to reverse the direction on those arrows in
-// the general case.
+// The benefit of local variables is automatic data shuffling. But it
+// can result some inefficient code for conditional behaviors. This 
+// version will not optimize those, leaving it to our users.
 //
 module LocalVar =
     open Parser
