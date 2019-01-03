@@ -28,7 +28,7 @@ Awelon defines a few primitive combinators as keywords:
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
 
-These few primitives, together with first-class blocks of code in square brackets, form a Turing complete computation language. Awelon also has limited support for embedded data - natural numbers, texts, binary large objects (see below). Programmers are able to define their own words, which trivially rewrite to their definitions as needed for progress. Evaluation will simply rewrite a program's representation to an equivalent representation. For example, assuming appropriate definitions, `6 7 multiply` should evaluate to `42`. Awelon's syntax is extremely simple, very close to an AST, both to simplify rewriting evaluation and integration with projectional editors.
+These few primitives, together with first-class blocks of code in square brackets, form a Turing complete computation language. Awelon also has limited support for embedded data - natural numbers, texts, binary large objects (see below). Programmers are able to define their own words, which trivially rewrite to their definitions as needed for progress. Evaluation will simply rewrite a program's representation to an equivalent representation. For example, assuming appropriate definitions, `6 7 multiply` should evaluate to `42`. Awelon's syntax is extremely simple, very close to an AST, both to simplify rewriting evaluation and integration with projectional editors. The concatenative inline structure should also prove convenient for streaming code, REPLs, and one-liners.
 
 An Awelon runtime or compiler will recognize a set of *Annotations*, represented by parenthetical words. Annotations have formal identity semantics: adding or removing annotations should not affect a program's meaning. But annotations may influence evaluation strategy, memoization, runtime representations, static analysis, assertions, quotas, debugging, rendering, and so on. For example, `(par)` could ask our compiler to parallelize a computation, `(trace)` could print a stack element to a log for debugging. Annotations may generally be understood as expressing *programmer intentions*. 
 
@@ -354,31 +354,31 @@ It seems feasible to develop editable views and a monadic type to make tracking 
 
 ## Bots and Effects
 
-An Awelon bot process is modeled as a deterministic transaction, repeated indefinitely. Repetition will implicitly wait when repetition would obviously be unproductive. This implicit wait supports process coordination, replacing locks, signals, polling. For example, a stream processing bot can abort when the input channel is empty or the output channel is full. An aborted transaction is obviously unproductive, so the bot would implicitly wait for the observed condition to change.
+An Awelon 'bot' process is modeled as a deterministic transaction, repeated indefinitely. Repetition will implicitly wait when repetition would obviously be unproductive. This implicit wait supports process coordination, replacing locks, signals, polling. For example, a stream processing bot can abort when the input channel is empty or the output channel is full. An aborted transaction is obviously unproductive, so the bot would implicitly wait for the observed condition to change.
 
 Preliminary API:
 
         type TX v e a -- opaque, monadic
         type Env v = ... -- model of host system
         type Bot = forall v e a . Env v -> TX v e a
+        type TaskName = String -- for debugging!
 
-        alloc   : a -> TX v e (v a)
-        read    : v a -> TX v e a
-        write   : v a -> a -> TX v e ()
-        modify  : v a -> (a -> a) -> TX v e ()
+        alloc   : TX v e (v a)
+        read    : v a -> TX v e (Maybe a)
+        write   : v a -> Maybe a -> TX v e ()
         try     : TX v e a -> TX v e' (Either e a)
         abort   : e -> TX v e a
         fork    : TaskName -> TX v e a -> TX v e' ()
 
-Here, `try` and `abort` support hierarchical transactions, exceptions, and fallback behavior for graceful degradation. Meanwhile, `fork` supports task-parallel divide-and-conquer tactics: after we commit, forked transactions are applied repeatedly, but only until the parent must be recomputed. Conveniently, forking also enables us to package cliques of bot behaviors as larger bots. Variables are allocated, and I assume they will be garbage-collected. We could feasibly extend this API to support weak-gc references, restricted variable facets (e.g. read-only, append-only), or specialized concurrency models (like CRDTs).
+Bots operate upon a provided environment of opaque variables `forall v. Env v`. This environment models the host system. Effects, such as network access or reflection on the dictionary, are achieved asynchronously through manipulation of system variables. For example, we can write requests to a system task queue. After the transaction commits successfully, the system will process the task queue to execute the tasks and write appropriate acknowledgements or responses. The bot may observe the inputs via subsequent transaction. The environment model is ad-hoc and should be carefully documented. 
 
-Bots operate on the `Env v` type, which models an abstract host environment. Concretely, this environment could be a simple record of system variables. Effects such as network access, reflection, and auxiliary state will be achieved asynchronously through manipulation of environment variables. For example, after we commit a request to a system task queue, the system could process the request and provide a response. The environment model must be carefully documented.
+Because the environment is abstract via the `forall v` constraint, bots must not have any built-in variable references. We can control a bot's access to system variables and effects or simulate an environment. This is convenient for automatic testing, and working with distrusted bot behaviors.
 
-Security is achieved through that `forall v` constraint. Bots are restricted to their provided environment. Thus, we can control bot behavior by controlling access to the environment. We can protect environment variables behind opaque `TX` methods, or model sandboxed environments. Conveniently, we can also simulate purely functional environments to test bot behaviors under various conditions. Common security policies and patterns can be abstracted into easily configured packages, making it safe for normal users to share and work with distrusted bot behaviors. 
+To support user discovery and control of bots, I propose to use the `bot-*` volume of the dictionary. Each bot is uniquely identified as `bot-botname`, and installing a new bot involves simply adding its definition. Users can directly manipulate bot definitions, with changes being applied immediately. The user should also have easy access a task-manager UI, which presents each bots together with useful metrics or records like CPU usage and a recent history of commit-abort return values.
 
-Variables may be serialized to support stowage, memoization, checkpointing, or debugging through projectional editors. For these cases, we require a simple, parseable, and recognizable representation. I propose `[ref-1123]` for this purpose - each variable is given a distinct, undefined word. To protect our `forall v` security constraint, we would simply reserve the entire `ref-*` volume of words.
+Transactions manipulate variables via imperative `read` and `write` operations. New variables can be requested via `alloc`. Because garbage collection is awkward for simulated or sandboxed environments, I propose to explicitly model the unassigned `None` state for variables. (We can still use garbage collection as a fallback or to debug memory leaks.) The `try` and `abort` operations give us hierarchical transactions with strong exception safety for partial failure and graceful degradation. In context of stowage, memoization, or checkpoints, variables will be concretely represented as `[ref-1123]`. To preserve the `forall v` restriction, we can simply reserve the entire `ref-*` volume of words and warn when a reference word is used in the normal dictionary.
 
-Bots can be installed by simply defining `bot-*` words. The bot's definition is implicitly read at the start of each transaction. Thus, a change to bot definitions is immediately applied. This supports live coding, runtime upgrade, and robust process control. An Awelon task manager might render all active bots - those rooted at `bot-*`, and a tree of children named upon `fork`. For each bot, we could render the recent history of abort messages or return values and other ad-hoc metadata such as resource use and conflicts.
+To support divide-and-conquer tactics, task parallelism, and staged programming, I introduce the `fork` operation, which specifies an operation to perform after we commit. When we repeat a deterministic read-fork transaction over stable variables, we'll compute the same set of forked tasks. We can simply repeat those tasks until the variables change. Thus, with `fork`, our bot becomes a hierarchical tree of read-fork transactions with read-write process loops for leaves. (Stabilizing this tree is left to the developer. For an unstable mix of read-fork-write, we could simply fail the transaction and raise an error.)
 
-This process model has many benefits. Besides those already mentioned, we can easily prioritize user edits. The cost of this model is that operations may be inefficient, not all efforts lead to progress. This can be mitigated by heuristic scheduling to avoid conflict, soft locking of high-contention variables, partial rollback by capturing the monad continuation before reading high-contention variables, software design patterns that track or report changes, and various other techniques. But in the end, not all efforts are productive.
+The cost of this model is occasional unproductive work and rework. But developers can keep that under control via design patterns. The benefits of this model for liveness, extensibility, securability, and resilience make it an excellent fit for Awelon's goals.
 
