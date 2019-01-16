@@ -1,29 +1,35 @@
 namespace Awelon
 open Data.ByteString
-open System.Collections.Immutable
 open Stowage
 
-// Awelon is encoded in ASCII (minus C0 and DEL), and is syntactically
-// simple, similar to Forth. A program is a sequence of named operations
-// with first-class blocks, which further contain programs. 
+// Awelon is encoded in printable ASCII (excluding C0 and DEL). Awelon is
+// syntactically very simple, similar to Forth. A program is represented 
+// by a sequence of atoms and blocks which contain first-class programs.
+// Each atom and program represents a function in Awelon. The meaning 
+// depends on a contextual dictionary.
 //
-//   Program = (Action)*
-//   Action = Block | Atom
-//   Block = '[' Program ']'
-//   Atom = Word | Annotation | Nat | Text 
+// Program = (Block | Token)*
+// Block = '[' Program ']'
+// Token = Word | Annotation | Nat | Text
+// Word = [a-z][a-z0-9-]*
+// Annotation = '(' Word ')'
+// Nat = '0' | [1-9][0-9]*
+// Text = '"' (not '"')* '"'
 //
-//   Word = [a-z][a-z0-9-]* 
-//   Annotation = '(' Word ')'
-//   Nat = '0' | [1-9][0-9]*
-//   Text = '"' (not '"')* '"'
+// Tokens can be separated by spaces (SP) as needed to disambiguate.
+// Whitespaces effectively has identity semantics; it may be ignored.
+// Formatting is not part of Awelon definitions, and is usually not
+// preserved within the saved dictionary. Instead, it's left to our
+// projectional editing environments to format and present code. 
 //
-// Awelon uses spaces (SP) to separate adjacent words and numbers. We
-// do not use tabs or linefeeds: formatting is not part of definitions.
-// Besides code, Awelon definitions may be ad-hoc binary values so we
-// can embed file data. Texts are modeled as limited binaries.
+// Texts do not use C0, DEL, or escape characters. We can simulate
+// escape characters by wrapping texts, e.g. `["multi/nline" lit]`.
+// Awelon dictionaries also permit binary large objects, which are
+// not parsed but have similar semantics.
 //
-// TODO: separate lexer and parser operation? It would be convenient
-// for stuff like finding all word dependencies or renaming a word.
+// TODO: This parser is a little inefficient. We could certainly
+// do better for performance. It isn't critical at the moment,
+// but I'd like to later develop a `FastParser` module.
 module Parser =
 
     /// A Word is a ByteString with regex `[a-z][a-z0-9-]*`. 
@@ -56,6 +62,10 @@ module Parser =
     and Action =
         | Atom of Token         // simple action
         | Block of Program      // [Program]
+
+    // This representation is a little slow, I think. Maybe try a vectorized
+    // list for a separate FastParse module, later? But is not a huge concern
+    // for now.
 
     // tokenization cursor
     type private TC = (struct(Program list * Program))
@@ -191,7 +201,7 @@ module Parser =
     ///
     /// I assume Awelon programs are relatively small, up to a few dozen
     /// kilobytes due to editable views. So this isn't heavily optimized.
-    let inline parse (s:ByteString) : ParseResult = parse' [] [] s
+    let parse (s:ByteString) : ParseResult = parse' [] [] s
 
     /// Write a single token. The token bytestring excludes the
     /// surrounding punctuation, so we'll add that back in. This

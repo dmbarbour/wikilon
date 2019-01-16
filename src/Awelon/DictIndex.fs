@@ -444,7 +444,7 @@ module DictVX =
                         Dict.codec.Read db src |> fromV1
                     else raise ByteStream.ReadError // unknown ver
                 member __.Compact db vx = 
-                    let struct(vx',sz) = Dict.cocec.Compact db vx
+                    let struct(vx',sz) = Dict.codec.Compact db vx
                     struct(vx', 1UL + sz) // add ver byte
             }
 
