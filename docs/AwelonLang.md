@@ -89,10 +89,10 @@ Some potential annotations:
 * `(memo)` - memoize a computation for incremental computing
 * `(nat)` - assert argument should be a natural number
 * `(type)` - describe type of stack at given location
+* `(seal-foo)` - symbolic types for safety and modularity
 * `(quota)` - impose limits on argument evaluation effort
-* `(static)` - assert value is constant in scope of definition
 
-Awelon does not constrain annotations beyond requirement for identity semantics. 
+Awelon does not limit annotations much beyond the need for identity semantics. 
 
 ## Accelerators
 
@@ -224,9 +224,9 @@ For example, `[Function](memo2)` might express that we should memoize the functi
 
 Expected errors should instead be modeled as explicit return values, usually via sum types. This allows the errors to be handled by the function's client, rather than halting computation. However, for errors without recovery, we might use `(error)` annotations, which act as an explicitly undefined words and do not rewrite further.
 
-## Static Typing
+## Static Typing and Safety Analysis
 
-Awelon doesn't depend on static types insofar as there is no type-driven dispatch or overloading. However, the language does imply a simple static type model. And if programmers can discover errors earlier by static analysis, that's a good thing. Awelon's stack-like environment can easily be typed as a tuple, and values as functions. Record constructors are typed using row polymorphism. Types for our primitive operations:
+Awelon doesn't depend on static types insofar as there is no type-driven dispatch or overloading. However, the language does imply a simple structural type model. If programmers can discover errors earlier by static analysis, that's a good thing. Awelon's stack-like environment can easily be typed as a tuple, and values as functions. Record constructors are typed using row polymorphism. Types for our primitive operations:
 
         a           ((s * x) * (s → s')) → (s' * x)
         b           ((s * x) * ((e * x) → e')) → (s * (e → e'))
@@ -234,26 +234,20 @@ Awelon doesn't depend on static types insofar as there is no type-driven dispatc
         d           (s * x) → s
         [F]         s → (s * type(F))
 
-Type annotations can be expressed using Awelon annotations, we only need some conventions. Obviously, we can use specific annotations such as `(nat)` or `(bool)` for the most common types. Lightweight annotations could encode simple arities or stack notations, e.g. `[F](t21)` might simply assert `F` receives two arguments and outputs one. For ad-hoc sophisticated or precise types, we might require a type argument `[Type Descriptor](type)d`. We can also, feasibly, assign names to types or variables via annotations to simplify debugging.
+Type annotations can be expressed using Awelon annotations, we only need some conventions. Obviously, we can use specific annotations such as `(nat)` or `(bool)` for the more common types. Simple tuple types or stack notations might be encoded within annotation names. Complex and composite types will inevitably require parameterized type annotations, similar to `[Type Descriptor](type)d`. In context of the Awelon dictionary, we might alternatively favor a convention where `foo-meta-type` describes the type of word `foo`. 
 
-Unfortunately, simple static type systems are sometimes too simplistic and restrictive. For any consistent type system, we'll always have safe programs that cannot be typed. For example, the `pick` function from Forth isn't amenable to typing without sophisticated dependent types:
+Dependent types, generalized algebraic data types (GADTs), linear types, existential types, and other sophisticated type extensions can feasibly be modeled via type descriptors. However, I imagine development of these extensions will be a long-term project. Short term, we can use ad-hoc annotations and analyses for safety.
 
-        [Vk]..[V1][V0] k pick == [Vk]..[V1][V0][Vk]
+### Opaque and Nominative Data Types
 
-In this context, we could develop a series of functions like `pick2nd` and `pick3rd`, at cost of much boiler-plate. Or we could try to defer typing until after we've specialized on the first parameter, treating `pick` as a dynamically typed macro. Intention to defer type checking might be indicated by annotation, e.g. adding a `(dyn)` comment to the subprogram with `[A](dyn) => [A]` behavior.
+Implementation-hiding modularity in functional programming languages is frequently based around [opaque data types](https://en.wikipedia.org/wiki/Opaque_data_type) as a second-class approximation of [abstract data types](https://en.wikipedia.org/wiki/Abstract_data_type). Direct access to data representation is confined to an easily controlled volume of code. Code outside this privileged volume must interact with the data through a limited interface. This allows developers to enforce structural invariants, provide smart constructors that validate data, etc.. A prerequisite for opaque data types is [nominative types](https://en.wikipedia.org/wiki/Nominal_type_system), which allow us to restrict use of otherwise structurally equivalent types based on type names.
 
-*Note:* Besides static types, termination analysis is also useful. As a purely functional language, non-termination or divergence is an error for Awelon functions.
-
-### Opaque and Abstract Data Types
-
-Implementation-hiding modularity in functional programming languages is frequently based around [opaque data types](https://en.wikipedia.org/wiki/Opaque_data_type) as a simplified approximation of [abstract data types](https://en.wikipedia.org/wiki/Abstract_data_type). Direct access to data representation is confined to a controlled volume of code. External code is limited to a subset of provided interfaces. Those interfaces enforce invariants, control coupling, partition programming tasks, and isolate bugs.
-
-For Awelon, we can support opaque data types via seal-unseal annotations:
+Awelon can support nominative data types via paired symbolic annotations:
 
         (seal-foo)      (s * x) → (s * foo:x)
         (unseal-foo)    (s * foo:x) → (s * x)
 
-A sealer serves as a symbolic type wrapper, to resist accidental access to data representation. But we can (via static analysis or linter) also enforce a simple rule: that these annotations are only directly accessible from words with a matching `foo-` prefix. Given this additional constraint, our sealers can isolate direct data access to a volume of code, support smart constructors, etc.. This should work nicely with similar constraints limiting external access to `foo-local-*`, and aligns nicely with dictionary packages.
+We can then impose a simple rule: that `(seal-foo)` and `(unseal-foo)` may be used directly only from words that match `foo-*`. This rule is trivially enforcable by linter or compiler. By enforcing it, we confine direct access to our sealed data to the `foo-*` volume of our codebase. This aligns conveniently with Awelon's ad-hoc packages. We can further enforce that `foo-local-*` words may only be directly used from `foo-*`, to support package-private types and functions.
 
 ## Structural Equivalence
 
@@ -301,22 +295,20 @@ Instead, I propose to move namespaces to the editor layer: an editor can track a
 
 ### Named Local Variables
 
-Although tacit programming styles are suitable for many problems, they make an unnecessary chore of sophisticated data shuffling. Fortunately, we can support conventional let and lambda expressions as a projection. 
-
-Consider a lightweight syntax where `\x` indicates we'll pop a value from the stack and assign it to a local variable `x`. The 'scope' is simply the remainder of the current definition or block. Thus `[\x EXPR]` becomes an equivalent to `(λx.EXPR)`, while `[X] \x BODY` corresponds to `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
+Although tacit programming styles are suitable for many problems, they make an unnecessary chore of sophisticated data shuffling. Fortunately, we can support conventional let and lambda expressions as a projection. Consider a lightweight syntax where `\x` indicates we'll pop a value from the stack and assign it to a local variable `x` for the remainder of our current definition or block. Thus `[\x EXPR]` becomes an equivalent to `(λx.EXPR)`, while `[X] \x BODY` corresponds to `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
 
         \x EXPR == (local-x) T(x,EXPR) 
           assuming `x` represents a value
         
-        T(x,E) | E does not contain x       => d E
-        T(x,x)                              => 
-        T(x,[E])                            => [T(x,E)] b
+        T(x,E) | E does not contain x       == d E
+        T(x,x)                              == 
+        T(x,[E])                            == [T(x,E)] b
         T(x,F G)                            
-            | only F contains x             => T(x,F) G
-            | only G contains x             => [F] a T(x,G)
-            | F and G contain x             => c [T(x,F)] a T(x,G)
+            | only F contains x             == T(x,F) G
+            | only G contains x             == [F] a T(x,G)
+            | F and G contain x             == c [T(x,F)] a T(x,G)
 
-This design is robust and independent of definitions, but is not optimal. For example, it is easy to construct unnecessary closures for conditional behaviors, like `T(x,[L][R]if)` where we know (based on definition of `if`) that one of the `[L]` or `[R]` branches will be applied to the local stack. A more optimal rewrite might be `[T(x,L)][T(x,R)]if` - or similar, depending on behavior of `if`. It is feasible to extend this view with some specialized rewrites, or for a compiler to eliminate unnecessary closures via static escape analysis.
+This design is robust and independent of definitions, but is not optimal. For example, it is easy to construct unnecessary closures for conditional behaviors, like `T(x,[L][R]if)` where we know (based on definition of `if`) that exactly one of the `[L]` or `[R]` branches will be applied to the local stack. A more optimal rewrite might be `[T(x,L)][T(x,R)]if` - or similar, depending on behavior of `if`. It is feasible to extend this view with some specialized rewrites, or for a compiler to eliminate unnecessary closures via static escape analysis.
 
 *Aside:* Named locals were, at least to me, the first convincing proof that *Projectional Editing* is a viable alternative to sophisticated built-in syntax. That said, I intend for most views be simpler and more localized.
 
@@ -326,9 +318,9 @@ The [monad design pattern](https://en.wikipedia.org/wiki/Monad_%28functional_pro
 
         X; Y; Z == X [Y;Z] k == X [Y [Z] k] k
 
-This projection flattens the nesting, enabling greater focus on expression of program logic. The word `k` should bind continuation `[Y;Z]` to the result of computing `X` in context of the implicit stack. The `X;Y;Z` program corresponds roughly to Haskell's `X >=> (Y >=> Z)`. We'll additionally need a pure `[Result] return` operation. To simplify data plumbing, we can layer this projection above named locals, such that `Z` can bind let variables assigned at `X` or `Y`.
+This projection flattens the nesting, enabling greater focus on expression of program logic. The `k` combinator should bind continuation `[Y;Z]` to the result of computing `X`. The `X;Y;Z` program then corresponds roughly to Haskell's `X >=> (Y >=> Z)` where `(>=>)` is left-to-right Kleisli composition. To complete our monad, we need a pure `return` combinator, with `return` and `k` carefully defined such that `[R] return [Y] k` evaluates directly to `[R] Y`. This projection can be layered conveniently above named locals for lightweight data plumbing, allowing `Z` access to variables bound in `X` or `Y`. 
 
-Of course, this supports only one monad. I recommend the *operational* monad, which is generic, extensible, and composable based on the operation type. See [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov for details and motivations.
+Of course, this notation conveniently supports only one monad. I would recommend some variant on the *operational* monad, which is generic, extensible, and composable based on the operation type. For details and motivations, see [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov. 
 
 ## Labeled Data and Records
 
@@ -338,31 +330,32 @@ Naively, a record could be encoded as an association list, and a variant as a fu
 
 I propose instead that Awelon favors record *constructors* - i.e. we use `[[A] "a" put [B] "b" put ...](record)`. The block represents a function writing to an opaque record representation (perhaps a trie). The `(record)` annotation then indicates that this function should have the type of a simple record constructor, and informs our runtime to use an accelerated record representation. This preserves commutative behavior and error semantics of `put` operations, and simplifies functional abstraction of records. Record constructors are also easy to recognize and manipulate through a projectional editor.
 
-## Data Representation
-
-Control over data representation can improve performance through reducing memory pressure and indirection. The simplest example is unboxing of tuples. We may logically have `[3 4 5]` as a single value on the stack, but we might *implement* this as three distinct values `3 4 5` on the data stack, thereby avoiding a heap-allocation for the tuple. Similarly, we might insist that these natural numbers should be small, perhaps fitting within a four byte word. In that case, the `3 4 5` could be represented as twelve bytes on the stack.
-
-There are costs for this. We'll need strong static typing or sophisticated runtime type information. We may need to specialize functions based on specific representations. Fortunately, most of these costs can be shifted to the compiler or runtime. Programmers can focus on controlling the representations and conversions between them.
-
-In Awelon, we can leverage annotations to explicitly convert representations or to control conversion costs by asserting expected representations. This isn't so different from working with types. Like types, we might need parameterized annotations to describe sophisticated cases (e.g. `[TyRep](typerep)d`). 
-
-Support for precise data representation is a long-term goal for Awelon systems, but also of relatively low priority. Short term, it may be sufficient to specialize arrays over binaries.
-
 ## Arrays and In-Place Mutation
 
 Awelon doesn't have an array data type. But between annotations and accelerators, we can impose an array representation for some lists, such that we can access data in near-constant time. With further support from our runtime and annotations, it is feasible to track uniqueness of our memory reference such that *modifying* the array can be implemented as an efficient in-place mutation. (This might be understood as a garbage-collector optimization: GC the old value and allocate the new with the modification in place.) Arrays are the obvious low-hanging fruit, but similar benefits might be achieved for records.
 
 Of course, arrays won't replace use of persistent data structures. The latter are more flexible and have nicer properties at large scales (e.g. relating to memoization, stowage, or progressive disclosure). I would recommend arrays where they're relatively small (like leaves of a rope) or when we want a tight in-place update loop (like a union-find algorithm).
 
-## Multi-Stage Programming
+## Data Representation
 
-Multi-stage programming (MSP) is about explicit control of *when* a compution occurs. For pure computation, explicit control supports robust, stable performance. For effectful systems, MSP allows us to construct efficient programs based on runtime data, integrating configurations or service registries. In Awelon, there is no built-in feature for MSP, but we can support MSP via combination of annotations and explicit modeling.
+Precise control over data representation can improve performance by reducing indirection and heap memory pressure. For example, we might represent a tuple `[[T1][T2][T3]]` as three values on our stack, or represent a known-to-be-small natural number as a 32-bit word.
 
-A `(static)` annotation can assert a value is constant within a definition or program. This can be validated by simply evaluating each word's definition, erasing the annotation when a value is present (`[A] (static) => [A]`), then complaining if any `(static)` annotations remain. This supports a stage distinction between compile-time vs runtime, which are the stages programmers most care about. 
+For Awelon, it is feasible to control data representations through annotations. However, it is not trivial to do so. We'd also need to track these data representations and adapt behavior of functions based on representations provided. Fortunately, most of the costs can be shifted to the compiler, while programmers mostly use annotations to declaratively assert or convert representations.
 
-Awelon programs can explicitly model stages using intermediate values that represent intermediate programs as ASTs or other data structures. In this case, we have a stage separation between constructing the AST vs compiling it into an opaque Awelon function. In context of *Bots and Effects*, we can leverage read-fork transactions as stages that gather external data to construct a program, reactively rebuilding when the external data changes.
+Support for precise data representation is a long-term goal for Awelon systems. It is of relatively low priority. Short term, it may be sufficient to specialize arrays of numbers or binary structures. 
 
-We can further support a `(jit)` annotation to invoke a just-in-time compiler over dynamically constructed Awelon functions. This would allow us to work with multi-stage programming without a terrible hit to performance. Conventional tracing JIT is implicit and has fragile, unstable performance. Explicit control of JIT can ameliorate those issues.
+### Multi-Stage Programming
+
+Multi-stage programming (MSP) is about explicit, robust control of *when* a compution occurs. This is useful for predictable performance. For Awelon, we can leverage annotations to express programmer intentions and assumptions. Consider paired annotations:
+
+        [A](step-foo) => [A]
+        [F](stage-foo) => [F]   iff [F] does not contain (step-foo)
+
+The `(step-foo)` annotations indicate which values must be computed to complete stage `foo`. That is, a stage of computation is complete when no steps required for that stage remain. The `(stage-foo)` annotation effectively asserts that a stage has completed. Stages can complete implicitly even if not asserted. For precision work, developers can work with several named stages. These annotations can guide partial evaluation optimizers, and inform developers when their assumptions are violated. It is feasible to track stages and requirements in the type system. 
+
+Annotations by themselves are insufficient to make MSP convenient to express. We'll additionally want to develop design patterns for convenient staging. For example, read-fork patterns for *Bots and Effects* make it easy to expresss incremental staged processes whose behavior may depend on a relatively stable configuration or plugins registry.
+
+*Aside:* In addition to controlling computation, MSP may benefit from control over just-in-time compilation (JIT). This could be supported via `[F](jit)` annotations. Controlling JIT can improve performance stability.
 
 ## Generic Programming
 
@@ -372,7 +365,9 @@ This could feasibly be mitigated by *Multi-Stage Programming*: we could develop 
 
 ## Bots and Effects
 
-An Awelon bot process is a deterministic transaction, repeated indefinitely. 
+An Awelon bot process is a deterministic transaction, repeated indefinitely.
+
+Process coordination is implicit. Deterministic repetition of a read-only or failed transaction is obviously unproductive. Thus, we can improve system efficiency by waiting for a change among the observed variables. For example, a stream processing bot might voluntarily abort if an input queue is empty or output queue is full. Compared to locks and signals, this provides a robust means to wait for arbitrary conditions, and makes it relatively easy to preserve system consistency.
 
 Preliminary API:
 
@@ -388,9 +383,9 @@ Preliminary API:
         abort   : e -> TX v e a
         fork    : TaskName -> TX v e a -> TX v e' ()
 
-I assume the monadic API is manipulated through a suitable projection, so isn't too different from conventional imperative programming. We can manipulate variables via imperative `read` and `write` operations. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `fork` operation requests a one-off transaction upon commit. This is intended for read-fork transactions, which permit us to cache and repeat forked subtask transactions until an observed variable has changed. The `alloc` operation creates fresh variables. To avoid strong requirements for garbage-collection, the above API includes an unassigned state for variables via an optional value type. 
+I assume the monadic API is manipulated through a suitable projection, so isn't too different from conventional imperative programming. We can manipulate variables via imperative `read` and `write` operations. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `alloc` operation creates fresh variables. To avoid strong requirements for garbage-collection, the above API includes an unassigned state for variables via an optional value type. 
 
-Process coordination is implicit. Deterministic repetition of a read-only or failed transaction is obviously unproductive. Thus, we can improve system efficiency by waiting for a change to the observed variables. For example, a stream processing bot might voluntarily abort when the input channel is empty or output is full. Compared to locks and signals, this provides a robust means to wait for arbitrary conditions and preserve system consistency.
+The `fork` operation specifies a one-off operation to attempt after we commit. When repeating a read-fork transaction, we can cache the forked operations and repeat them until an observed variable has changed. Recursively, this can gives us an incremental read-fork tree with reactive read-write loops at the leaves. Use of fork supports task-concurrency and multi-stage programming.
 
 Bots operate upon a set of environment variables `Env v`. Effects, such as network access, are achieved through manipulation of these variables, which are shared with the system and other bots. For example, we might have a system task queue. After we add tasks to this queue then commit, the system may process the requests. We might provide a filesystem-inspired state resource where bots can record state or collaborate. Reflective access to the dictionary may also be supported.
 
@@ -399,4 +394,5 @@ To simplify user access and control, I propose that bots are installed by defini
 In context of stowage, memoization, and debugging, we often serialize variables. To keep this simple, secure, precise, and compatible with Awelon tooling (parsers, type analysis, projectional editors, etc.), I propose to reserve the volume of `ref-*` words for this purpose. Using a reference word within the normal dictionary would be treated as an error, enforcing the `forall v` constraint. We then simply encode variables as `[ref-1123]`, or perhaps a symbolic name for our initial environment variables. 
 
 Overall, I'm very satisfied with this design. It is resilient, extensible, debuggable, discoverable, and securable. It aligns nicely with Awelon's vision for projectional editors as UI. Although there is a hit to efficiency, rework can be kept under control via software design patterns and heuristic scheduling.
+
 
