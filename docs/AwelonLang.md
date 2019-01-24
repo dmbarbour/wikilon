@@ -234,9 +234,7 @@ Awelon doesn't depend on static types insofar as there is no type-driven dispatc
         d           (s * x) → s
         [F]         s → (s * type(F))
 
-Type annotations can be expressed using Awelon annotations, we only need some conventions. Obviously, we can use specific annotations such as `(nat)` or `(bool)` for the more common types. Simple tuple types or stack notations might be encoded within annotation names. Complex and composite types will inevitably require parameterized type annotations, similar to `[Type Descriptor](type)d`. In context of the Awelon dictionary, we might alternatively favor a convention where `foo-meta-type` describes the type of word `foo`. 
-
-Dependent types, generalized algebraic data types (GADTs), linear types, existential types, and other sophisticated type extensions can feasibly be modeled via type descriptors. However, I imagine development of these extensions will be a long-term project. Short term, we can use ad-hoc annotations and analyses for safety.
+Type annotations can be expressed using Awelon annotations. For simple cases, we can use specific type annotations like `(nat)` or `(bool)`, or encode a simple type within the annotation symbol. However, in general we would use a parameterized annotation like `[Type Descriptor](type)d`. This allows us to abstract and compose type descriptions. In context of the Awelon dictionary, we might also follow a naming convention where `foo-meta-type` should describe the type of `foo`.
 
 ### Opaque and Nominative Data Types
 
@@ -249,15 +247,23 @@ Awelon can support nominative data types via paired symbolic annotations:
 
 We can then impose a simple rule: that `(seal-foo)` and `(unseal-foo)` may be used directly only from words that match `foo-*`. This rule is trivially enforcable by linter or compiler. By enforcing it, we confine direct access to our sealed data to the `foo-*` volume of our codebase. This aligns conveniently with Awelon's ad-hoc packages. We can further enforce that `foo-local-*` words may only be directly used from `foo-*`, to support package-private types and functions.
 
+### Partial Typing and Escape Hatches
+
+Unfortunately, many concerns and design patterns are difficult to type: heterogeneous collections, type-safe indexing of arrays, physical unit tracking (kilometers vs miles vs liters), big-O performance, static allocations and in-place update for arrays, interpreting strings into functions, typed ASTs for DSLs, resource discovery and adaptation, modeling objects as closures where each method has a suitable return type. 
+
+To address these requires a "sufficiently advanced" type system with support for phantom types, indexed types, generalized algebraic data types, dependent types, linear types, existential types, performance and latency types, and so on. However, support for expression, validation, and inference of advanced types will certainly be a long-term project. Further, there is a cost to expressing and validating these types that may be unsuitable for fluid programming contexts like rapid prototyping.
+
+As a design philosophy, Awelon systems may encourage use of types but should make it easy to work partially type-safe codebases or partial validation of declared types. And for common cases like interpreting a static DSL string into a function, it should be convenient to defer typing until after the function is produced.
+
 ## Structural Equivalence
 
-Annotations can assert two functions are the same, structurally:
+Annotations might assert two functions are structurally equivalent:
 
         [A][B](eq) => [A][B]     iff A and B are structurally equivalent
 
-Structural equivalence assertions are certainly convenient for lightweight unit testing. But the motivating use case is merging sorted data structures. Efficient merge requires knowing whether the two structures are sorted using the same comparison function. If we couple the sort function with the collection, we can use `(eq)` to verify our assumption.
+A motivating case for structural equivalence assertions is merging two sorted data structures. Our assumption is that the key-comparison function is equivalent. With `(eq)`, we could represent this assertion. This could also be useful for lightweight unit testing, or for verifying our assumptions when defining projections.
 
-*Aside:* Behavioral equivalence is not something we can generally test in a Turing complete language. But structural equivalence could include limited forms of behavioral equivalence comparisons.
+Behavioral equivalence is not something we can generally test in a Turing complete language. But structural equivalence could include limited forms of behavioral equivalence comparisons.
 
 ## Projectional Editing
 
@@ -279,20 +285,6 @@ Besides textual views, projectional editors can support graphical editor-viewer 
 
 Our projectional editors may further support views of the dictionary, not just views of a specific program. Ad-hoc sessions could perhaps be encoded as `[foo][bar][baz]`, loading all three definitions into an editor. But we can also use structured sessions, e.g. render `foo-c1`, `foo-b3`, etc. as a spreadsheet `foo` with each cell as a separate word. A REPL or notebook application might use a word per line, implicitly continuing the prior line (e.g. `:repl-3 repl-2 command3`). 
 
-### Namespaces
-
-It is not difficult to recognize a comment as declaring a qualified namespace.
-
-        using long-prefix as lp; lp-foo
-            becomes
-        "using long-prefix as lp"(a2)d long-prefix-foo
-
-However, I don't recommend this! Namespace declarations in code too easily become a form of boiler-plate (especially for one-liner functions). They also interact awkwardly with copy-paste. Further, namespaces fixated in code don't allow for much user customization.
-
-Instead, I propose to move namespaces to the editor layer: an editor can track a user's set of preferred nicknames together with other user-model data like a clipboard. Users can manage this set, perhaps switch between packages based on current project. It's up to each user and the editor's feature set. Further, it blends nicely into richer views - namespaces are essentially a very limited form of user-defined, pluggable view.
-
-*Aside:* I'm interested in use of color as an alternative to prefixes, e.g. such that `html-div` is written in a different color from `math-div`. This would give us a more concise notation.
-
 ### Named Local Variables
 
 Although tacit programming styles are suitable for many problems, they make an unnecessary chore of sophisticated data shuffling. Fortunately, we can support conventional let and lambda expressions as a projection. Consider a lightweight syntax where `\x` indicates we'll pop a value from the stack and assign it to a local variable `x` for the remainder of our current definition or block. Thus `[\x EXPR]` becomes an equivalent to `(λx.EXPR)`, while `[X] \x BODY` corresponds to `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
@@ -311,6 +303,20 @@ Although tacit programming styles are suitable for many problems, they make an u
 This design is robust and independent of definitions, but is not optimal. For example, it is easy to construct unnecessary closures for conditional behaviors, like `T(x,[L][R]if)` where we know (based on definition of `if`) that exactly one of the `[L]` or `[R]` branches will be applied to the local stack. A more optimal rewrite might be `[T(x,L)][T(x,R)]if` - or similar, depending on behavior of `if`. It is feasible to extend this view with some specialized rewrites, or for a compiler to eliminate unnecessary closures via static escape analysis.
 
 *Aside:* Named locals were, at least to me, the first convincing proof that *Projectional Editing* is a viable alternative to sophisticated built-in syntax. That said, I intend for most views be simpler and more localized.
+
+### Namespaces
+
+It is not difficult to recognize comments declaring qualified namespaces.
+
+        using long-prefix as lp; lp-foo
+            becomes
+        "using long-prefix as lp"(a2)d long-prefix-foo
+
+However, I don't recommend this! Namespace declarations in code too easily become a form of boiler-plate (especially for one-liner functions). They also interact awkwardly with copy-paste. Further, namespaces fixated in code don't allow for much user customization.
+
+Instead, I propose to move namespaces to the editor layer: an editor can track a user's set of preferred nicknames together with other user-model data like a clipboard. Users can manage this set, perhaps switch between packages based on current project. It's up to each user and the editor's feature set. Further, it blends nicely into richer views - namespaces are essentially a very limited form of user-defined, pluggable view.
+
+*Aside:* I'm interested in use of color as an alternative to prefixes, e.g. such that `html-div` is written in a different color from `math-div`. This would give us a more concise notation.
 
 ### Monadic Programming
 
@@ -344,7 +350,7 @@ For Awelon, it is feasible to control data representations through annotations. 
 
 Support for precise data representation is a long-term goal for Awelon systems. It is of relatively low priority. Short term, it may be sufficient to specialize arrays of numbers or binary structures. 
 
-### Multi-Stage Programming
+## Multi-Stage Programming
 
 Multi-stage programming (MSP) is about explicit, robust control of *when* a compution occurs. This is useful for predictable performance. For Awelon, we can leverage annotations to express programmer intentions and assumptions. Consider paired annotations:
 
@@ -361,7 +367,7 @@ Annotations by themselves are insufficient to make MSP convenient to express. We
 
 Awelon supports polymorphism. We can implement lists once for many data types, or an operational monad for many operation types. This supports a weak form of generic programming. However, Awelon does not support overloading of symbols. For example, we cannot have one `add` symbol that automatically selects the appropriate function based on whether the arguments are natural numbers, floating point, or matrices.
 
-This could feasibly be mitigated by *Multi-Stage Programming*: we could develop a stage that propagates type information and other static metadata. This would allow `add` to select the appropriate function based on context. Projectional editors could further help, making it more convenient to work with `add<T>` functions where `T` represents our static metadata. 
+This could feasibly be mitigated by *Multi-Stage Programming*: we could develop a stage that propagates type information and other static metadata. This would allow `add` to select the appropriate function based on context. Projectional editors could further help, making it more convenient to work with `add<T>` functions where `T` represents our static metadata.
 
 ## Bots and Effects
 
@@ -393,6 +399,13 @@ To simplify user access and control, I propose that bots are installed by defini
 
 In context of stowage, memoization, and debugging, we often serialize variables. To keep this simple, secure, precise, and compatible with Awelon tooling (parsers, type analysis, projectional editors, etc.), I propose to reserve the volume of `ref-*` words for this purpose. Using a reference word within the normal dictionary would be treated as an error, enforcing the `forall v` constraint. We then simply encode variables as `[ref-1123]`, or perhaps a symbolic name for our initial environment variables. 
 
-Overall, I'm very satisfied with this design. It is resilient, extensible, debuggable, discoverable, and securable. It aligns nicely with Awelon's vision for projectional editors as UI. Although there is a hit to efficiency, rework can be kept under control via software design patterns and heuristic scheduling.
+### Effectful Projections
 
+Users should also be able to observe and manipulate the `forall v. Env v` extended environment through their projectional editors. However, rendering a graph of variables is too awkward. So we would instead define projections that read variables as needed and manipulate variables according to user actions such as pushing a button.
+
+These projections are close in nature to conventional user applications. Pushing a button might directly add a network message to a system's task queue. If a projection doesn't use reflection on the dictionary, it could be compiled separately. However, the underlying transactional memory and asynchronous effects still offers several advantages over conventional application frameworks. First, we can leverate `try/abort` to ensure that 'views' are read-only. Second, after pushing a button in one view, we could observe changed variables through other views *before* we commit, to provide greater awareness of what an application is doing. Third, we can combine operations on multiple projections into one transaction, which ensures extensibility.
+
+To 'install' these projections, I propose to model an ephemeral registry in `Env v` where bots can publish projections intended for the user. This design would simplify security reasoning, integrate user-attention devices like notifications, and support adaptation of projections to an environment or specific user. Of course, we could easily define bots that have only one task - to register a projection.
+
+Thus, bots both perform background tasks and install user-facing applications.
 
