@@ -208,9 +208,9 @@ Awelon disfavors recursive definitions. Instead, we use fixpoint combinators:
             [B][A]w == [A][B]       w = (a2) [] b a
                [A]i == A            i = [] w a d
 
-Other loop combinators can be built upon `z`. For example, we can develop a `foreach` function that processes a list or stream. The most common loop combinators may be accelerated for performance.
+Other loop combinators can be built upon `z`. For example, we can develop a `foreach` function that processes a list or stream. We could similarly preserve the name `foreach` in partially evaluated loops via `foreach = [(eq-foreach) ...]z`. Use of the *Named Locals* projection might help when defining new loop combinators. 
 
-*Aside:* I've contemplated allowing recursion many times. Unfortunately, recursion isn't very helpful in-the-small where common loop combinators can do the job. And in-the-large recursion is just a recipe for entangling code with the environment, hindering sharing and comprehension, which is not congruent with Awelon's goals. Further, I hope that we'll gradually elevate Awelon code above explicit loops, instead favoring collections-processing combinators or DSLs. Thus, recursion is rejected.
+*Aside:* I've frequently contemplated support for recursive word definitions. However, there are some persuasive arguments for avoiding them: inline all the things semantics, programs as finite sequences rather than graphs, no need for an external reference concept to explain or construct loops. Further, after we develop a library of loop combinators and common collections types, most use cases would be covered.
 
 ## Memoization
 
@@ -300,7 +300,7 @@ Although tacit programming styles are suitable for many problems, they make an u
             | only G contains x             == [F] a T(x,G)
             | F and G contain x             == c [T(x,F)] a T(x,G)
 
-This design is robust and independent of definitions, but is not optimal. For example, it is easy to construct unnecessary closures for conditional behaviors, like `T(x,[L][R]if)` where we know (based on definition of `if`) that exactly one of the `[L]` or `[R]` branches will be applied to the local stack. A more optimal rewrite might be `[T(x,L)][T(x,R)]if` - or similar, depending on behavior of `if`. It is feasible to extend this view with some specialized rewrites, or for a compiler to eliminate unnecessary closures via static escape analysis.
+This design is robust and independent of user definitions, but is not optimal. We could further specialize rewrites for common cases like conditional behaviors, or hope for an optimizer to eliminate unnecessary copies and closures. 
 
 *Aside:* Named locals were, at least to me, the first convincing proof that *Projectional Editing* is a viable alternative to sophisticated built-in syntax. That said, I intend for most views be simpler and more localized.
 
@@ -318,15 +318,34 @@ Instead, I propose to move namespaces to the editor layer: an editor can track a
 
 *Aside:* I'm interested in use of color as an alternative to prefixes, e.g. such that `html-div` is written in a different color from `math-div`. This would give us a more concise notation.
 
-### Monadic Programming
+## Monadic Programming
 
 The [monad pattern](https://en.wikipedia.org/wiki/Monad_%28functional_programming%29) is convenient for explicit modeling of effects, exceptions, backtracking, lightweight APIs or DSLs, and multi-stage programs. However, this pattern requires syntactic support, lest it devolve into an illegible mess of deeply nested functions. Consider a lightweight candidate projection for monadic programming:
 
         X; Y; Z == X [Y;Z] k == X [Y [Z] k] k
 
-This projection flattens the nesting, enabling greater focus on expression of program logic. The `k` combinator would be defined in the dictionary and should bind continuation `[Y;Z]` to the result of computing `X`. To complete our monad, we need a pure `return` operation, with `return` and `k` defined such that `return [Y] k` locally rewrites to `Y`. (*Aside:* In context of stack programming, we implicitly 'return' the current stack.) The `X;Y;Z` program then corresponds roughly to Haskell's `X >=> (Y >=> Z)` where `(>=>)` is left-to-right Kleisli composition. For lightweight data plumbing, this projection can be layered transparently above named locals, such that `Z` has access to variables bound at `X` or `Y`.
+This projection flattens nesting, enabling direct expression of program logic. The `k` combinator should bind the continuation `[Y;Z]` to the result of computing `X`. To complete our monad, we would define a pure `return` operation together with `k` such that `return [Y] k` locally rewrites to `Y`, and also define at least one alternative to `return` to model an effect. For lightweight data plumbing, this projection can be conveniently layered above named locals, such that `Z` has access to let or lambda variables declared at `X` or `Y`.
 
-Of course, this notation conveniently supports only *one* monad. I would recommend developing some variant on the *operational* monad, which is generic, extensible, and composable via the operation type. For details and motivations, see [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov.
+Of course, this notation conveniently supports only *one* monad. I recommend a variant of the operational monad, which is generic and extensible through the operation type. Essentially, we implement one alternative to `return`, which is to `yield` with our implicit request on the stack. The caller can observe whether we have returned a final result or yielded with a continuation. 
+
+Modulo type safety, implementation is simple. Consider:
+
+        return = [none]    
+        yield = [[null] some]
+        k = w [i] [w [cons] b b [some] b] if
+
+        Assuming:
+            [L][R]none == L             none = w a d
+            [L][R][X]some == [X]R       some = w b a d
+            [C][L][R]if == [L][R]C      if = [] b b a i
+            [A][B]w == [B][A]           w = [] b a
+            [F]i == F                   i = [] w a d
+
+This implementation distinguishes final return from intermediate yield by optional type. When we yield, we include a continuation. In this case, our continuation is represented as a reverse-ordered list of tasks, but we could instead use a tree or opaque type. 
+
+*Note:* Representation of the continuation is important for performance! We could implement implicit continuations with `yield = [[return] some]` and `[[X] some] [Y] k == [[X [Y] k] some]` (via fixpoint definition of `k`). This gives correct behavior. Unfortunately, for the common case of deep monadic abstractions, we would produce `[X [Y] k [Z] k]` structures instead of the efficient and projection-friendly `[X [Y [Z] k] k]`. Our proposed representation - a reverse-ordered list - can be folded into the latter form.
+
+The main challenge for monadic programming in Awelon is providing static type safety. We may need dependent types or generalized algebraic data types to support analysis. For more details and motivations for the operational monad, peruse [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov. 
 
 ## Labeled Data and Records
 
