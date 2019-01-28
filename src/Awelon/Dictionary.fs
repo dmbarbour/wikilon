@@ -755,3 +755,9 @@ module Dict =
 
 type Dict = Dict.Dict
 
+// Thoughts: It might be useful to have an auto-compacting dictionary,
+// which includes the Stowage reference and compacts heuristically
+// based on update entries added. This would be more convenient down 
+// stream. Would still serialize as a Dict.
+//
+

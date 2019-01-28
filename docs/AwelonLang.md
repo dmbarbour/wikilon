@@ -150,6 +150,22 @@ Awelon does not optimize for package-based software distribution. Instead, I enc
 
 However, Awelon systems can represent package-based software distribution by aligning packages with word prefixes. For example, a one-line entry `/packagename- secureHash` can install or update a specific version for an entire package. This might be suitable in cases where packages involve special licenses or subscriptions. *Namespaces* can be supported via projectional editing to mitigate verbosity from hierarchical names. For dynamic systems, developers can arrange for a bot to synchronize packages from a trusted source (see *Bots and Effects*).
 
+## Loops
+
+Awelon disfavors recursive definitions. Instead, we use fixpoint combinators:
+
+        [X][F]z == [X][[F]z]F
+        z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
+
+        assuming:
+            [def of foo](eq-foo) == [foo]
+            [B][A]w == [A][B]       w = (a2) [] b a
+               [A]i == A            i = [] w a d
+
+Other loop combinators can be built upon `z`. For example, we can develop a `foreach` function that processes a list or stream. We could similarly preserve the name `foreach` in partially evaluated loops via `foreach = [(eq-foreach) ...]z`. Use of the *Named Locals* projection might help when defining new loop combinators.
+
+*Aside:* I've frequently contemplated support for recursive word definitions. However, there are some persuasive arguments for avoiding them: inline all the things semantics, programs as finite sequences rather than graphs, no need for an external reference concept to explain or construct loops. Further, after we develop a library of loop combinators and common collections types, most use cases would be covered.
+
 ## Stowage
 
 By annotation, large values could be moved from memory to environment:
@@ -176,6 +192,8 @@ Primitives rewrite by simple pattern matching:
 
 Words simply rewrite to their evaluated definitions. However, this rewrite should be lazy, deferred if it does not result in progress of the computation. The motive for lazy rewriting of words is to retain human-meaningful symbols and structure in the evaluated results, enabling humans to grok the result and supporting graphical projections of the results using the same *Projectional Editing* models. By 'progress' we certainly need more than inlining a word's definition. Preferably, rewriting a word results in at least one value available for further computation.
 
+Evaluation of loops should be tail-call optimized where feasible. In context of Awelon, we might implement this by recognizing common `a d` sequences at the end of a function, or at least building tail-calls into accelerators. However, working with relatively large stacks also shouldn't be a problem for Awelon programs.
+
 Developers may guide evaluation strategy through annotations. For example, we might use `(par)` to request parallel computation of a value. We might use `[F](jit)` to request compilation for a function or loop body. We could use `(lazy)` and `(eval)` to recommend call-by-need or eager evaluation. By making performance annotations explicit, we can also avoid silent performance degradation by raising a warning or error when the annotation cannot be implemented.
 
 *Aside:* Many languages have experimented with user-defined rewrite rules. The typical example is equivalent to `[F] map [G] map == [F G] map`. It is feasible to extend Awelon with rewrite rules, driven by annotations, leaving the burden of proof to the developers. However, I'm inclined to discourage this because such optimizations are fragile to abstraction and rules-set extension. Instead, I would suggest constructing an intermediate DSL as a data type, then rewriting it via function.
@@ -195,22 +213,6 @@ Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]`
 ### Garbage Collection
 
 Awelon does not have a strong dependency on a garbage collector. The extent to which a runtime requires garbage-collection mostly depends on how we implement the copy operator (`c`). If we deep-copy our values, then drop (`d`) can also free the memory. If we shallow-copy a value reference, then drop can only erase the reference and recovering memory would depend on a garbage collector. Between these extremes, a runtime might use reference counting GC - conveniently, there is no risk of forming a reference cycle.
-
-## Loops
-
-Awelon disfavors recursive definitions. Instead, we use fixpoint combinators:
-
-        [X][F]z == [X][[F]z]F
-        z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
-
-        assuming:
-            [def of foo](eq-foo) == [foo]
-            [B][A]w == [A][B]       w = (a2) [] b a
-               [A]i == A            i = [] w a d
-
-Other loop combinators can be built upon `z`. For example, we can develop a `foreach` function that processes a list or stream. We could similarly preserve the name `foreach` in partially evaluated loops via `foreach = [(eq-foreach) ...]z`. Use of the *Named Locals* projection might help when defining new loop combinators. 
-
-*Aside:* I've frequently contemplated support for recursive word definitions. However, there are some persuasive arguments for avoiding them: inline all the things semantics, programs as finite sequences rather than graphs, no need for an external reference concept to explain or construct loops. Further, after we develop a library of loop combinators and common collections types, most use cases would be covered.
 
 ## Memoization
 
@@ -287,9 +289,9 @@ Our projectional editors may further support views of the dictionary, not just v
 
 ### Named Local Variables
 
-Although tacit programming styles are suitable for many problems, they make an unnecessary chore of sophisticated data shuffling. Fortunately, we can support conventional let and lambda expressions as a projection. Consider a lightweight syntax where `\x` indicates we'll pop a value from the stack and assign it to a local variable `x` for the remainder of our current definition or block. Thus `[\x EXPR]` becomes an equivalent to `(λx.EXPR)`, while `[X] \x BODY` corresponds to `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
+Although tacit programming styles are suitable for many problems, they make an unnecessary chore of sophisticated data shuffling. Fortunately, we can support conventional let and lambda expressions as a projection. Consider a lightweight syntax where `\x` indicates we'll "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current program (definition or block) modulo shadowing. Thus `[\x EXPR]` becomes equivalent to `(λx.EXPR)`, while `[X] \x BODY` effectively simulates `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
 
-        \x EXPR == (local-x) T(x,EXPR) 
+        \x EXPR == (var-x) T(x,EXPR) 
           assuming `x` represents a value
         
         T(x,E) | E does not contain x       == d E
@@ -300,9 +302,9 @@ Although tacit programming styles are suitable for many problems, they make an u
             | only G contains x             == [F] a T(x,G)
             | F and G contain x             == c [T(x,F)] a T(x,G)
 
-This design is robust and independent of user definitions, but is not optimal. We could further specialize rewrites for common cases like conditional behaviors, or hope for an optimizer to eliminate unnecessary copies and closures. 
+This design is robust and independent of user definitions. However, it isn't optimal for conditional behaviors where we select one branch to apply. In those cases, we might produce unnecessary closures. So we may need to extend our rewrite rules for a few known special cases, or rely upon a compiler and optimizer to eliminate unnecessary closures, or simply hand-optimize those cases. Regardless, use of named locals are convenient for use cases involving sophisticated data shuffling or ad-hoc closures.
 
-*Aside:* Named locals were, at least to me, the first convincing proof that *Projectional Editing* is a viable alternative to sophisticated built-in syntax. That said, I intend for most views be simpler and more localized.
+*Aside:* Named locals were, at least to me, the first convincing proof that *Projectional Editing* is a viable alternative to sophisticated built-in syntax. They also demonstrate that projections might be usefully understood as lightweight compiler/decompilers that may inject a few annotations to support decompilation. That said, I hope and intend for most views be simpler and more localized.
 
 ### Namespaces
 
@@ -320,32 +322,30 @@ Instead, I propose to move namespaces to the editor layer: an editor can track a
 
 ## Monadic Programming
 
-The [monad pattern](https://en.wikipedia.org/wiki/Monad_%28functional_programming%29) is convenient for explicit modeling of effects, exceptions, backtracking, lightweight APIs or DSLs, and multi-stage programs. However, this pattern requires syntactic support, lest it devolve into an illegible mess of deeply nested functions. Consider a lightweight candidate projection for monadic programming:
+The [monad pattern](https://en.wikipedia.org/wiki/Monad_%28functional_programming%29) is convenient for explicit modeling of effects, exceptions, backtracking, lightweight APIs or DSLs, and multi-stage programs. However, this pattern requires syntactic support, lest it devolve into an illegible mess of deeply nested functions. Consider a lightweight candidate projection for monadic command sequences:
 
-        X; Y; Z == X [Y;Z] k == X [Y [Z] k] k
+        X; Y; Z == X [Y;Z] cseq == X [Y [Z] cseq] cseq
 
-This projection flattens nesting, enabling direct expression of program logic. The `k` combinator should bind the continuation `[Y;Z]` to the result of computing `X`. To complete our monad, we would define a pure `return` operation together with `k` such that `return [Y] k` locally rewrites to `Y`, and also define at least one alternative to `return` to model an effect. For lightweight data plumbing, this projection can be conveniently layered above named locals, such that `Z` has access to let or lambda variables declared at `X` or `Y`.
+This projection flattens nesting, enabling direct expression of program logic. The command sequence combinator `cseq` binds our continuation `[Y;Z]` to the result of computing `X`. To complete our monad, we must define a pure `return` such that `return [Y] cseq` locally rewrites to `Y`. To fit with Awelon's tacit stack programming style, we return the data stack rather than an explicit value. This projection conveniently layers with local variables such that `Z` has access to variables defined at `X` or `Y`. 
 
-Of course, this notation conveniently supports only *one* monad. I recommend a variant of the operational monad, which is generic and extensible through the operation type. Essentially, we implement one alternative to `return`, which is to `yield` with our implicit request on the stack. The caller can observe whether we have returned a final result or yielded with a continuation. 
+Of course, this projection conveniently supports only one monad. I propose a variant of the *operational monad*, which is adaptable and extensible through the operation type. See also [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov. With the operational monad, one monad is sufficient for all monadic programming use cases.
 
-Modulo type safety, implementation is simple. Consider:
+In Awelon, we can model the operational monad by defining `yield` as our only alternative to `return`. Before we yield, we can place a request continuation on the data stack where our caller knows to find it. This provides an opportunity for intervention or interaction between computations. Modulo type safety, an implementation of this idea is quite simple:
 
-        return = [none]    
+        return = [none]
         yield = [[null] some]
-        k = w [i] [w [cons] b b [some] b] if
+        cseq = w [i] [w [cons] b b [some] b] if
 
         Assuming:
             [L][R]none == L             none = w a d
             [L][R][X]some == [X]R       some = w b a d
             [C][L][R]if == [L][R]C      if = [] b b a i
-            [A][B]w == [B][A]           w = [] b a
             [F]i == F                   i = [] w a d
+            [A][B]w == [B][A]           w = [] b a
+            
+In this implementation, final `return` versus intermediate `yield` are distinguished via optional continuation. Deep procedural abstractions often result in `yield [X] cseq [Y] cseq [Z] cseq` patterns. The resulting continuation is represented by a reverse-ordered list `[[Z] [[Y] [[X] [null] cons] cons] cons]`. We can fold this list to `[X [Y [Z] cseq] cseq]`. (For contrast, if we start with `yield = [[return] some]`, we're likely to end with `[return [X] cseq [Y] cseq [Z] cseq]`, which is unfriendly for projections and performance.)
 
-This implementation distinguishes final return from intermediate yield by optional type. When we yield, we include a continuation. In this case, our continuation is represented as a reverse-ordered list of tasks, but we could instead use a tree or opaque type. 
-
-*Note:* Representation of the continuation is important for performance! We could implement implicit continuations with `yield = [[return] some]` and `[[X] some] [Y] k == [[X [Y] k] some]` (via fixpoint definition of `k`). This gives correct behavior. Unfortunately, for the common case of deep monadic abstractions, we would produce `[X [Y] k [Z] k]` structures instead of the efficient and projection-friendly `[X [Y [Z] k] k]`. Our proposed representation - a reverse-ordered list - can be folded into the latter form.
-
-The main challenge for monadic programming in Awelon is providing static type safety. We may need dependent types or generalized algebraic data types to support analysis. For more details and motivations for the operational monad, peruse [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov. 
+The biggest challenge for monadic programming in Awelon is static type safety. Without fancy dependent types or generalized algebraic data types, it's difficult to validate request-response patterns where the response type depends upon the request. Eventually, hopefully, Awelon systems will support sufficiently advanced types. But in the interim, we must either accept risk of runtime type errors or model operations such that we have simple homogeneous types.
 
 ## Labeled Data and Records
 
@@ -408,23 +408,15 @@ Preliminary API:
         abort   : e -> TX v e a
         fork    : TaskName -> TX v e a -> TX v e' ()
 
-I assume the monadic API is manipulated through a suitable projection, so isn't too different from conventional imperative programming. We can manipulate variables via imperative `read` and `write` operations. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `alloc` operation creates fresh variables. To avoid strong requirements for garbage-collection, the above API includes an unassigned state for variables via an optional value type. 
+I assume the monadic API is manipulated through a suitable projection so isn't too different from conventional imperative programming. We can manipulate variables via imperative `read` and `write` operations. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `alloc` operation creates fresh variables. To avoid strong requirements for garbage-collection, the above API includes an unassigned state for variables via an optional value type. 
 
 The `fork` operation specifies a one-off operation to attempt after we commit. When repeating a read-fork transaction, we can cache the forked operations and repeat them until an observed variable has changed. Recursively, this can gives us an incremental read-fork tree with reactive read-write loops at the leaves. Use of fork supports task-concurrency and multi-stage programming.
 
-Bots operate upon a set of environment variables `Env v`. Effects, such as network access, are achieved through manipulation of these variables, which are shared with the system and other bots. For example, we might have a system task queue. After we add tasks to this queue then commit, the system may process the requests. We might provide a filesystem-inspired state resource where bots can record state or collaborate. Reflective access to the dictionary might also be provided through this environment.
+Bots operate upon a set of environment variables `Env v`. Effects, such as network access, are achieved through manipulation of these variables, which are shared with the system and other bots. For example, we might have a system task queue. After we add tasks to this queue then commit, the system may process the requests. We might provide a filesystem-inspired state resource where bots can record state or collaborate. Reflective access to the dictionary might also be provided through this environment. Further, by publishing projections over this environment where users can discover them, we can model ad-hoc effectful, reactive application front-ends and real-time notifications.
 
-To simplify user access and control, I propose that bots are installed by defining `app-*` words. (See *Full Environment Projections* for why I choose `app-*` instead of `bot-*`.) Reading the process definition is implicitly be part of a bot's root transaction. This supports robust live-coding and administrative process control via modifying bot definitions or configuration dependencies at runtime. For extensibility, all installed bots receive the same initial environment. This allows bot behavior to be audited or extended by another bot. For security and testing, we rely on that `forall v` constraint. This allows a simple wrapper to restrict or sandbox the environment provided to a distrusted bot behavior. It also allows us to simulate bot behavior in a purely functional computation to simplify automated testing.
+To simplify user access, control, and discovery, I propose that bots are installed by simply defining `app-*` words. Reading the bot definition is implicitly part of each repeated transaction. Thus, any modification to `app-*` definitions can be applied immediately. This supports live-coding application models, continuous deployment, runtime software upgrades, and administrative control over system behavior. All bots operate on the same `Env v` environment, but we can easily confine and secure a bot by wrapping its behavior definition. Thus, we can safely install distrusted bots or applications by sandboxing them, or simulate bot behaviors via purely functional environments for automated testing.
 
 In context of stowage, memoization, and debugging, we often serialize variables. To keep this simple, secure, precise, and compatible with Awelon tooling (parsers, type analysis, projectional editors, etc.), I propose to reserve the volume of `ref-*` words for this purpose. Using a reference word within the normal dictionary would be treated as an error, enforcing the `forall v` constraint. We then simply encode variables as `[ref-1123]`, or perhaps a symbolic name for our initial environment variables. 
 
-### Full Environment Projections
-
-Beyond the Awelon dictionary, users should be able to observe and manipulate their extended `forall v. Env v` environment through projectional editors. That is, we'll have a transaction that reads some variables and computes a view to render and manipulate. User actions would result in variables being modified. This would support the same access to asynchronous effects as bots have. For example, pressing a button could add a request to a system task queue.
-
-Compared to conventional user applications, transactional memory offers several structural benefits. We can enforce read-only views. We can leverage the same mechanisms as bots to wait for relevant variable changes before recomputing a view. We can leverage soft locking to prioritize user actions over bot manipulations. We can support multiple projections that share variables, such that manipulations of one projection are immediately observable through the others, for reactive views and flexible extension. We can defer 'commit' such that users can observe consequences of pushing a button before committing, and multiple user actions across multiple projections can be combined in one transaction.
-
-Bots should publish these projections in the environment for users to discover. There are several benefits to  making this a responsibility of bots. The projections would more easily bind bot-allocated variables, supporting tighter integration between front-end and back-end. We can share and install complete 'applications' using one common mechanism - defining words at `app-*`. Security constraints on bots would be preserved for the projections they publish, which simplifies and centralizes security analysis. We can separately compile apps that don't reflect on the dictionary, including both the bot and front-end code. Bots can push projections to the user based on live data, supporting notifications or augmented reality. For a multi-user environment, a bot could publish different projections to different users based on individual authority, preference, and interest.
-
-Thus, we have a cycle. The Awelon dictionary defines bots. The bots define projections. A subset of projections can edit the dictionary through reflection. By editing the dictionary, we can add, remove, or modify bots. And the resulting system has many nice properties for control, customization, extension, sharing, etc.. Of course, to support bootstrapping and debugging, we'll inevitably define several projections and other tools outside this cycle.
+Ultimately, we have a cycle. The Awelon dictionary defines bots in `app-*`. The bots define projections. A subset of projections can edit the dictionary through reflection. By editing the dictionary, we can add, remove, or modify our applications. The resulting system has many nice properties for control, customization, extension, liveness, sharing, security, etc.. Of course, to support bootstrapping and debugging, we'll inevitably define several projections and other tools outside this cycle.
 

@@ -67,22 +67,54 @@ module Parser =
     // list for a separate FastParse module, later? But is not a huge concern
     // for now.
 
-    // tokenization cursor
-    type private TC = (struct(Program list * Program))
-    let rec private tokStep (struct(u,r) : TC) : (Token * TC) option =
-        match r with
-        | (op::r') -> 
-            match op with
-            | Atom tok -> Some (tok, struct(u,r'))   // report token
-            | Block b -> tokStep (struct((r'::u),b)) // step into block
-        | [] -> 
-            match u with
-            | (r'::u') -> tokStep (struct(u',r'))    // step out of block
-            | [] -> None                             // done
+    module private Tokenizer = 
+        type TC = (struct(Program list * Program))
+        let rec step (struct(u,r) : TC) : (Token * TC) option =
+            match r with
+            | (op::r') -> 
+                match op with
+                | Atom tok -> Some (tok, struct(u,r'))  // report token
+                | Block b -> step (struct((r'::u),b))   // step into block
+            | [] -> 
+                match u with
+                | (r'::u') -> step (struct(u',r'))      // step out of block
+                | [] -> None                            // done
 
-    /// Extract sequence of Tokens from program, ignoring block structure.    
+    /// Extract sequence of Tokens from program, ignoring block structure.
+    /// In practice, this is mostly used for indexing of programs.  
     let tokenize (p:Program) : seq<Token> =
-        Seq.unfold tokStep (struct([],p))
+        Seq.unfold (Tokenizer.step) (struct([],p))
+
+    module private RewriteTokens =
+        type RW = Token -> Program
+        type U = Program -> Program
+        type L = Program // reverse-ordered
+        type R = Program
+
+        // Thoughts: F# uses a small stack, so I'm using CPS (via type U)
+        // to avoid the stack when processing recursive block structure.
+        let rec step (rw:RW) (u:U) (l:L) (r:R) : Program =
+            match l with
+            | (op::l') -> 
+                match op with
+                | (Atom tok) -> 
+                    step rw u l' (List.append (rw tok) r)
+                | (Block b) -> 
+                    let ub b' = step rw u l' ((Block b') :: r)
+                    stepIni rw ub b
+            | [] -> r
+        and stepIni rw u p = step rw u (List.rev p) []
+
+    /// Rewrite every token within a program. Each token may be independently
+    /// expanded or erased based on a given rewrite rule. This has potential
+    /// utility for use cases such as:
+    ///
+    ///  * renaming a word or set of words
+    ///  * inlining some word definitions
+    ///  * erasing undesirable annotations
+    /// 
+    let tokenRewrite (rw:(Token -> Program)) (p:Program) : Program =
+        RewriteTokens.stepIni rw id p 
 
     /// Awelon uses characters in ASCII minus C0 and DEL. Most
     /// of these are permitted only within embedded texts. For
@@ -257,5 +289,4 @@ module Parser =
     /// Write to byte string. (Trivially wraps write'.)
     let inline write (p:Program) : ByteString = 
         ByteStream.write (write' p)
-
 

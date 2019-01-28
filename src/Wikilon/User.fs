@@ -3,22 +3,26 @@ open Data.ByteString
 open Stowage
 
 // Wikilon's "User model".
+// 
+// I'm not familiar with conventional user models. My idea for Wikilon
+// is to model a user as something like a game avatar, with an inventory
+// and equipment and location. In this case, the 'inventory' can include
+// authorities and clipboards, 'equipment' can support preferences, macros,
+// and views, and 'location' is something like a navigation history and
+// session information.
 //
-// My current idea is to model our set of users as an Awelon dictionary,
-// where each user may hierarchically be modeled as having an inventory,
-// clipboard, equipment, and similar. Authorities can be modeled via an
-// equipped hat/badge/role, keyring, or similar.
+// The concrete representation of a user might be an Awelon dictionary,
+// to support easy export, import, and debugging. Alternatively, we could
+// use a fragment of a dictionary.
 //
 // I'm interested in supporting remote authentication, e.g. from Google
 // or Facebook. But I could support simple passwords, too, e.g. using a
 // salt and encoded password pair.
-//
-// But it seems I should probably delay authentication issues until we
-// have something else working. Also, 
-This is relatively low priority.
-//
+// 
+// This is relatively low priority, however. Early on, I can start with
+// just admin vs guest.
 
-
+(*
 module User =
 
     ///
@@ -35,4 +39,4 @@ module User =
     /// Instead of storing plain-text passwords, we'll mangle things.
 
     let manglePassword salt pass = 
-
+*)

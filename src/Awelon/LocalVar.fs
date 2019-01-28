@@ -2,82 +2,29 @@ namespace Awelon
 open Data.ByteString
 
 // We can support local variables - lets and lambdas of conventional
-// languages - using a projection. 
+// languages - using a projection. This LocalVars module provides a
+// preliminary and reference implementation, so we can use this view
+// early in development.
 //
-// A simple proposal: introduce `\x` tokens that will "pop" a value 
-// from the stack into a local variable `x` for the remainder of a
-// finite program (a definition or block). Then `[X] \x EXPR` serves
-// equivalent to `let x = [X] in EXPR`, and `[\x EXPR]` corresponds 
-// to conventional `(lambda x . EXPR)`. 
-//
-// This LocalVars module provides a reference implementation for 
-// this convenient feature. To ensure compatibility with higher
-// views, we use the Awelon syntax and write `(lambda-x)` instead
-// of `\x`. I assume (lambda-x) is specific to this view, not a
-// valid annotation. Higher layers may render as `\x` if desired.
-//
-// I assume we have `(local-x)` annotations in Awelon definitions.
-// This roughly means: for the remainder of this program, give the
-// top stack element the name `x`. Might be useful for debugging.
-// But it's mostly intended for local variables: to view locals, we
-// rewrite `(local-x)` to `(lambda-x) x` then propagate `x` over 
-// the fundamental Awelon operators  `a b c d`. Conversely, we can
-// extract `(lambda-x) EXPR` by injecting some Awelon operators.
-//
-// The extraction rules are simple enough:
-//
-//     (pop-x) EXPR == (local-x) T(x,EXPR) 
-//       assuming `x` represents a value
-//
-//     T(x,E) | E does not contain x      => d E
-//     T(x,x)                             => 
-//     T(x,[E])                           => [T(x,E)] b
-//     T(x,F G)                            
-//        | only F contains x             => T(x,F) G
-//        | only G contains x             => [F] a T(x,G)
-//        | F and G contain x             => c [T(x,F)] a T(x,G)
-//
-// For the multi-variable case, we must extract in order of rightmost
-// lambda to leftmost to ensure we don't mangle our variable scopes.
-//      
-//      (lambda-x) (lambda-y) x y           
-//      (lambda-x) (local-y) [x] a
-//      (local-x) [(local-y)] a [] b a
-//
-// This leaves an awkward `[(local-y)]`. Viewed locally, this is the
-// trivial `[(lambda-y) y]`, but we'll normally want to propagate the
-// `y` back into the parent scope. Thus, processing of `(local-*)` 
-// annotations to compute the locals view should be left-to-right.
-//
-// Complicated data plumbing code can be hidden from view of the user.
-// This might introduce performance issues in some cases, unnecessary
-// closures. We might extend this view with some specializations like
-// `T(x,[F][T]if) => [T(x,F)][T(x,T)]if` to avoid closing conditional
-// expressions over the stack. Or we might rely on sufficiently smart
-// optimizers to remove closures via static escape analysis.
-//
-// Thoughts: Performance of this view could be improved if I were to
-// index the programs so I know which subprograms contain which words.
-// Not sure it's worth the effort, though.
-//
+// However, my intention is to define views within Awelon dictionaries,
+// where users can modify and extend them. So this shouldn't be in use
+// too much. 
 module LocalVar =
     open Parser
 
-    /// Variables in this view are a represented as words.
-    type Var = Word
-
     module private Impl =
-        let plambda = BS.fromString "lambda-"
-        let plocal = BS.fromString "local-"
+        type Var = Word
+        let ppop = BS.fromString "pop-"
+        let pvar = BS.fromString "var-"
         let inline matchPrefix p w = 
             (p = (BS.take (BS.length p) w))
         let inline extractPrefix p w =
             if not (matchPrefix p w) then None else
             Some (BS.drop (BS.length p) w)
-        let inline matchLambdaTok v (struct(tt,w)) =
+        let inline matchPopTok v (struct(tt,w)) =
             (TT.Anno = tt)
-                && (v = (BS.drop (BS.length plambda) w))
-                && (matchPrefix plambda w) 
+                && (v = (BS.drop (BS.length ppop) w))
+                && (matchPrefix ppop w) 
         let inline matchWordTok tgt (struct(tt,w)) =
             (TT.Word = tt) && (tgt = w)
 
@@ -86,7 +33,7 @@ module LocalVar =
             match p with
             | ((Atom tok) :: p') ->
                 if matchWordTok w tok then true else // word found
-                if matchLambdaTok w tok then cwLoopCC cc w else // word shadowed in p'
+                if matchPopTok w tok then cwLoopCC cc w else // word shadowed in p'
                 cwLoop cc w p'
             | ((Block b) :: p') -> cwLoop (p'::cc) w b
             | [] -> cwLoopCC cc w
@@ -96,7 +43,7 @@ module LocalVar =
             | [] -> false
 
         // Test whether a word is contained within a program, albeit
-        // in a manner sensitive to name shadowing behind (lambda-*)
+        // in a manner sensitive to name shadowing behind (pop-*)
         // annotations.
         let containsWord w prog = cwLoop [] w prog
 
@@ -119,20 +66,20 @@ module LocalVar =
                 Some (BS.drop (BS.length p) w)
             | _ -> None
 
-        // Test for `(local-x)` patterns, extracting 'x'.
-        let (|Local|_|) op = extractAtomSuffix (TT.Anno) plocal op
+        // Test for `(var-x)` patterns, extracting 'x'.
+        let (|Var|_|) op = extractAtomSuffix (TT.Anno) pvar op
 
-        // Test for `(lambda-x)` patterns, extracting 'x'.
-        let (|Lambda|_|) op = extractAtomSuffix (TT.Anno) plambda op
+        // Test for `(pop-x)` patterns, extracting 'x'.
+        let (|Pop|_|) op = extractAtomSuffix (TT.Anno) ppop op
 
         let inline isPrimOpC c = ((byte 'd') >= c) && (c >= (byte 'a'))
         let inline isPrimOp w = (1 = BS.length w) && (isPrimOpC (w.[0]))
 
-        // not all lambda and local variables syntactically accepted by
-        // Awelon should be accepted by this view. But we shouldn't fail
-        // in practice, since that means we have dubious input.
-        let acceptVar w = (Parser.isValidWord w) && (not (isPrimOp w))
-        let acceptLocal w p = (acceptVar w) && (not (containsWord w p))
+        // Not all symbols we can represent in `(var-*)` are valid words.
+        // And even some valid words might be rejected, if they match our
+        // primitive words or are already used within our program.
+        let validVar w = (Parser.isValidWord w) && (not (isPrimOp w))
+        let acceptVar w p = (validVar w) && (not (containsWord w p))
 
         type P = Program // a program
         type L = P       // a reverse-ordered program
@@ -164,13 +111,13 @@ module LocalVar =
                 let xOp = Atom (struct(TT.Word,x))
                 u (appendRev l (xOp::r))
 
-        // Rewrite (local-*) entries to (lambda-*) from left to right
+        // Rewrite (var-*) entries to (pop-*) from left to right
         let rec pushVars (u:U) (l:L) (r:P) : P =
             match r with
-            | ((Local x) :: r') when acceptLocal x r' ->
+            | ((Var x) :: r') when acceptVar x r' ->
                 // push `x` into `r'`, then continue from there.
-                let lambda_x = Atom (tokAnno (BS.append plambda x))
-                pushVar x (pushVars u (lambda_x :: l)) [] r'
+                let pop_x = Atom (tokAnno (BS.append ppop x))
+                pushVar x (pushVars u (pop_x :: l)) [] r'
             | ((Block b) :: r') -> // deep rewrite within blocks
                 let ub b' = pushVars u ((Block b')::l) r'
                 pushVars ub [] b
@@ -211,13 +158,13 @@ module LocalVar =
                 pullVar x uCopy (List.rev varOps) r
             else u (List.append varOps r)
 
-        // Extract (lambda-*) entries from right to left. 
+        // Extract (pop-*) entries from right to left. 
         let rec pullVars (u:U) (l:P) (r:P) : P =
             match r with
-            | ((Lambda x) :: r') when acceptVar x -> 
-                // remove lambdas from r', extract `x`, prepend `(local-x)`
-                let local_x = Atom (tokAnno (BS.append plocal x))
-                let u' pf = u (appendRev l (local_x :: pf))
+            | ((Pop x) :: r') when validVar x -> 
+                // extract `x` from r', prepend `(var-x)`
+                let var_x = Atom (tokAnno (BS.append pvar x))
+                let u' pf = u (appendRev l (var_x :: pf))
                 pullVars (pullVar x u' []) [] r'
             | ((Block b) :: r') -> // deep rewrite within blocks
                 let ub b' = pullVars u ((Block b')::l) r'
@@ -225,32 +172,11 @@ module LocalVar =
             | (op::r') -> pullVars u (op::l) r' // ignore most tokens
             | [] -> u (List.rev l) // all done!
 
-    /// A LocalVars view is computed by rewriting `(local-x)`
-    /// annotations to `\x x` then propagating the `x` as a
-    /// value across Awelon's basic `a b c d` operators.
-    ///
-    /// However, for compatibility with Awelon parsers and other
-    /// views, we use `(lambda-x)` tokens place of `\x`. Lambdas
-    /// lack identity semantics, so aren't true annotations, but
-    /// it serves as a placeholder for our views. A higher view
-    /// might then render `(lambda-x)` as `\x`.
-    ///
-    /// This simulates local variable lets and lambdas:
-    ///
-    ///     [X] \x EXPR         let x = [X] in EXPR         
-    ///     [\x EXPR]           (lambda x . EXPR)
-    ///
-    /// In problematic cases, e.g. if `x` is already in use, we
-    /// may skip the rewrite, leaving a `(local-x)` annotation.
-    let viewLocalVars (p:Program) : Program = Impl.pushVars id [] p
 
-    /// Given a program containing `(lambda-*)` tokens - which are
-    /// not valid annotations - we can rewrite to eliminate lambdas
-    /// and local variables before we store to a dictionary. The
-    /// algorithm simply injects appropriate Awelon primitives:
-    ///
-    ///     (lambda-x) EXPR == (local-x) T(x,EXPR) 
-    ///       assuming `x` represents a value
+    /// The input is code containing `(pop-x)` tokens, which serve as
+    /// placeholders for assigning a variable (not valid annotations).
+    /// The output replaces `(pop-x) EXPR` by `(var-x) T(x,EXPR)` with
+    /// the following definition of T:
     ///
     ///     T(x,E) | E does not contain x      => d E
     ///     T(x,x)                             => 
@@ -260,15 +186,31 @@ module LocalVar =
     ///        | only G contains x             => [F] a T(x,G)
     ///        | F and G contain x             => c [T(x,F)] a T(x,G)
     ///
-    /// Effectively, our LocalVars view is a lightweight compiler and
-    /// decompiler that leaves `(local-varname)` hints to recover the
-    /// human-meaningful symbols.
+    /// Effectively, this supports local variables within our projection,
+    /// but 'compiles' them leaving behind `(var-x)` annotations as naming
+    /// hints for later decompilation.
     let hideLocalVars (p:Program) : Program = Impl.pullVars id [] p
 
-    // Further options: erase (local-*) annotations (and resulting `[]a`
-    // sequences) to simplify a debug view of the final code. Alternatively,
-    // leave `(var-x)` annotations as debug placeholders when extracting 
-    // `(lambda-x)`.
+
+    /// Our LocalVars projection is computed by rewriting `(var-x)` 
+    /// annotations to `(pop-x) x` then propagating the `x` through
+    /// our computation via Awelon's primitive `a b c d` operators.
+    /// If `x` is not a valid variable name, we reject the rewrite.
+    ///
+    /// A higher projection can render `(pop-x)` tokens as `\x` or
+    /// another concise and convenient syntax. This would support
+    /// lightweight lets and lambdas:
+    ///
+    ///     [X] \x EXPR         let x = [X] in EXPR         
+    ///     [\x EXPR]           (lambda x . EXPR)
+    ///
+    /// Granted, this doesn't provide an infix notation, and it is
+    /// not optimal for conditional behaviors. But use of locals is
+    /// more convenient than explicit data shuffling in many cases.
+    ///
+    /// Note: Developers should be careful about shadowing words used
+    /// implicitly in higher projections. 
+    let viewLocalVars (p:Program) : Program = Impl.pushVars id [] p
 
 
 

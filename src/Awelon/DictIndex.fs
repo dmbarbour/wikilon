@@ -33,27 +33,30 @@ open Dict
 module DictRLU =
 
     /// A reverse-lookup index is represented as a Dictionary with
-    /// a `word!client` key for every client of every word. The value
-    /// field is not used. This index has many applications: caching,
-    /// tags and todos, renaming words, and dictionary development.
-    /// The primary motive is to support caching. We can maintain this
-    /// index incrementally.
+    /// a `word!client` key for clients of every word except for the
+    /// four Awelon primitive words (a b c d). Value field not used.
+    ///
+    /// We can maintain this index incrementally, meaning that the
+    /// cost of updating index is roughly proportional to the change
+    /// in the indexed dictionary. Since dictionaries also support
+    /// reasonably efficient diffs, this can apply even for changes
+    /// to prefix-aligned dictionary packages.
+    ///
+    /// This index has many applications: caching, reverse lookup of
+    /// tag words, and renaming a word or prefix. The primary motive 
+    /// is to support caching.
     type RLU = Dict
 
     // Thoughts:
     //
-    // A weakness of RLU as defined is that it does not support separate
-    // indexing of packages. Modulo lazy downloads, this isn't a problem.
-    // We can perform a `diff` on the dictionary for incremental indexing.
-    // But we cannot lazily maintain the RLU as it's currently designed.
-    // At most, we can lazily download the RLU for a community dictionary.
-    // 
-    // I've contemplated solutions to this, but I think it won't be solved
-    // without a signficant redesign. 
+    // A weakness of RLU as defined is that it cannot support laziness
+    // or separate indexing of packages. I don't think this is a huge
+    // problem in practice, but it would hinder lazy downloads of the
+    // Stowage packages.
     //
-    // Fortunately, maintaining an index eagerly isn't a problem during
-    // normal development, which is when we'd want the index regardless.
-
+    // Perhaps we could mitigate this by explicitly distinguishing the
+    // dictionary we're using vs the reference/origin dictionary. Then
+    // we could lazily download the origin and index volumes we need.
 
     // implicit dependencies for natural numbers, texts, binaries.
     let private w_zero : Word = BS.fromString "zero"
@@ -61,12 +64,18 @@ module DictRLU =
     let private w_null : Word = BS.fromString "null"
     let private w_cons : Word = BS.fromString "cons"
 
+    // excluding Awelon primitive words from tracked dependencies
+    let inline private isPrimC (c:byte) : bool = 
+        ((byte 'd') >= c) && (c >= (byte 'a'))
+    let inline private isPrim (w:Word) : bool = 
+        (1 = (BS.length w)) && (isPrimC (BS.unsafeHead w))
+
     /// special dependency for Awelon parse-errors
     let depEPARSE : Symbol = BS.fromString "EPARSE"
 
     let private addTokDeps (s:Set<Symbol>) (struct(tt,w) : Token) : Set<Symbol> =
         match tt with
-        | TT.Word -> Set.add w s
+        | TT.Word -> if isPrim w then s else Set.add w s
         | TT.Anno -> s // annotations are not tracked
         | TT.Nat -> // zero, succ
             let bZero = (1 = BS.length w) && (byte '0' = w.[0])
@@ -205,7 +214,6 @@ module DictRLU =
                 let sp = List.map initSym symbols
                 let skip = List.exists (Dict.isEmpty) sp
                 if skip then [] else ((BS.empty,sp)::[])
-
 
         /// Search for words that contain all given symbols, restricted by
         /// dictionary prefix (e.g. to search a specific package).
@@ -386,6 +394,9 @@ module DictRLU =
   
     let compactingFromDict (db:Stowage) (d:Dict) : DictRLU =
         compactingWithDict db d empty
+
+    // TODO: rename a word, set of words, or a word prefix
+    // thoughts: renaming a prefix might include sealer annotations
 
 // DictVX maintains an indexed version cache above DictRLU.
 module DictVX =
