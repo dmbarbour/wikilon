@@ -1,149 +1,118 @@
 
-# Application Models for Awelon
+# Awelon's Application Model
 
-Awelon proposes projectional editing for most user-interfaces. Essentially, spreadsheets at scale, with live data and graphical projections. Users can manipulate definitions or view computed data through the same projections. This design has many nice properties, and the results are easily shared or reused. Importantly, projectional editing ensures a more computation environment more accessible and controllable by the user, contributing to an empowered user experience. Projectional editing should be favored where feasible.
+In Awelon, user-interfaces are modeled as editable projections over an environment. Back-end processing is modeled by sharing this environment with bots. Bots are modeled as transactions that repeat indefinitely, which gives provides an excellent nice basis for concurrency control, process coordination, and live coding. Effects are achieved by special 'system' bots that can process a task queue, interact with the network, etc..
 
-Where projectional editing is an awkward fit - such as automating dictionary maintenance, modeling a game server where user actions are hidden from other users, or bootstrapping the projectional editor - Awelon proposes use of bots. Awelon's bots are based on repeating transactions, installed at `bot-*` for easy control by the user. Bots are given a host-environment object, through which they can access the network, dictionary, and auxiliary state. This design also has many nice properties - liveness, idempotence, resilience, security, extensibility. Through network access, we can construct web applications. Leveraging tools like [Jasonette](https://jasonette.com/), these might still look and feel like native apps.
+All of this gives some convenient system properties. For example, we can allow users to operatate through multiple projections before committing, and we could reactively update our projections in scope of our transaction that has not committed. We can still support conventional GUIs with buttons that perform macro-edits. We also get some nice spreadsheet-like properties and live coding when manipulating our dictionaries.
 
-This document sketches how various applications might be modeled in Awelon.
+This document is brainstorming how to build some useful things.
 
-## Spreadsheet Applications
+## Multi-Line REPLs and Command Shells?
 
-I mentioned "spreadsheets at scale". Let's start with plain old spreadsheets! 
+A REPL experience usually has each line of code followed by rendering a result, with some connectivity to prior lines. Let's assume line breaks are command separators implicitly ending in `return`.
 
-We can project `foo-a2`, `foo-a3`, `foo-b2`, `foo-b3`, and so on as a spreadsheet `foo` with definitions in cells `a2`, `a3`, `b2`, and `b3`. Like most spreadsheets, under normal conditions we would render evaluated normally, and source only for cells with user focus. When we project source, we can treat `foo-` as an implicit namespace, using `$a2` or `A2` to name a local cell.
+        X [Y return [Z] cseq] cseq
+        == X; Y return; Z
+        == X; Y
+           Z
 
-Awkwardly, a spreadsheet projection can rewrite formulas on copy-paste (in violation of [DRY](https://en.wikipedia.org/wiki/Don%27t_repeat_yourself)), and support a shorthand for ranges so `$a2:b6` expands to a second-class table select (which hinders extension). This semantic awkwardness is intrinsic to conventional spreadsheets, not a fault of the projection.
+This allows us to freely mix pure and impure lines of code, and we can effectively treat semicolons as 'execute' statements internally. The remaining issue is how to work with deal with *incremental* programs. The simplest option is that we rebuild our view from scratch - this works well enough for a purely functional computation, though it might hinder caching. A more sophisticated option, perhaps, is to introduce holes for incremental processing of our program up to some undefined continuation.
 
-Awelon supports structured data and graphical projections at individual cells, both for source and results. We could use a [zooming UI](https://en.wikipedia.org/wiki/Zooming_user_interface) to effectively interact with such data through a spreadsheet.
+## Deterministic Concurrent Programming?
 
-*Note:* We might simplify spreadsheets into worksheets with a small set of user-named variables. In this case, we might render a connected graph of computations based on dependencies within the worksheet. This is suitable for ad-hoc, unstructured scratchpads.
+I'm very interested in observably deterministic concurrency.
 
-## Database Applications
+The most direct approach is perhaps single-assignment variables. However, I'm not fond of variables because it's too difficult to manage them (explicit deletion doesn't fit single-assignment, garbage-collection doesn't fit Awelon, and there's some weirdness with results containing variables). Let's exclude that for now.
 
-Modeling a database doesn't require any special effort in Awelon, assuming suitable collection types for modeling tables (tries, maps, arrays, records). Data tables could then be constructed at `mydb-goods` or `mydb-sales`, and we can also name computed views (which filter, join, or summarize tables). Conveniently, we can easily integrate external data resources like `yourdb-sales` insofar as they are represented in our dictionary. 
+The other option I see is *Kahn Process Networks*. We could model this using monadic computations with two effects: read from input port, write to output port. The ports, in this case, could have simple labels (strings) for names. 
 
-A projectional editor, then, would enable users to browse tables and views, and support editing data or development of views. This is both simpler than spreadsheets and more convenient for collections processing. But the user experience would be closer to browsing and managing a database.
+        
 
-The main challenge with database applications is sheer scale. To help address this, we can leverage annotations for *Stowage* and *Memoization*, and leverage these in monoidal computations over persistent data structures for incremental computation.
 
-## Editor and View Widget Applications
 
-A projectional editor will recognize values of common types, such as a date-time field or a color value. For editing these fields, a projectional editor could provide a full set of ad-hoc widgets, such as a date picker with a calendar, a color picker with color wheels and sliders and a pallette.
 
-Similarly, views for large or sophisticated values may require interactive widgets for progressive disclosure or navigation. A large tree structure value might be opened incrementally or accessed using tabs. A table value might involve widgets to filter which rows are in view.
+Kahn Process Networks are essentially the most general
 
-Editor and view widgets will often require auxiliary state: a color picker might remember recently used colors, a date picker could default to the current date-time, a text editor might access a clipboard, and we'll want to remember navigation status like location in an open tree when we update the tree. For large values, we might further have state for collaborative multi-user editing. This auxiliary state can generally be considered part of a users model.
+The easiest way to support deterministic concurrency is via stream processing:
 
-Our projectional editor should be extensible with user-defined, easily shared editor and view widgets. For example, our projectional editor might accept a list of 'installed' widgets, each of which describes the conditions under which it applies. Many [CRUD apps](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) can be modeled as ad-hoc widget extensions to a projectional editing environment.
+* each 'process' has a set of input and output streams
+* a process can bind outputs from one process as inputs to another 
+* 
 
-## REPL Applications
+To support concurrency, my simplest option is to model monadic threads or coroutines. This can be trivially supported as an effectful API above monadic command sequences. We could create, read, update, and delete variables. Deterministic concurrency (where result is independent of schedule), however, is rather difficult because it requires all "effects" are commutative.
 
-A pure REPL is a sequence of commands, manipulating a context, with a head:
+Nonetheless, if we do have a suitable API, it would be feasible  be feasible t
 
-        :myrepl-0 defines initial context
-        :myrepl-1 myrepl-0 command1
-        :myrepl-2 myrepl-1 command2
-        ...
-        :myrepl-42 myrepl-41 command42
-        :myrepl-head myrepl-42
 
-A projectional editor can render context and command at each step. This may involve graphical projections similar to a [Jupyter notebook](https://jupyter.org/). Insofar as we reference live data or unstable definitions, the REPL context can be recomputed automatically. We can edit prior commands, undo commands (move `myrepl-head` back to a prior command), or add new commands (add `myrepl-43` then redirect `myrepl-head` to `myrepl-43`). An observer of the REPL can either operate on the current state `myrepl-42` or on the mutable `myrepl-head`.
 
-*Aside:* REPLs are easily subsumed by spreadsheets or worksheets with explicit symbols. However, the extra structure can be useful.
 
-## Command Shells
 
-A simplistic model for a command shell is a user-bot chat session. The user can write requests or ask questions. The bot can automate background tasks, answer questions, perhaps ask a few questions of its own. But this model couples many concerns: bots and users must interpret each other's messages, the conversational context is implicit, and the bots are ad-hoc. This hinders message abstraction, graphical projections, and user control.
+ It seems difficult to enforce this without linear types for variables or channels.
 
-An improved design: model a shared conversational context as a first-class value. This value includes open questions, pending requests, and background tasks. But it can model them in distinct tables or partitions. Users can view and manipulate the context through a projectional editor, optionally using functional 'commands' like a REPL application. Our bot's behavior should be a simple function of the context's value, enabling users to comprehend and control associated bot behavior by controlling the shared context. For example, job control might involve adding or removing some background tasks to the context.
 
-This essentially gives us a simple [blackboard system](https://en.wikipedia.org/wiki/Blackboard_system). We can easily extend this design to multiple bots and users. 
 
-### GUI Command Shells
+ and would depend heavily on our communications model.
 
-We can combine a command shell context for our back-end state and a specialized editor/view widget for a front-end. This combination can directly model most conventional GUI applications while preserving Awelon's goals for a high degree of user control and extensibility. 
 
-Widgets in GUI command shells should only update two things: the pure value of our context, and potential auxiliary state representing the user-model (clipboard, navigation status, presence tracking for coordination with other users, etc.). Importantly, there should be no communication effects aside from these updates. Background bots may observe the command context or user-model, and react appropriately. If we desire, we can simulate "synchronous" GUIs by disabling parts of a GUI while awaiting response from a bot.
 
-This design has many nice properties: lightweight support for atomic updates, checkpoints, undo, and support for multiple local reactive views (edits to one view of the context are observed in all others). With a relatively generic context model, we can develop some standard views for debugging, and standard language for macro manipulations.
+Observable determinism (independent of scheduler) is feasible if we carefully design our APIs, e.g. with linear variables or channels. But
 
-This does require a sub-language for quickly constructing widget models for our projectional editors. Perhaps something based on lenses?
+ but it might not be worthwhile. 
 
-## Forum Applications
+arranging them around linear-writer channels or single-assignment variables.
 
-Assuming a reverse-lookup index, we can extend REPLs with branching. Given a REPL node like `myrepl-17`, we can perform a reverse-lookup to discover a set of associated 'replies'. These replies or their evaluated results could be rendered as a tree, like a forum. The tree could contain many associated tags instead of a single head. Like normal forums, we could easily support multiple users and bots, with requests and responses and background effort.
 
-I find this intriguing. To raise the level of discussion between humans, it seems useful to embed the evidence and statistics, graphs and graphics, and chains of reasoning that lead to a conclusion. By doing so, humans can review the subject and verify which arguments remain reasonable under the light of new or corrected evidence. Forums represented in Awelon's dictionary could serve this role very nicely.
 
-*Aside:* Since we assume branching, it seems useful to model a 'context' type that supports easy and meaningful merges and reintegration. A CRDT or lattice-based context would work. However, I'm uncertain how easy it is to build applications above such a context. 
 
-## Temporal Data
+ with explicit copy and reference counting.
 
-Temporal or time-series data is convenient for modeling stateful applications that integrate from multiple sources, without relying on interaction from bots or users. Essentially, if we have two temporal data sources (and suitable data structures for memoization) we can incrementally compute a temporal application state. This can be further used in computation of other applications.
+With monads, observable determinism is feasible and would depend on our effects API. This isn't a bad thing, since it allows us to develop concurrency models at the API layer (rather than a syntactic layer). 
 
-The benefit of doing so is the ability to model stateful applications without effectful interactions. We can keep a lot more of our computation 'pure'. And we can integrate sources that we (users or local bots) do not interact with or control. Further, with temporal data we can easily browse or animate past states, and project likely future states.
 
-This is compatible with command shell interactions. We'd simply have bots and users include a timestamp with their inputs. 
+This works, but gives us a highly non-deterministic model, insofar as the behavior of the system depends on an external scheduler. I'd very much like to have easy access to concurrency with determinism, instead.
 
-I'm uncertain how much Awelon systems will rely on temporal data. However, it's almost never a bad thing for a datum to include contextual metadata about when or where it applies. So I will encourage a preference for temporal data where feasible.
+Deterministic concurrency with shared variables is feasible if we restrict how variables are used.
+
+ Perhaps the simplest option is linear write-once read-once variables for promise pipelining, or a variant that allows for explicit duplication.
+
+        valloc : m (wv a * m a)
+        vbind : (a -> m b) -> rv a -> rv b
+        vcopy : rv a -> m (v a * v a)
+        vdrop : v a -> m ()
+        vwrite : a -> 
+        vdrop : v a -> m ()
+        vcopy : v a -> (v a * v a)
+        vwrite : v a -> a -> m ()
+        read : v a -> m a
+          
+
+
+
+, e.g. single-assignment and single-observer variables. 
+
+Kahn Process Networks are closer to the ideal here, but it's unclear how to represent KPNs to guarantee the channel structure for determinism. However, let's say our processes are similar: each process accepts a list of input channels and deterministically produces a list of output channels.
+
+
+
+
+We could certainly do this, but then our behavior depends on our explicit scheduler, which does not easily allow for a high level of parallelism. What I want are concurrent, parallel, computations that do not depend on scheduling, and that support a reasonable level of internal buffering.
+
+
+
 
 ## Binding Live Data
 
-Projectional editors *usually* won't be involved in this. Most live data should be managed by bots. However, there might be some exceptions where we can reasonably consider 'live data' to be a form of continuous user editing, like pushing a live stream from a user's camera. In any case, the projectional editor shouldn't directly modify anything outside of the bound Awelon environment.
-
-# Code Completion in Awelon
-
-Code completion is a valuable HCI feature for a programming language, doubly so if projectional editors are a primary user-interface model. So I'd like to support code completion in Awelon. Code completion requires a *context* that usefully limits a set of *operations*.
-
-We can consider Awelon a stack-based language for this purpose. The top elements on the stack, or the inferred types for those elements, provide an input context for code completion. We might also have an output context, based on observable usage of the program we define. We could use these contexts to present some suggestions. Missing parameters seem relatively awkward, however. 
+Bots can scour the network and copy data into a dictionary or filesystem.  this wouldn't effectively leverage Awelon's binary resources. Alternatively, bots could subscribe to dictionary packages, and maintain them, which would let us more easily take advantage of structure sharing and lazy downloads.
 
 
 
-However, stack-based programming can be a little awkward. Mostly, the problem
+## Spreadsheets and Worksheets
+
+We could project a volume of our dictionary `foo-*` as a spreadsheet, with `foo-a2` and `foo-b3` representing cells at the appropriate locations. We can locally evaluate each cell. This would allow us to render a sheet of cells. Internally, we might use `$a2` to name a local cell within the spreadsheet. Potential weakness here: copy-paste rewriting of local cells is awkward.
+
+A worksheet is like a spreadsheet except we use ad-hoc 'variable' names instead of cells. Each variable becomes a definition `foo-var1`, `foo-var2`, etc.. We could use a shorthand internally, perhaps just `var1`.
+
+That said, with *Named Local Variables*, we don't really need worksheets as multi-definition objects. We can just do them within one definition that requires no arguments. This might prove more convenient.
 
 
- for code completion. We might also have a 'right context' based on where our code is used, so we know the final type of our context. However, there is some unfortunate awkwardness to deal with missing parameters: after we select an operation, we must move our focus backwards to attend those missing details. 
-
-For contrast, OOP offers a convenient `object .method( parameters ) .method2( more params )` pattern. The object type can give us a context restricting the choice of methods. Each method gives us a context of typed holes for parameters. It's all left-to-right. Very nice, when it fits. 
-
-
-
- The parameters further provide a typed context. If we can arrange code carefully, our cursor can mostly move from left to right. Of course, this also has its awkward cases. It doesn't nicely handle methods producing a pair of objects, or a computation producing a pair of parameters that we'd prefer to divide across methods, or a conditional choice of methods.
-
-I'm certain we can do better. But it may be specialized to certain projections. 
-
-In general, code completion is essentially the anticipation of the user. We could reasonably argue that widget-based projectional editors are already providing this, albeit in a more ad-hoc and explicit manner. The developer of each widget is anticipating a use-case. It seems feasible to approach code completion the same way, developing a registry for automated suggestions (each with a mini-widget) based on knowing what we have and what we need.
-
-# Managed Dictionaries
-
-We may need to perform garbage collection at the dictionary level, eliminating words and collapsing command histories that are no longer relevant. This could be performed by a software agent, e.g. assume three attributes:
-
-* *opaque* - definition structure is irrelevant and may be rewritten
-* *frozen* - behavior of this word should never change in the future
-* *hidden* - assume no external references directly access this word
-
-This would admit a corresponding set of rewrites:
-
-* *opaque* definitions may be simplified, evaluated, compressed
-* *frozen* definitions may be *inlined* into *opaque* clients
-* *hidden* definitions may be *deleted* if they have no clients
-
-Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. However, when a secure hash resource is referenced from an opaque definition, we could rewrite the secure hash to a simplified or evaluated form.
-
-Representation of these attributes is ad-hoc, subject to de-facto standardization. For example, we could define `foo-meta-gc` for elements under `foo`, or we could represent our policies under a global word like `meta-gc`. I only recommend that the policy be separated from the definitions, i.e. using separate words instead of comments.
-
-# Natural Language Inspired Meta-Programming
-
-An intriguing opportunity is to model a REPL or command shell context that simulates a natural language context. A context for natural language discussion is full of vagueness and ambiguity, heuristic assumptions and associated world knowledge. We can iteratively refine, extend, retract, and correct prior statements with future sentences. This is technically feasible by using soft constraint logics, and some means to ignore or delay interpretations with trivial or irrelevant differences so we can focus attention on useful distinctions.
-
-It is feasible to develop edit and view widgets for a probabilistic context. We could render multiple interpretations side-by-side, and help users select between them by refining the context. We could make it easy for users or bots to highlight the variables that need attention before a decision can be made, modeling an implicit query. 
-
-I believe such a context would support rapid application development, allowing refinement and extension of the application concurrent with its use. Vagueness and ambiguity can be utilized as features, enabling a applications to adapt to different or changing 'environments' insofar as information about the greater environment constrains those unknown variables. With staged computing (meta-programming), we could still optimize specific instances of the context as a concrete application.
-
-# Bot Scripts? Rejected.
-
-I had earlier imagined use of bot-scripts: one-off transactions with the same *type* as a bot transaction (type `forall v . Env v -> TX v e a`). The transaction would retry in case of concurrency conflict (unless canceled by a user), but otherwise would succeed or fail. This is easy to implement. However, this is insufficient for most use-cases because a single transaction cannot wait for effects or model interaction with the user, and it's even unclear how to bind such effects with our application models. 
-
-Command shells over a blackboard system are a simple and superior mechanism to model scripting. We can 'script' macro-updates to our blackboard context. And, via projectional editors, we can render GUI widgets or application front-ends if doing so is appropriate.
 
