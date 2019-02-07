@@ -7,17 +7,15 @@ Awelon is a programming language and environment designed to empower individuals
 
 Major design elements:
 
-* A scalable concrete environment, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This filesystem-like structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, atomic updates, and prefix-aligned sharing. Further, we can amortize physical storage and network costs within a community via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network).
+* A scalable concrete codebase, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This filesystem-like structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, atomic updates, and prefix-aligned sharing. Further, we can amortize physical storage and network costs within a community via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network).
 
 * A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated under [rewriting](https://en.wikipedia.org/wiki/Rewriting) semantics to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering intermediate and final terms. Static analysis is possible but not required by the language.
 
-* User interfaces leverage [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). Users can graphically manipulate code or data through tables, graphs, forms, flow charts, maps, and sheet music. The editor should be extensible with user-defined widgets. Computed terms can use the same view widgets as source, and live data should result in live displays. Because all user actions are modeled as edits, we can uniformly support undo and transactional macro-edits. 
+* Automation is achieved by defining [bots](https://en.wikipedia.org/wiki/Software_agent) in the dictionary. Bots operate on a transactional memory environment, which may reflect the codebase. Concretely, bots are modeled as transactions that repeat indefinitely, implicitly waiting when unproductive. Effects are asynchronous through manipulation of system variables, e.g. adding a task to a system queue or some data to a network output buffer. This design is fail-safe, resilient, idempotent, securable, extensible, and safe to modify at runtime - which is convenient for live coding, runtime upgrade, and robust administrative process control.
 
-* Automation is achieved by defining [bots](https://en.wikipedia.org/wiki/Software_agent). Bots can access the network and manipulate the Awelon environment. Concretely, bots are modeled as transactions that repeat indefinitely, implicitly waiting when unproductive, operating on system variables for auxiliary state and effects. This design is fail-safe, resilient, idempotent, securable, extensible, and safe to modify at runtime - which further supports live coding, runtime upgrade, and robust process control.
+* User interfaces leverage [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) over the transactional memory environment and codebase. Through projections, users can manipulate code and state graphically through tables, graphs, forms, and widgets. Some projections may be application specific, where pushing a button adds a task to a queue. Where projections share variables, edits to one projection should reactively influence the others. Users can also transactionally edit multiple projections before commiting, which simplifies extensibility and input validation. Importantly, we can leverage the rewriting semantics of our language to provide a consistent user-interface for code and data.
 
-Applications are modeled as users and bots operating in the shared environment. Users view and manipulate the environment through suitable projections. We can extend our projectional editor with widgets specific to an application's data model, enabling ad-hoc front-end GUIs. User requests or tasks are written into the environment where a bot would see them. Bots would operate on structured data. Frequently, we'll want to model the shared context as a first-class value.
-
-However, we may also model conventional web applications via bots interacting with the network. We might eventually bootstrap our projectional editors as web applications. And even without bot support, we can model many useful applications - REPLs, spreadsheets, forums, calculuators, image processing, simulators, document editors. 
+The Awelon language is a just one aspect of the Awelon system. Its lightweight syntax and local rewrite semantics are essential in context of Awelon's vision and design goals. In contrast, performance and static type safety were secondary concerns, although still valuable (and addressed below).
 
 ## Language Basics
 
@@ -88,16 +86,15 @@ Some potential annotations:
 * `(jit)` - compile a function for multiple future uses
 * `(memo)` - memoize a computation for incremental computing
 * `(nat)` - assert argument should be a natural number
-* `(box)` - specify runtime representation is a reference
 * `(type)` - describe type of stack at given location
 * `(seal)` - wrap types for safety and modularity
 * `(quota)` - impose limits on argument evaluation effort
 
-Awelon does not limit annotations much beyond the need for identity semantics.
+Awelon does not limit annotations much beyond the need for identity semantics. 
 
 ## Accelerators
 
-Accelerators are built-in functions, accessed via annotation of a reference implementation. Use of accelerators enables Awelon compilers or interpreters to extend the set of "performance primitives" available to Awelon programmers. For example, Awelon systems should accelerate natural numbers. We might use `(nat)` to indicate that a value should use an optimized representation for natural numbers under the hood. The function to add two natural numbers could be annotated via `[reference impl] (accel-nat-add)`, which we subsequently inline. This tells our interpreter or compiler to replace the reference implementation by the specified built-in operator.
+Accelerators are built-in functions, accessed via annotation of a reference implementation. Use of accelerators enables Awelon compilers or interpreters to extend the set of "performance primitives" available to Awelon programmers. For example, Awelon systems should accelerate natural numbers. We might use `(nat)` to indicate that a value should use an optimized representation for natural numbers under the hood. A function to add two natural numbers could be annotated via `[reference impl] (accel-nat-add)`. This tells our interpreter or compiler to replace the reference implementation by the specified built-in operator.
 
 We aren't limited to conventional data types. Carefully designed accelerators can leverage cloud computing or GPGPU resources, making Awelon usable for problem domains like machine learning, and graphics processing. See later section on *High Performance Computing* for an expansion on this.
 
@@ -211,9 +208,9 @@ Arity annotations can be used to help control rewriting and partial evaluation. 
 
 Arity annotations are also useful for modeling codata. For example, `[[A](a2)F]` has the observable behavior and type of `[[A]F]`, but the former defers computation until the result is required.
 
-### Garbage Collection
+## Garbage Collection
 
-Awelon has explicit copy and drop, so garbage collection is not a strong requirement. However, copy is not uncommon, so we'll probably want to avoid deep-copies. Thus, evaluation will likely involve reference counting or tracing garbage collection. 
+Awelon has explicit copy and drop, so garbage collection is not a strong requirement. Theoretically, we could deep-copy and deep-drop data. However, copy is a common operation, so for performance it might be wiser to shallow-copy, leveraging either reference counting or tracing garbage collection. Reference counting GC should work very well because it's impossible in Awelon to construct a cyclic data dependency. 
 
 ## Memoization
 
@@ -354,47 +351,19 @@ In Awelon, we can model the operational monad by defining `yield` as our only al
 
 Normally, `yield` will be encapsulated within the definition of basic operations like `[Var] [Val] write`. Thus, in normal code, only `return` is explicitly visible, and would usually appear only as the final step of a command sequence. The continuation when yielding is captured into a reverse-ordered list. This intermediate representation simplifies deep procedural abstractions which easily result in patterns like `yield [X] cseq [Y] cseq [Z] cseq`. By processing these continuations in reverse order, we can construct the performance and projection friendly `[X [Y [Z] cseq] cseq]`.
 
+
+
 The biggest remaining challenge for monadic programming in Awelon is static type safety. Without fancy dependent types, or at least generalized algebraic data types, it's difficult to validate safety of request-response patterns where a response type should upon the request (e.g. where type of a variable read depends on the variable). Eventually, hopefully, Awelon systems will support sufficiently advanced types. But in the interim, we'll either accept risk of runtime type errors or model operations such that we have simple homogeneous types.
-
-## High Performance Computing
-
-Effective support for High Performance Computing (HPC) is essential for many problem domains: machine learning, graphics processing, physics simulations, and so on. Minimally, we should support both task-parallel cloud computing and data-parallel GPGPU computing. 
-
-This section describes how we might support HPC in Awelon.
-
-### Kahn Process Networks
-
-[Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) are model for deterministic, distributed computation. KPNs are excellent for event stream processing, task parallelism, and cloud computing. KPNs are monotonic - we can add an input without invalidating prior outputs. Because KPN behavior is independent of the process scheduler, accelerators can use opportunistic scheduling and buffering based on physical data races. KPNs offer a tremendous boost in expressiveness compared to `(par)` annotations. 
-
-I propose we model KPNs monadically. The monad can abstract process behavior and encapsulate state, and we can focus *Acceleration* on just a few monadic operators. A preliminary monadic API sketch:
-
-        read : Port a -> KPN a
-        write : Port a -> a -> KPN ()
-        wire : Port a -> Port b -> (a -> b) -> KPN ()
-        fork : ProcName -> KPN () -> KPN ()
-        type Port a = Outer PortName | Inner (ProcName * PortName)
-
-This API uses second-class ports with external wiring to control connectivity. A process is only able to reference its external ports and those of its immediate `fork` children. We could easily extend this API with bounded buffers and temporal semantics to simplify memory control and reactive behavior. I'm hand-waving over type safety here - initial accelerators could use dynamic types if needed.
-
-Acceleration of a `eval-kpn` function might then be implemented by instantiating an interpreter-intrinsic KPN "object" with a distinct method for each operator. This object may use queues and threads under the hood, or even distributed nodes if the scale is sufficient, so long as the observed results match the reference implementation. We can also leverage the monotonicity of KPNs to evaluate them incrementally, awaiting first output on a given port.
-
-*Aside:* KPNs do not admit network disruption. But they're pure, so we can recompute if needed, and perhaps maintain checkpoints for a long-running computation.
-
-### Accelerators for Data Parallelism
-
-A simple approach to data parallelism is to push structured binary data and operations to a specialized remote processor. When we're done computing, we can fetch the binary result. In Awelon, we can model this communication as a monadic API. Insofar as the remote computation is deterministic and confined, we can *Accelerate* evaluation, perhaps leveraging an available GPGPU or a CPU with SIMD extensions.
-
-The main difficulty is developing a suitable model of the remote processor (the set of operations, data types, stacks or registers or channels, etc.). This is essentially a language design problem. We may seek inspiration from linear algebra, collections-oriented languages like APL and J, or perhaps Haskell's [accelerate](http://hackage.haskell.org/package/accelerate) or [lambda cube](http://lambdacube3d.com/) packages. Certainly, we're more likely to pay for those communication overheads if small operations correspond to expensive computations.
-
-Intriguingly, we could extend this idea to communicating with *multiple* processors, and orchestrating deterministic communications between them. This would make it possible to partition a large or streaming data computation across multiple GPGPUs without transitioning large volumes of data through the Awelon processor.
 
 ## Arrays and In-Place Mutation
 
-Awelon accelerators could represent lists as arrays. For unique arrays - where we have only one reference - we could feasibly accelerate indexing operators to mutate the array in place. This idea can extend to tuples and records, too. It is feasible to statically track uniqueness and typefully enforce these nice performance properties. It's also feasible to just use reference-counted arrays and dynamically optimize if we know we have a single reference.
+In Awelon, arrays can be supported as an accelerated list representation. We could have accelerated functions to access or edit the array at some offset. Naively, editing the array at some offset involves copying the array with the edit in place. However, if an array has only one memory reference, we could save ourselves some trouble and instead mutate in-place.
 
-Alternatively, we could adapt and accelerate Haskell's [ST monad](http://hackage.haskell.org/package/base-4.12.0.0/docs/Control-Monad-ST.html), accelerating a `run-st` handler over a small set of monadic operators. ST has an advantage of being explicit, but it's also unfriendly to parallelism or incremental input. 
+This is related to the concept of linear type systems and uniqueness types. However, this could be applied even in a dynamic system, implicitly performing copy-on-write for shared arrays. With a few annotations, we could express our assumptions and stabilize performance.
 
-I favor uniqueness types over ST, but the latter might be an easier start. Either way we approach it, effective support for arrays and in-place mutation would be convenient for performance of many algorithms like union-find, hash-based duplicate detection, or optimizing initial construction of a search tree.
+Support for in-place mutation of arrays would be valuable for a variety of data structures (like hashtables) and algorithms (like union-find), and could also enhance initial construction performance for a trie or rope where we use arrays of children. We also benefit from in-place mutation of tuples or records, albeit to a lesser degree.
+
+*Aside:* Accelerators could theoretically use a [persistent array](https://en.wikipedia.org/wiki/Persistent_array) implementation. But I believe we should keep arrays simple. Developers should explicitly model a persistent data structure when they want one, to better interact with stowage, memoization, parallelism, and laziness.
 
 ## Labeled Data and Records
 
@@ -429,6 +398,38 @@ Awelon supports polymorphism. We can implement lists once for many data types, o
 
 This could feasibly be mitigated by *Multi-Stage Programming*: we could develop a stage that propagates type information and other static metadata. This would allow `add` to select the appropriate function based on context. Projectional editors could further help, making it more convenient to work with `add<T>` functions where `T` represents our static metadata.
 
+## High Performance Computing
+
+High Performance Computing (HPC) is essential for many problem domains: machine learning, graphics processing, scientific computing, and so on. This section describes how I intend to approach HPC in Awelon.
+
+### Kahn Process Networks
+
+[Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) model deterministic, distributed computation. KPNs are excellent for event stream processing, task parallelism, and cloud computing. KPNs are monotonic and incremental, allowing us to process intermediate outputs and provide further inputs without waiting for evaluation to complete. Critically for *Acceleration*, observable KPN behavior is independent of a process scheduler. Thus, our reference evaluator can implement a naive synchronous schedule, while the accelerated version can utilize buffers and arrival-order non-determinism to maximize parallel computation. KPNs offer a tremendous boost in expressiveness relative to `(par)` annotations.
+
+I propose we model KPNs monadically. A monadic API sketch:
+
+        read : Port a -> KPN a
+        write : Port a -> a -> KPN ()
+        wire : Port a -> Port b -> (a -> b) -> KPN ()
+        fork : ProcName -> KPN () -> KPN ()
+        type Port a = Outer PortName | Inner (ProcName * PortName)
+
+This API uses second-class port and process names, perhaps numbers or strings. The second-class nature of these identifiers is essential, allowing us to make strong guarantees about connectivity and wiring. Read and write ports with the same name are distinct: a process cannot read its own writes (unless the loop is externally wired). A process may interact only with its external ports or those of its immediate children. Reads will wait for input. After we wire a read port to a write port, they are no longer accessible for explicit reads or writes. We might extend this API with a few extra features like bounded buffers and port duplication.
+
+Unfortunately, this API is difficult to statically type check. There is no strong relationship between port names and message types. We would need some very fancy types to analyze a KPN for correctness. Fortunately, we can *Accelerate* this API even with dynamic typing.
+
+The reference implementation could use simple list-based queues and evaluate forked processes and wiring one small step at a time. The accelerated version, in contrast, may feature efficient queues with in-place mutation, a distinct thread per process, and wiring that bypasses intermediate processes. With a suitable runtime configuration, distributed computation is also feasible.
+
+### Accelerated Vector Processing
+
+High performance vector and matrix processing is essential for a variety of problem domains, such as machine learning, image recognition, graphics processing, physics simulations, and scientific computing. Today, we have hardware acceleration for this via GPGPU or CPU SIMD extensions. 
+
+To utilize this hardware from Awelon, I propose we model monadic communications with an abstract processor specialized for structured binaries. For example, we might push two binaries to the processor, treat them as a matrices of floating point numbers, perform a matrix-multiply, then extract a binary result back into the Awelon layer. (Limiting IO to binaries greatly simplifies the API.) Of course, we might perform more sophisticated computations in practice. We can develop a suitable processor model with guidance from Khronos Group's OpenCL or Haskell's 'accelerate' package.
+
+Critically, we can push code to our processor *before* we invoke it. This introduces an opportunity for our accelerator to compile the abstract code to something hardware specific. With partial evaluation, we can also cache the abstract processor state and thus avoid recompiling. Thus, acceleration of an abstract processor enables us effectively embed assembly or GPGPU code - modulo constraints of confinement and determinism.
+
+*Aside:* We can extend this to a network of vector processors, with binary streaming between them. We'd need to preserve observable determinism and control memory, perhaps taking inspiration from bounded-buffer KPNs. We might also benefit from a distinct abstract processor specialized for bit-banging on a CPU.
+
 ## Bots, Effects, and Applications
 
 An Awelon bot process is a deterministic transaction, repeated indefinitely.
@@ -457,23 +458,25 @@ The `fork` operation specifies a one-off operation to attempt after we commit. T
 
 It is feasible to extend this API with invariant assertions, publish-subscribe, cached views, and other features. However, it's probably best to get the current API working and usable before we extend it.
 
+### Installing Bots
+
+Bots will be "installed" by simply defining `app-*` words in the dictionary. This ensures that the set of installed bots is easily discovered and managed. We can modify bot definitions at runtime, which also gives us live programming, continuous deployment, and system administration in terms of manipulating the dictionary. 
+
+For reasons of simplicity, idempotence, and extensibility, these `app-*` bots all receive the same `Env v` environment value. We can simulate bot private state by arranging for bots to use different volumes of a filesystem or registry. For distrusted bots behaviors, we should confine them explicitly as part of the installer's definition, perhaps writing `:app-pkg [pkg-bot] [local-pkg-sandbox-cfg] sandbox`. By leveraging `fork`, it is feasible install entire packages of bot behaviors.
+
+*Aside:* Although live programming is an important aspect of Awelon's vision, special cases exist where static separate compilation is more appropriate. For those cases, we can develop bots that don't reflect on the dictionary. Such bots can be separately compiled.
+
 ### The Extended Environment
 
 Bots operate upon a collection of environment variables, `forall v . Env v`. 
 
 Effects, such as network access, are achieved through manipulation of these variables. For example, the environment may include a system task queue. After a transaction writes to this queue and commits, the system could process the requests. Acknowledgements and responses can be written back into the environment (the request might specify where) for subsequent access by the system. Besides system task queues and network access, an environment could support reflective access to the dictionary, filesystem, registries for publishing services, and more. (*Aside:* We might represent the filesystem as a constrained volume of a dictionary.)
 
-This extended environment should be *ephemeral*. That is, variable data is lost if we logically or physically reset the system. This is convenient for performance insofar as it allows variables to contain lazy or parallel computations that would be difficult to serialize. It also simplifies administrative control, providing a convenient recovery from bad states that that weren't caught by transactions. However, some parts of the environment - dictionary, filesystem, etc. - may be backed by durable storage. For those cases, our environment should support explicit sync requests.
+This extended environment should be *ephemeral*. That is, variable data is lost when we logically or physically reset the system. This is convenient for performance insofar as it allows variables to contain lazy or parallel computations that would be difficult to serialize. It also simplifies administrative control, providing a convenient recovery from bad states that that weren't caught by transactions. However, some parts of the environment - dictionary, filesystem, etc. - may be backed by durable storage. For those cases, our environment should support explicit sync requests.
 
 The `forall v` constraint means bot definitions must not contain or directly observe variables. This enables us to easily test bots by evaluating them in a simulated environment, or confine a distrusted behavior to a restricted environment. For contexts like stowage, memoization, and distributed computing, I propose to serialize our opaque variable references using words like `[ref-1123-debugname-hmac]`. The ephemeral [HMAC](https://en.wikipedia.org/wiki/HMAC) suffix (unique per reset) can ensure cryptographic security guarantees even in context of reflection and code distribution. We can easily reserve `ref-*` words for this purpose, warning if they're discovered in the Awelon dictionary.
 
-### Installing Bots
-
-Bots will be "installed" by defining `app-*` words in the dictionary. This ensures that the set of installed bots is easily discovered and managed. We can modify bot definitions at runtime, which also gives us live programming, continuous deployment, and system administration in terms of manipulating the dictionary.
-
-For reasons of simplicity, idempotence, and extensibility, these `app-*` bots all receive the same `Env v` environment value. We can simulate bot private state by arranging for bots to use different volumes of a filesystem or registry. For distrusted bots behaviors, we should confine them explicitly as part of the installer's definition, perhaps writing `:app-pkg [pkg-bot] [local-pkg-sandbox-cfg] sandbox`.
-
-*Aside:* Although live programming is an important aspect of Awelon's vision, special cases exist where static separate compilation is more appropriate. For those cases, we can develop bots that don't reflect on the dictionary. Such bots can be separately compiled.
+*Aside:* For large scale Awelon systems, it's feasible to distribute variables and bots across several physical machines. We could migrate variables to carry data between machines. For open systems, however, it's wiser to just use the network interface, communicating via binary data instead of dictionary words.
 
 ### User Interfaces
 
