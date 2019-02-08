@@ -287,7 +287,7 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
 
 In this example, I build one view upon another, but we also have a comprehensible representation in without the view. For example, if our projectional editor lacks support for rationals, users would still see the `[-4 #6 rational]` representation. This is convenenient for iterative development of extensible views. Further, if carefully designed our data views be normal forms (evaluate to themselves) such that we can also render `-7` as an *output* from a computation. This may involve careful use of arity annotations.
 
-Besides numeric towers, projections could feasibly support lists and matrices, monadic programming, pattern matching, list comprehensions, and other features. Problem specific languages can frequently be modeled as data-structures that we evaluate statically. Embedded comments can also be represented, e.g. as a view of `"comment"(a2)d`.
+Besides numeric towers, projections could feasibly support lists and matrices, monadic programming, pattern matching, list comprehensions, and other features. Problem specific languages can frequently be modeled as data-structures that we evaluate statically. Embedded comments can also be represented, perhaps as a view of `"comment"(a2)d`. And projections can divide an oversized program into multiple lines.
 
 Besides textual views, projectional editors can support graphical editor-viewer widgets. For example, to edit a color or date-time, we might provide a color-picker or calendar widget. Intriguingly, we can support multiple widgets for a given volume of code, with an edit in one reactively affecting the others. Further, we can feasibly support *specialized* view or editor widgets for an application's data model - thus providing Awelon's version of a GUI application front end.
 
@@ -336,7 +336,7 @@ This projection flattens nesting, enabling direct expression of program logic. T
 
 Of course, this projection conveniently supports only one monad. I propose a variant of the *operational monad*, which is adaptable and extensible through the operation type, and supports local definition of effect handlers. See also [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov. With the operational monad, one monad is sufficient for all monadic programming use cases.
 
-In Awelon, we can model the operational monad by defining `yield` as our only alternative to `return`. Before we yield, we can place a request continuation on the data stack where our caller knows to find it. This provides an opportunity for intervention or interaction between computations. Modulo type safety, an implementation of this idea is quite simple:
+In Awelon, we can model the operational monad by defining `yield` as our only alternative to `return`. Before we yield, we can place a request continuation on the data stack where our caller knows to find it. This provides an opportunity for intervention or interaction between computations. 
 
         return = [none]
         yield = [[null] some]
@@ -351,9 +351,7 @@ In Awelon, we can model the operational monad by defining `yield` as our only al
 
 Normally, `yield` will be encapsulated within the definition of basic operations like `[Var] [Val] write`. Thus, in normal code, only `return` is explicitly visible, and would usually appear only as the final step of a command sequence. The continuation when yielding is captured into a reverse-ordered list. This intermediate representation simplifies deep procedural abstractions which easily result in patterns like `yield [X] cseq [Y] cseq [Z] cseq`. By processing these continuations in reverse order, we can construct the performance and projection friendly `[X [Y [Z] cseq] cseq]`.
 
-
-
-The biggest remaining challenge for monadic programming in Awelon is static type safety. Without fancy dependent types, or at least generalized algebraic data types, it's difficult to validate safety of request-response patterns where a response type should upon the request (e.g. where type of a variable read depends on the variable). Eventually, hopefully, Awelon systems will support sufficiently advanced types. But in the interim, we'll either accept risk of runtime type errors or model operations such that we have simple homogeneous types.
+*Caveat:* Type-safe interaction between the monadic computation and its `yield` handler is not yet solved. In Haskell, we would use generalized algebraic data types (GADTs), but I haven't discovered a convenient way to express and enforce such types in Awelon. Until this is solved, use of monadic APIs will introduce some risk of runtime errors. Nonetheless, I propose monadic APIs for *Bots, Effects, and Applications* and *High Performance Computing*.
 
 ## Arrays and In-Place Mutation
 
