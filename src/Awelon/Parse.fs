@@ -11,39 +11,53 @@ open Stowage
 // Program = (Block | Token)*
 // Block = '[' Program ']'
 // Token = Word | Annotation | Nat | Text
-// Word = [a-z][a-z0-9-]*
+// Word = WF ('-' WF)*
+// WF = [a-z]+(Nat)?
 // Annotation = '(' Word ')'
 // Nat = '0' | [1-9][0-9]*
 // Text = '"' (not '"')* '"'
 //
+// Words in Awelon are lower-case, with internal hyphens, and may have
+// natural numbers at the end of each word fragment. This is designed
+// to be relatively friendly for URLs, managing volumes of a dictionary,
+// and unambiguous in projections that might introduce some punctuation.
+// (But Awelon is sacrificing '-' for subtraction.)
+//
 // Tokens can be separated by spaces (SP) as needed to disambiguate.
-// Whitespaces effectively has identity semantics; it may be ignored.
+// Whitespace effectively has identity semantics; it may be ignored.
 // Formatting is not part of Awelon definitions, and is usually not
 // preserved within the saved dictionary. Instead, it's left to our
 // projectional editing environments to format and present code. 
 //
-// Texts do not use C0, DEL, or escape characters. We can simulate
-// escape characters by wrapping texts, e.g. `["multi/nline" lit]`.
-// Awelon dictionaries also permit binary large objects, which are
-// not parsed but have similar semantics.
+// Texts do not use C0, DEL, or escape characters. Developers can
+// work around this with projections, or use binary large objects
+// via the dictionary which are not parsed at all.
 //
-// TODO: This parser is a little inefficient. We could certainly
-// do better for performance. It isn't critical at the moment,
-// but I'd like to later develop a `FastParser` module.
+// TODO: This parser inefficient. Might be worth developing a more
+// optimal parser, perhaps using vectors instead of lists.
 module Parser =
 
-    /// A Word is a ByteString with regex `[a-z][a-z0-9-]*`. 
+    /// A Word is represented by a ByteString but should have some
+    /// internal structure according to regex: 
+    ///
+    ///    Word = F('-'F)* 
+    ///    F = [a-z]+N?
+    ///    N = '0' | [1-9][0-9]*
+    ///
+    /// That is, a word consists of hyphenated fragments. Each fragment
+    /// has some lower-case characters followed by an optional natural
+    /// number.
     type Word = ByteString
 
-    /// A positive Natural number is `[1-9][0-9]*`. 
-    /// Not processed into a number type by this module.
+    /// A Natural number is a token of form `'0' | [1-9][0-9]*`. 
+    /// This parser just keeps numbers in token form.
     type NatTok = ByteString
 
     /// Embedded Text in Awelon code.
     type Text = ByteString
 
     /// Tokens are just typed ByteString fragments. We'll skip the 
-    /// annotation parentheses, text quotes, or prefix characters. 
+    /// annotation parentheses or text quotes. 
     type TT =
         | Word=0    // word
         | Anno=1    // (anno)
@@ -63,119 +77,102 @@ module Parser =
         | Atom of Token         // simple action
         | Block of Program      // [Program]
 
-    // This representation is a little slow, I think. Maybe try a vectorized
-    // list for a separate FastParse module, later? But is not a huge concern
-    // for now.
+    let inline private isDigit c = (byte '9' >= c) && (c >= byte '0')
+    let inline private isLowerAlpha c = (byte 'z' >= c) && (c >= byte 'a')
+    let isWordChar c = (isLowerAlpha c) || (isDigit c) || ((byte '-') = c)
+    let inline private isTextChar c = (126uy >= c) && (c >= 32uy) && (c <> (byte '"'))
 
-    module private Tokenizer = 
-        type TC = (struct(Program list * Program))
-        let rec step (struct(u,r) : TC) : (Token * TC) option =
-            match r with
-            | (op::r') -> 
-                match op with
-                | Atom tok -> Some (tok, struct(u,r'))  // report token
-                | Block b -> step (struct((r'::u),b))   // step into block
-            | [] -> 
-                match u with
-                | (r'::u') -> step (struct(u',r'))      // step out of block
-                | [] -> None                            // done
+    /// Return count of bytes that parse as natural number. ('0' | [1-9][0-9]*).
+    let parseNatLen s = 
+        if (BS.isEmpty s) then 0 else
+        let c0 = BS.unsafeHead s
+        if ((byte '0') = c0) then 1 else
+        BS.length (BS.takeWhile isDigit s)
 
-    /// Extract sequence of Tokens from program, ignoring block structure.
-    /// In practice, this is mostly used for indexing of programs.  
-    let tokenize (p:Program) : seq<Token> =
-        Seq.unfold (Tokenizer.step) (struct([],p))
+    /// Validate an alleged natural number token.
+    let inline isValidNat (n:NatTok) : bool =
+        (not (BS.isEmpty n)) && ((parseNatLen n) = (BS.length n))
 
-    module private RewriteTokens =
-        type RW = Token -> Program
-        type U = Program -> Program
-        type L = Program // reverse-ordered
-        type R = Program
+    /// Return count of bytes that parse as a word fragment. ([a-z]+(Nat)?)
+    let parseWFLen s =
+        let struct(az,rem) = BS.span isLowerAlpha s
+        if BS.isEmpty az then 0 else
+        ((BS.length az) + (parseNatLen rem))
 
-        // Thoughts: F# uses a small stack, so I'm using CPS (via type U)
-        // to avoid the stack when processing recursive block structure.
-        let rec step (rw:RW) (u:U) (l:L) (r:R) : Program =
-            match l with
-            | (op::l') -> 
-                match op with
-                | (Atom tok) -> 
-                    step rw u l' (List.append (rw tok) r)
-                | (Block b) -> 
-                    let ub b' = step rw u l' ((Block b') :: r)
-                    stepIni rw ub b
-            | [] -> r
-        and stepIni rw u p = step rw u (List.rev p) []
+    // return byte count for ('-'WF) if matched
+    let inline private parseWFExtLen s =
+        if (BS.isEmpty s) || ((byte '-') <> (BS.unsafeHead s)) then 0 else
+        let wfLen = parseWFLen (BS.unsafeTail s)
+        if (0 = wfLen) then 0 else (1 + wfLen)
 
-    /// Rewrite every token within a program. Each token may be independently
-    /// expanded or erased based on a given rewrite rule. This has potential
-    /// utility for use cases such as:
-    ///
-    ///  * renaming a word or set of words
-    ///  * inlining some word definitions
-    ///  * erasing undesirable annotations
-    /// 
-    let tokenRewrite (rw:(Token -> Program)) (p:Program) : Program =
-        RewriteTokens.stepIni rw id p 
+    // return byte count for `('-'WF)*` with accumulator
+    let rec private parseWordLenExtLoop acc s =
+        let xwfLen = parseWFExtLen s
+        if (0 = xwfLen) then acc else
+        parseWordLenExtLoop (xwfLen + acc) (BS.drop xwfLen s)
 
-    /// Awelon uses characters in ASCII minus C0 and DEL. Most
-    /// of these are permitted only within embedded texts. For
-    /// embedding Unicode, you might try binary resoures.
-    let inline isAwelonChar c = (126uy >= c) && (c >= 32uy)
-    let inline isWordStart c = (byte 'z' >= c) && (c >= byte 'a')
-    let inline isNumChar c = (byte '9' >= c) && (c >= byte '0')
-    let inline isWordChar c = isWordStart c || isNumChar c || (byte '-' = c)
+    /// Return count of bytes that parse as a word (WF ('-'WF)*).
+    let parseWordLen s =
+        let wfLen = parseWFLen s
+        if (0 = wfLen) then 0 else
+        parseWordLenExtLoop wfLen (BS.drop wfLen s)
 
-    let isValidWord w =
-        if (BS.isEmpty w) then false else
-        isWordStart (BS.unsafeHead w) 
-            && BS.forall isWordChar (BS.unsafeTail w)
+    /// Validate an alleged word token.
+    let inline isValidWord (w:Word) : bool =
+        (not (BS.isEmpty w)) && ((parseWordLen w) = (BS.length w))
 
-    let inline private startsWith pred s = 
-        (not (BS.isEmpty s)) && (pred (BS.unsafeHead s))
+    /// Return number of valid embedded-text bytes within a string.
+    /// (Texts allow ASCII modulo C0, DEL, and double quotes (34).)
+    let parseTextLen s = BS.length (BS.takeWhile isTextChar s)
 
-    let inline private isSepChar c = 
-        (byte ' ' = c) || (byte '[' = c) || (byte ']' = c)
-    let inline private hasSep r = (BS.isEmpty r) || (isSepChar (BS.unsafeHead r)) 
+    /// Validate an alleged text token. Empty is permitted.
+    let inline isValidText s = ((parseTextLen s) = (BS.length s))
 
-    let tryParseWord (r:ByteString) : (struct(Word * ByteString)) option =
-        let noWordStart = BS.isEmpty r 
-                       || not (isWordStart (BS.unsafeHead r))
-        if noWordStart then None else Some (BS.span isWordChar r)
-
-    let inline private hasWordSep r = 
-        (BS.isEmpty r) || (isSepChar (BS.unsafeHead r))
-
-    /// Test match for regex `0 | [1-9][0-9]*`.
-    let isValidNatTok s =
-        if BS.isEmpty s then false 
-        else if ((byte '0') = (BS.unsafeHead s)) then (1 = BS.length s) 
-        else BS.forall isNumChar s
-
-    // Accept '0' | [1-9][0-9]* if followed by a word separator
-    let tryParseNatTok (r:ByteString) : (struct(ByteString * ByteString)) option =
-        let struct(n,r') = BS.span isNumChar r
-        let ok = (not (BS.isEmpty n)) // empty token not permitted 
-              && ((1 = BS.length n) || (byte '0' <> (BS.unsafeHead n))) // only 0 starts with 0
-              && (hasWordSep r')
-        if not ok then None else
-        Some (struct(n,r'))
-
-    let inline isTextChar c = (c <> 34uy) && (isAwelonChar c)
-    let isValidText s = BS.forall isTextChar s
-
+    /// Validate an arbitrary token. 
     let isValidToken (struct(tt,s) : Token) : bool =
         match tt with
         | TT.Word | TT.Anno -> isValidWord s
         | TT.Text -> isValidText s
-        | TT.Nat -> isValidNatTok s
-        | _ -> false
+        | TT.Nat -> isValidNat s
+        | _ -> invalidArg "tt" "unrecognized token type"
 
-    let isValidProgram (expr:Program) : bool =
-        Seq.forall isValidToken (tokenize expr)
+    let inline private startsWith c s =
+        (not (BS.isEmpty s)) && (c = (BS.unsafeHead s))
+    let inline private splitAt ix s = struct(BS.take ix s, BS.drop ix s)
+    let inline private splitFn fn s = splitAt (fn s) s
+    let inline private hasWordSep s = (BS.isEmpty s) || (not (isWordChar (BS.unsafeHead s)))
 
-    /// On Parse Error, we'll return a parser stack (a list
-    /// of reverse-ordered programs, representing a partial
-    /// parse) and the remaining input. Otherwise, we'll 
-    /// return a properly structured program.
+    /// Attempt to parse a token from start of bytestring input.
+    /// We only lookahead one byte at most to determine token type.
+    /// We will reject words and numbers that are directly adjacent. 
+    let tryParseToken (s:ByteString) : (struct(Token * ByteString)) option =
+        if (BS.isEmpty s) then None else
+        let c0 = BS.unsafeHead s
+        if isLowerAlpha c0 then
+            let struct(w,rem) = splitFn parseWordLen s
+            let ok = hasWordSep rem
+            if not ok then None else
+            Some (struct(tokWord w, rem))
+        else if isDigit c0 then
+            let struct(n,rem) = splitFn parseNatLen s
+            let ok = hasWordSep rem
+            if not ok then None else
+            Some (struct(tokNat n, rem))
+        else if (c0 = (byte '"')) then
+            let struct(t,xrem) = splitFn parseTextLen (BS.unsafeTail s)
+            let ok = startsWith (byte '"') xrem 
+            if not ok then None else
+            Some (struct(tokText t, BS.unsafeTail xrem))
+        else if (c0 = (byte '(')) then
+            let struct(w,xrem) = splitFn parseWordLen (BS.unsafeTail s)
+            let ok = (startsWith (byte ')') xrem) && (not (BS.isEmpty w))
+            if not ok then None else
+            Some (struct(tokAnno w, BS.unsafeTail xrem))
+        else None
+    
+    /// On a successful parse, we'll return the program. If there is
+    /// an error, however, we'll return a parse context as a stack of
+    /// open subprograms in reverse order, and remaining input.
     type ParseResult =
         | ParseOK of Program
         | ParseFail of ((Action list) list * ByteString)
@@ -185,55 +182,31 @@ module Parser =
         if ok then ParseOK (List.rev b) else
         ParseFail (b::p,s)
 
-    let inline private matchChar c s = 
-        startsWith ((=) (byte c)) s
-
-    // Parse a single token. (Does not parse namespaces or blocks.)
-    let tryParseToken (s:ByteString) : (struct(Token * ByteString)) option =
-        if BS.isEmpty s then None else
-        let c0 = BS.unsafeHead s
-        if isWordStart c0 then
-            let struct(w,s') = BS.span isWordChar s
-            Some (struct(tokWord w, s'))
-        else if isNumChar c0 then
-            match tryParseNatTok s with
-            | Some (struct(n,s')) -> Some (struct(tokNat n, s'))
-            | _ -> None
-        else if(byte '"' = c0) then // embedded texts
-            let struct(txt,s') = BS.span isTextChar (BS.unsafeTail s)
-            if (matchChar '"' s') 
-                then Some (struct(tokText txt, BS.unsafeTail s'))
-                else None
-        else if(byte '(' = c0) then // annotation
-            match tryParseWord (BS.unsafeTail s) with
-            | Some (struct(w,s')) when matchChar ')' s' ->
-                Some (struct(tokAnno w, BS.unsafeTail s'))
-            | _ -> None
-        else None
-
-    let rec private parse' p b s : ParseResult =
+    let rec private parseLoop p b s : ParseResult =
         if BS.isEmpty s then finiParse p b s else
         let c0 = BS.unsafeHead s
-        if (byte ' ' = c0) then
-            parse' p b (BS.unsafeTail s)
-        else if(byte '[' = c0) then
-            parse' (b::p) [] (BS.unsafeTail s)
-        else if(byte ']' = c0) then
+        if (byte ' ' = c0) then // ignore whitespace
+            parseLoop p b (BS.unsafeTail s)
+        else if(byte '[' = c0) then // push block context
+            parseLoop (b::p) [] (BS.unsafeTail s)
+        else if(byte ']' = c0) then // pop block context
             match p with
-            | (b'::p') -> 
-                let op = Block (List.rev b)
-                parse' p' (op::b') (BS.unsafeTail s)
+            | (bp::p') -> 
+                let b' = ((Block (List.rev b))::bp)
+                parseLoop p' b' (BS.unsafeTail s)
             | [] -> finiParse p b s // imbalance of ']'
-        else 
+        else // parse an atomic token
             match tryParseToken s with
-            | Some (struct(tok,s')) -> parse' p ((Atom tok)::b) s'
+            | Some (struct(tok,s')) -> parseLoop p ((Atom tok)::b) s'
             | None -> finiParse p b s
 
     /// Parse from a ByteString.
     ///
-    /// I assume Awelon programs are relatively small, up to a few dozen
-    /// kilobytes due to editable views. So this isn't heavily optimized.
-    let parse (s:ByteString) : ParseResult = parse' [] [] s
+    /// This parser isn't spectacularly efficient, mostly due to the
+    /// intermediate allocation and destruction of F# lists. But it
+    /// requires no backtracking, and parsing is unlikely to become 
+    /// the performance bottleneck in an Awelon system.
+    let parse (s:ByteString) : ParseResult = parseLoop [] [] s
 
     /// Write a single token. The token bytestring excludes the
     /// surrounding punctuation, so we'll add that back in. This
@@ -254,7 +227,7 @@ module Parser =
             ByteStream.writeByte (byte '"') dst
         | _ -> invalidArg "tt" "unrecognized token type"
 
-    let inline wsp p dst =
+    let inline private wsp p dst =
         if not (List.isEmpty p)
             then ByteStream.writeByte (byte ' ') dst
 
@@ -279,14 +252,69 @@ module Parser =
  
     /// Write a program to a byte stream.
     ///
-    /// Note: This writer normalizes spaces, injecting SP between
-    /// adjacent actions even if unnecessary. `1(nat)[4]b` becomes 
-    /// `1 (nat) [4] b`. This should have a negligible impact on
-    /// performance, and won't affect aesthetics if we're using a
-    /// projectional editor anyway.
+    /// This writer blindly introduces spaces between elements of the
+    /// program. This can be considered a normalization of whitespace.
     let write' p dst = wloop [] p dst
 
     /// Write to byte string. (Trivially wraps write'.)
     let inline write (p:Program) : ByteString = 
         ByteStream.write (write' p)
+
+
+    module private Tokenizer = 
+        type TC = (struct(Program list * Program))
+        let rec step (struct(u,r) : TC) : (Token * TC) option =
+            match r with
+            | (op::r') -> 
+                match op with
+                | Atom tok -> Some (tok, struct(u,r'))  // report token
+                | Block b -> step (struct((r'::u),b))   // step into block
+            | [] -> 
+                match u with
+                | (r'::u') -> step (struct(u',r'))      // step out of block
+                | [] -> None                            // done
+
+    /// Extract sequence of Tokens from a parsed program, ignoring block
+    /// structure. In practice, this is only used for indexing programs,
+    /// and a few projections. 
+    let tokenize (p:Program) : seq<Token> =
+        Seq.unfold (Tokenizer.step) (struct([],p))
+
+    /// Validate a program. Block structure is valid via the F# Program
+    /// type, but this will validate the individual tokens.
+    let isValidProgram (expr:Program) : bool =
+        Seq.forall isValidToken (tokenize expr)
+
+    module private RewriteTokens =
+        type RW = Token -> Program
+        type U = Program -> Program
+        type L = Program // reverse-ordered
+        type R = Program
+
+        // Thoughts: F# uses a small stack, so I'm using CPS (via type U)
+        // to avoid the stack when processing recursive block structure.
+        let rec step (rw:RW) (u:U) (l:L) (r:R) : Program =
+            match l with
+            | (op::l') -> 
+                match op with
+                | (Atom tok) -> 
+                    step rw u l' (List.append (rw tok) r)
+                | (Block b) -> 
+                    let ub b' = step rw u l' ((Block b') :: r)
+                    stepIni rw ub b
+            | [] -> r
+        and stepIni rw u p = step rw u (List.rev p) []
+
+    /// Rewrite every token within a program. Each token may be independently
+    /// expanded or erased based on a given context-independent rewrite rule.
+    /// This has limited potential utility for cases such as:
+    ///
+    ///  * renaming a word or set of words
+    ///  * inlining a word's definitions
+    ///  * erasing undesirable annotations
+    /// 
+    let tokenRewrite (rw:(Token -> Program)) (p:Program) : Program =
+        RewriteTokens.stepIni rw id p 
+
+
 

@@ -176,7 +176,7 @@ module LocalVar =
     /// The input is code containing `(pop-x)` tokens, which serve as
     /// placeholders for assigning a variable (not valid annotations).
     /// The output replaces `(pop-x) EXPR` by `(var-x) T(x,EXPR)` with
-    /// the following definition of T:
+    /// the following rewrite algorithm:
     ///
     ///     T(x,E) | E does not contain x      => d E
     ///     T(x,x)                             => 
@@ -186,31 +186,34 @@ module LocalVar =
     ///        | only G contains x             => [F] a T(x,G)
     ///        | F and G contain x             => c [T(x,F)] a T(x,G)
     ///
-    /// Effectively, this supports local variables within our projection,
-    /// but 'compiles' them leaving behind `(var-x)` annotations as naming
-    /// hints for later decompilation.
+    /// Effectively, this supports local let and lambda variables within
+    /// our textual projections. The `(var-x)` annotations provide hints
+    /// to reconstruct the original projection via viewLocalVars.
+    ///
+    /// Todo: I'd like better support for incremental programming, where
+    /// we might include some undefined 'holes' in our program. Holes must
+    /// capture all variables. In that context, linear variables, ability
+    /// to explicitly end a variable scope, could also be useful.
     let hideLocalVars (p:Program) : Program = Impl.pullVars id [] p
 
-
     /// Our LocalVars projection is computed by rewriting `(var-x)` 
-    /// annotations to `(pop-x) x` then propagating the `x` through
-    /// our computation via Awelon's primitive `a b c d` operators.
-    /// If `x` is not a valid variable name, we reject the rewrite.
+    /// annotations to `(pop-x) x` then propagating the `x` as a 
+    /// value across Awelon's primitive `a b c d` operations. All
+    /// `(var-x)` annotations are rewritten, excepting those that
+    /// introduce some ambiguity.
     ///
-    /// A higher projection can render `(pop-x)` tokens as `\x` or
+    /// A higher projection may render `(pop-x)` tokens as `\x` or
     /// another concise and convenient syntax. This would support
     /// lightweight lets and lambdas:
     ///
     ///     [X] \x EXPR         let x = [X] in EXPR         
-    ///     [\x EXPR]           (lambda x . EXPR)
+    ///     [\x EXPR]           (fun x -> EXPR)
     ///
-    /// Granted, this doesn't provide an infix notation, and it is
-    /// not optimal for conditional behaviors. But use of locals is
-    /// more convenient than explicit data shuffling in many cases.
+    /// We can leverage locals where stack data shuffling is verbose
+    /// or might interfere with further projections.
     ///
-    /// Note: Developers should be careful about shadowing words used
-    /// implicitly in higher projections. 
+    /// Note: Developers should be careful about accidental shadowing
+    /// of words that are hidden by higher projections, such as `cseq`.
     let viewLocalVars (p:Program) : Program = Impl.pushVars id [] p
-
 
 

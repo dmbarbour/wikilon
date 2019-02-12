@@ -3,12 +3,14 @@
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Cache.fs" />
     <Compile Include="Parse.fs" />
+    <Compile Include="LocalVar.fs" />
+    <!-- <Compile Include="SimpleNS.fs" /> -->
+    <Compile Include="ParseExt.fs" />
     <Compile Include="Dictionary.fs" />
     <Compile Include="DictIndex.fs" />
+    <Compile Include="DictRename.fs" />
     <Compile Include="Interpret.fs" />
-    <Compile Include="LocalVar.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />

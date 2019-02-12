@@ -418,6 +418,11 @@ module Dict =
     let toSeq (d:Dict) : seq<Symbol * Def> = 
         Seq.delay (fun () -> toSeqP (BS.empty) d)
 
+    /// Test whether a dictionary is empty. This version is more
+    /// precise but less efficient than `isEmpty` because it will
+    /// properly handle entries that have been logically deleted.
+    let inline isEmpty' (d:Dict) : bool = Seq.isEmpty (toSeq d)
+
     /// Partition the dictionary on a symbol, such that all symbols
     /// smaller are to the left and symbols equal or greater are to
     /// the right. Use with toSeq for indexed browsing.
@@ -754,6 +759,11 @@ module Dict =
     // decisions. But it's within acceptable limits, I think. 
 
 type Dict = Dict.Dict
+
+// TODO: Develop an enumerator for Dict that respects numeric ordering,
+// i.e. such that a99 < a100. This requires special attention to digits.
+// Further, it should be possible to split the enumerator (if not the
+// dictionary itself), so we can browse a subset like a80-a119.
 
 // Thoughts: It might be useful to have an auto-compacting dictionary,
 // which includes the Stowage reference and compacts heuristically

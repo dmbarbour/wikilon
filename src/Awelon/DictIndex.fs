@@ -44,7 +44,7 @@ module DictRLU =
     ///
     /// This index has many applications: caching, reverse lookup of
     /// tag words, and renaming a word or prefix. The primary motive 
-    /// is to support caching.
+    /// is to support caching. 
     type RLU = Dict
 
     // Thoughts:
@@ -337,6 +337,12 @@ module DictRLU =
           rlu = RLU.updWordDef w def0 None (d.rlu)
         }
 
+    /// Update definition for a word.
+    let updSym (w:Word) (du:(Def option)) (dict:DictRLU) : DictRLU =
+        match du with
+        | Some def -> DictRLU.add w def dict
+        | None -> DictRLU.remove w dict
+
     /// Search dictionary for definition of a word.
     let inline tryFind w d = Dict.tryFind w (d.dict)
 
@@ -395,8 +401,8 @@ module DictRLU =
     let compactingFromDict (db:Stowage) (d:Dict) : DictRLU =
         compactingWithDict db d empty
 
-    // TODO: rename a word, set of words, or a word prefix
-    // thoughts: renaming a prefix might include sealer annotations
+type RLU = DictRLU.RLU
+type DictRLU = DictRLU.DictRLU
 
 // DictVX maintains an indexed version cache above DictRLU.
 module DictVX =
@@ -649,6 +655,8 @@ module DictVX =
     /// value for many use cases. But VX entries won't always be in
     /// memory.
 
+type VX = DictVX.VX
+type DictVX = DictVX.DictVX
 
 
 
