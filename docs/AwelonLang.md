@@ -212,7 +212,7 @@ Arity annotations can be used to help control rewriting and partial evaluation. 
 
 Arity annotations can also support call-by-need computation. For example, `[[A](a2)F]` has the observable behavior and type of `[[A]F]`, but the former defers computation until the result is required.
 
-*Note:* In practice, positional arguments do not scale nicely. A word that observes or produces more than three items on the stack should probably result in a complaint from a linter, encouraging explicit use of intermediate data structures (tuples, records, etc.). Package-local utility words excepted.
+*Note:* Positional arguments do not scale nicely. Users too easily lose track of argument order, and what's on the stack. A linter should probably call out functions that observe or produce more than three stack elements - not counting arguments polymorphic in stack type or package-local utility functions. If needed, developers can leverage tuples or records to group arguments.
 
 ## Garbage Collection
 
@@ -261,7 +261,9 @@ This would resist accidental access to data, and provide a better debugging expe
 
 We should combine this with a restriction that `foo-local-*` words should only be used from `foo-*`, so we can implement package-private utility functions to work with our package-private data types.
 
-### Static Parameters and Deferred Types
+*Aside:* These annotations operate on the top value of the stack. But we could have a variation that seals the entire stack type, modeling symbolic stack frames. Perhaps `(stack-seal-foo)` and `(stack-unseal-foo)`.
+
+### Static Computation and Deferred Typing
 
 In context of compile-time metaprogramming (input macros, templates, embedded DSLs, etc.) it can be convenient to defer static type analysis until after partial evaluation with some static program inputs. When a template statically computes a simply-typed program, we can eliminate the need for advanced 'dependent' types.
 
@@ -297,7 +299,7 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-In this example, I build one view upon another, but we also have a comprehensible representation in without the view. For example, if our projectional editor lacks support for rationals, users would still see the `[-4 #6 rational]` representation. This is convenenient for iterative development of extensible views. Further, if carefully designed our data views be normal forms (evaluate to themselves) such that we can also render `-7` as an *output* from a computation. This may involve careful use of arity annotations. Besides numeric towers, projections can support monadic programming, structured and labeled data, embedded comments via `"comment" (a2) d`, and other ad-hoc syntax extensions.
+In this example, I build one view upon another, but we also have a comprehensible representation in without the view. For example, if our projectional editor lacks support for rationals, users would still see the `[-4 #6 rational]` representation. This is convenenient for iterative development of extensible views. Further, if carefully designed our data views be normal forms (evaluate to themselves) such that we can also render `-7` as an *output* from a computation. This may involve careful use of arity annotations. Besides numeric towers, projections can support monadic programming, infix operators, lists and records, embedded comments via `"comment" (a2) d`, and other ad-hoc syntax extensions.
 
 Ideally, projections must be designed in coordination with definitions and *Accelerators* to ensure the same projections can be reused after rewriting evaluations. A consistent projection for input, output, and intermediate computations contributes to Awelon's vision for user interfaces. This supports user comprehension and control, enabling users to trace displayed data to its source or extend processing with further computations.
 
@@ -318,9 +320,33 @@ Although tacit programming styles are suitable for many problems, they make an u
             | only G contains x             == [F] a T(x,G)
             | F and G contain x             == c [T(x,F)] a T(x,G)
 
-This design is robust and independent of user definitions. However, it isn't optimal for conditional behaviors where we select one branch to apply. In those cases, we might produce unnecessary closures. So we may need to extend our rewrite rules for a few known special cases, or rely upon a compiler and optimizer to eliminate unnecessary closures, or simply hand-optimize those cases. We might also tweak the algorithm `T` to work nicely with partial programs, and partial extractions. Regardless, use of named locals are convenient for use cases involving sophisticated data shuffling or ad-hoc closures.
+This design is robust and independent of user definitions. It could be extended, perhaps with lightweight support for tuples, or `\[x]` for implicit inlining of `x`. 
 
-*Aside:* Named locals were, at least to me, the first convincing proof that sufficiently advanced *Projectional Editing* is a viable alternative to sophisticated built-in syntax.
+Unfortunately, this is not optimal for conditional behaviors: we might naively copy `x` and bind it into each branch of the conditional behavior, rather than leaving `x` on the stack where exactly one conditional path will access it. Copying, in turn, could hinder linear references and in-place mutations. This could be mitigated by specializing the projection for a common set of conditional behaviors, or by subsequent optimization. But for the short term, we can hand-optimize data plumbing for conditional behaviors.
+
+Despite those caveats, there are contexts where support for named locals will certainly prove more convenient than explicit data shuffling (swap, tuck, etc.) on the stack. Named locals were, at least to me, the first convincing proof that sufficiently advanced *Projectional Editing* is a viable alternative to sophisticated built-in syntax.
+
+### Infix and Prefix Operators
+
+Infix and prefix expression of operations can be convenient insofar as they reduce explicit nesting and contribute to concision, legibility, and familiarity. Thus, this may be worth pursuing in as an editable projection over Awelon code. 
+
+As an example of utility, a concise projection of lists using two operators:
+
+        , B == [B] cons
+        .   == [null] cons
+        [1,2,3.] == [1 [2 [3 [null] cons] cons] cons]
+
+For projections with singular operators, we basically have two options:
+
+        A + B == [A] [B] plus           (infix)
+          + B ==     [B] plus           (prefix)
+
+In context of Awelon, I've found it useful to favor prefix operators where feasible. This allows a more flexible dataflow from left to right, enabling *Named Local Variables* defined in `A` to bind over the operator.
+So we either have `[1 \x x] [x] plus`, which is probably an error, or `1 \x x [x] plus`, which is what we'd expect. The list projection above and *Monadic Programming* below both use prefix operators.
+
+The cost of operators is complicated *precedence* and *associativity*. If we have more than two or three operators, we'll need a table to track everything. And we'll want those parentheses for cases that violate precedence, like `(x + x) * y`, so we might be escaping annotations (via `#(anno)` or similar). 
+
+*Aside:* A weakness of Awelon is that we cannot *overload* words or operators. We can mitigate this with context-dependent projections (specialize syntax to the problem) or by targeting broadly useful intermediate data structures (free algebras, etc.).
 
 ### Namespaces
 
@@ -338,11 +364,14 @@ Instead, I propose to move namespaces to the editor layer: an editor can track a
 
 ## Monadic Programming
 
-The [monad pattern](https://en.wikipedia.org/wiki/Monad_%28functional_programming%29) is convenient for explicit modeling of effects, exceptions, backtracking, lightweight APIs or DSLs, and multi-stage programs. However, this pattern requires syntactic support, lest it devolve into an illegible mess of deeply nested functions. Consider a lightweight candidate projection supporting monadic command sequences:
+The [monad pattern](https://en.wikipedia.org/wiki/Monad_%28functional_programming%29) is convenient for explicit modeling of effects, exceptions, backtracking, lightweight APIs or DSLs, and multi-stage programs. However, this pattern requires syntactic support, lest it devolve into an illegible mess of deeply nested functions. Consider an operator `;` for monadic command sequences:
 
+        ; Cont == [Cont] cseq
         X; Y; Z == X [Y;Z] cseq == X [Y [Z] cseq] cseq
 
-This projection flattens nesting, enabling direct expression of program logic. The command sequence combinator `cseq` binds our continuation `[Y;Z]` to the result of computing `X`. To complete our monad, we must define a pure `return` such that `return [Y] cseq` locally rewrites to `Y`. (To fit Awelon's tacit stack programming style, we implicitly return the current data stack rather than an explicit value from the stack.) This projection conveniently layers with *Named Local Variables* such that `Z` can access variables defined at `X` or `Y`. Hence, we get conventional variable scoping with no extra effort.
+This projection flattens the nesting, enabling a more direct expression of program logic. The command sequence combinator `cseq` binds our continuation `[Y;Z]` to the result of computing `X`. 
+
+To complete our monad, we must define a pure `return` such that `return [Y] cseq` locally rewrites to `Y`. (To fit Awelon's tacit stack programming style, we implicitly return the current data stack rather than an explicit value from the stack.) This projection conveniently layers with *Named Local Variables* such that `Z` can access variables defined at `X` or `Y`. Hence, we get conventional local variable scoping with no extra effort.
 
 Of course, this projection conveniently supports only one monad. I propose a variant of the *operational monad*, which is adaptable and extensible through the operation type, and supports local definition of effect handlers. See also [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov. With the operational monad, one monad is sufficient for all monadic programming use cases.
 
@@ -365,11 +394,11 @@ Normally, `yield` will be encapsulated within the definition of an operator word
 
 ## Labeled Data
 
-Labeled data types, such as records and variants, are a staple of most programming languages. I've frequently contemplated built-in support for labeled data in Awelon. However, editable views and accelerators should be adequate to the task without requiring new primitives.
+Labeled data types, such as records and variants, are a staple of most programming languages. I've frequently contemplated built-in support for labeled data in Awelon. However, projections and accelerators should be adequate to the task without requiring new primitives.
 
-Naively, a record could be encoded as an association list, and a variant as a function that selects and applies a handler from an association list. However, the specific concrete choice of "association list" can be awkward for many use cases, as would other specific choices like "trie". 
+For records, I propose we build upon abstract record constructors of form `[[A] "a" put [B] "b" put ...](rec)`, as opposed to a concrete representation like a trie or list. Importantly, the behavior of `put` would determine the *observable properties* of records - commutative, and whether duplicate put is an error or idempotent. And the `(rec)` annotation would conveniently provide a hint for typing, projection, and acceleration. We can easily abstract records as normal functions. And a few simple projections like `:label == "label" rput` would cover symbolic data.
 
-I propose instead that Awelon favors record *constructors* - i.e. we use `[[A] "a" put [B] "b" put ...](record)`. The block represents a function writing to an opaque record representation (perhaps a trie). The `(record)` annotation then indicates that this function should have the type of a simple record constructor, and informs our runtime to use an accelerated record representation. This preserves commutative behavior and error semantics of `put` operations, and simplifies functional abstraction of records. Record constructors are also easy to recognize and manipulate through a projectional editor.
+For variants, we can follow the example of Church-encoded sum types, where `type (A+B) = ∀r.((A → r) → (B → r) → r)`. That is, we must provide a handler for each case. The sum value itself selects one handler and applies it. Naturally, for labeled variants, our handler should be a record, with one label per case or perhaps paired with a default option. In any case, the resulting variant structure might have form `[[Val] "a" case](case)`.
 
 ## Arrays and In-Place Mutation
 
@@ -383,11 +412,9 @@ Support for in-place mutation of arrays would be valuable for a variety of data 
 
 ## Data Representation
 
-Precise control over data representation can improve performance by reducing indirection and heap memory pressure. For example, we might represent a tuple `[[T1][T2][T3]]` as three values on our stack, or represent a known-to-be-small natural number as a 32-bit word.
+Precise control over data representation can improve performance by reducing indirection and heap memory pressure. For example, we might represent a tuple `[[T1][T2][T3]]` as three values on our stack, or represent a natural number that we know must be less than 4 billion as a 32-bit word.
 
-For Awelon, it is feasible to control data representations through annotations. However, it is not trivial to do so. We'd also need to track these data representations and adapt behavior of functions based on representations provided. Fortunately, most of the costs can be shifted to the compiler, while programmers mostly use annotations to declaratively assert or convert representations.
-
-Support for precise data representation is a long-term goal for Awelon systems. It is of relatively low priority. Short term, it may be sufficient to specialize arrays of numbers or binary structures. 
+Support for this feature in Awelon would greatly complicate the compiler and require static types (or boxing/unboxing at the boundaries). But it could be developed as a long-term project, leveraged in JIT loops, etc.. Short term, however, we're better off focusing representation control on *binaries* that we'll manipulate through accelerated functions (cf. *Accelerated Vector Processing*). This would offer significant benefits at a fraction of the effort, and would not require compilation.
 
 ## Multi-Stage Programming
 
@@ -408,7 +435,7 @@ This could feasibly be mitigated by *Multi-Stage Programming*: we could develop 
 
 ## High Performance Computing
 
-High Performance Computing (HPC) is essential for many problem domains: machine learning, graphics processing, scientific computing, and so on. This section describes how I intend to approach HPC in Awelon - via acceleration of a specialized evaluator for a set of monadic operations.
+High Performance Computing (HPC) is essential for many problem domains: machine learning, graphics processing, scientific computing, and so on. Minimally, we must effectively utilize GPGPU and cloud computing resources. 
 
 ### Kahn Process Networks
 
