@@ -9,7 +9,7 @@ Major design elements:
 
 * A scalable concrete codebase, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This filesystem-like structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, atomic updates, and prefix-aligned sharing. Further, we can amortize physical storage and network costs within a community via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network).
 
-* A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated under [rewriting](https://en.wikipedia.org/wiki/Rewriting) semantics to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering intermediate and final terms. Static analysis is possible but not required by the language.
+* A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated under [rewriting](https://en.wikipedia.org/wiki/Rewriting) semantics to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering intermediate and final terms.
 
 * Automation is achieved by defining [bots](https://en.wikipedia.org/wiki/Software_agent) in the dictionary. Bots operate on a transactional memory environment, which may reflect the codebase. Concretely, bots are modeled as transactions that repeat indefinitely, implicitly waiting when unproductive. Effects are asynchronous through manipulation of system variables, e.g. adding a task to a system queue or some data to a network output buffer. This design is fail-safe, resilient, idempotent, securable, extensible, and safe to modify at runtime - which is convenient for live coding, runtime upgrade, and robust administrative process control.
 
@@ -157,7 +157,7 @@ However, Awelon systems can represent package-based software distribution by ali
 Awelon disfavors recursive definitions. Instead, we use fixpoint combinators:
 
         [X][F]z == [X][[F]z]F
-        z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
+        z = (a2)[[[(a2)] a (a2) c i] b (eq-z) [c] a b w i](a2) c i
 
         assuming:
             [def of foo](eq-foo) == [foo]
@@ -484,7 +484,7 @@ The second-class names for ports and child processes enable us to control connec
 
 For evaluation, we define a `runKPN : KPN () -> Object` function, returning an accelerated object (see *Accelerated Vector Processing*). Requests to this object would represent as reads and writes to external ports of the given KPN. Returning a KPN object allows long-lived, interactive computation with a process running in the background. An accelerated implementation could leverage a thread per forked child, shared mutable queues for wires, and distributed processing assuming the runtime is configured for it.
 
-Static type safety for a KPN would ideally permit different message types for different ports, and give us a static error if we try to read or write a port after wiring it. I doubt we'll solve this using fancy type systems any time soon. But it is feasible to develop a dedicated static type analyis and annotations for KPNs.
+Static type safety for a KPN would ideally permit different message types for different ports, and give us a static error if we try to read or write a port after wiring it. I doubt we'll solve this using fancy type systems any time soon. But it is feasible to develop a dedicated static analysis and annotations for KPNs.
 
 ## Bots, Effects, and Applications
 
