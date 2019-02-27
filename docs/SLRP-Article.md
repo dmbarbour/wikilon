@@ -1,131 +1,129 @@
-Streaming Language Rewrite Processing (SLRP) is a low-level computing model that is essentially characterized by limited-memory processors rewriting a huge input stream. Processing under this condition requires multiple passes, but is extremely amenable to pipelining. SLRP processors may have side channels to external devices, accessed as part of a few 'effectful' rewrite rules.
+Streaming Language Rewrite Processing (SLRP) is a low-level computing model that is essentially characterized by limited-memory processors rewriting a much larger input stream. Computation under this condition requires multiple passes, but is highly amenable to pipelining and partitioning, and thus parallelism. SLRP processors may have side channels to external devices that we drive through 'effectful' rewrite rules.
 
 This article describes SLRP, its strengths and weaknesses, and methods to mitigate those weaknesses.
 
-TLDR: SLRP is an promising alternative to the von Neumann architecture. SLRP offers advantages for security, concurrency, and scalability. However, SLRP performs poorly for data plumbing and loops because there is no pass-by-reference for large values within a stream. This weakness can be mitigated by effects: we could interact with external storage devices and hybridize this useful aspect of the von Neumann architecture.
+TLDR: SLRP is a very promising alternative to the von Neumann architecture. SLRP offers advantages for security, concurrency, distribution, and scalability. However, SLRP performs poorly for data plumbing and loops because there is no pass-by-reference within the stream. This weakness can be mitigated by effects, shunting a region of the stream to a remote device and keeping a small placeholder - a reference.
 
+<em>SLRP Background</em>
+
+The essential requirement for SLRP is a rewrite language that can be mechanically implemented under the constraint of a fixed-memory processor.
+
+Fixed memory is obviously a non-issue for working with fixed-width values, such as natural numbers in range 0..999. A fixed-memory processor can rewrite `*(6)(7)` to `(42)` if it wants, no problem at all if number of digits is limited. In practice we might favor 32-bit or 64-bit binary encodings of numbers, but it's the same basic idea.
+
+The challenge is dealing variable width values, including first-class functions.
+
+For variable-width values, I assume we can detect the 'end' of a value either by counting delimiters or by having a prefix that indicates size then counting bytes. Depth or size is still bounded in these cases, but the bound may be absurdly large, like <code>2^64</code>.
+
+Mechanically, here's what we can do: we can erase a variable-width value, we can write a variable-width value to output, we can write a prefix before writing a variable-width value to output (to be handled by a later pass), we can ferry a fixed-width buffer of code or data across a variable-width value, and we keep have a finite state machine that reminds us what to do when we're done skipping a variable-width value. That's it.
+
+Below, I implement a Turing complete concatenative combinatory logic via stream rewriting under SLRP constraints. The article assumes at least a distant "I foggily remember reading about it years ago" familiarity with those subjects and either Church encodings or Mogensen-Scott encodings. If you don't know about these things, or feel you need a refresher, try Wikipedia. 
+ 
 <em>SLRP Machine Code</em>
 
-The SLRP architecture does not specify a language. However, a usable SLRP language is valuable as a proof of concept and a concrete foundation for discussion. This particular SLRP machine code is based on a concatenative combinatory logic. An initial subset of the rewrites I'll support:
+A usable SLRP machine code is valuable as a proof of concept and a concrete foundation for discussion. The machine language I develop below is based on a concatenative combinatory logic. I'll start with a semantic foundation of my Awelon language:
 
 <code><pre>a[A][B] == [B]A     (apply)
 b[A][B] == [A[B]]   (bind)
 c[A]    == [A][A]   (copy)
 d[A]    ==          (drop)</pre></code>
 
-These four combinators form the semantic foundation of my Awelon language, albeit presented here to reflect stream order: the operator `a` will be observed in the stream before the operand `[A]`.
+The SLRP processor will observe `<code>a[A][B]</code>` from left to right. The essential challenge for SLRP is that our processor has limited memory, yet our operands are unbounded. Hence, given a huge operand, our processor will only see the front end like `<code>a[A...</code>`, and must achieve useful progress within that constraint. Nonetheless, we can implement this in bounded memory if we leverage several auxiliary rewrites.
 
-The challenge for an SLRP implementation is that these blocks may be larger than our processor's memory. Thus, given `a[A...` we generally cannot see the end of the first operand. 
-
-To solve this challenge, I introduce auxiliary rewrites, make one convenient assumption that block and use a divide and conquer strategy.
-
-<code><pre>w[A][B] == [B][A]   (swap)
+<code><pre>-- language extensions
+w[A][B] == [B][A]   (swap)
 q[A]    == [[A]]    (quote)
 o[A][B] == [AB]     (compose)*
 i[A]    == A        (inline)
+\[      ==          (join)
 
-a[XY == a[X]a[Y
-a[[X]Y == w[X]a[Y
-a[ops][B] == [B]ops
-
-w[XY == a[o]w[X]w[Y
-w[[X]Y == a[oq]w[X]w[Y
-w[ops][B] == [B][ops]
-
-c[XY == oa[a[o]w]c[X]c[Y
-c[[X]Y == oqa[a[oq]w]c[X]c[Y
-c[ops] == [ops][ops]</pre></code>
-
-Above, I'm assuming `ops` is any subprogram that's small enough to fit into our processor's limited input buffer. A larger buffer will have direct and positive consequences on SLRP data-plumbing performance. 
-
-We can implement the bind operator as `b = oa[q]`. Whether we keep it as a distinct operator may probably depend on empirical performance analysis, and the sort of optimizations a processor might perform upon recognizing an `oa[q]` sequence.
-
-Further, I'm assuming that block-depth is bounded (e.g. by 2^32). Thus, a trivial block-depth counter will allow our processor to detect whether it's reached the end of a block. Under this assumption, the drop, quote, and inline operators are mechanically trivial in SLRP.
-
-This leaves only composition operator `o[A][B] == [AB]`. Unlike the other operators, there's no benefit from a divide and conquer strategy. Our `[A]` block is already where we want it to be! However, in general, we still cannot see the end of our first operand in `o[A...`.
-
-To implement composition, I introduce the concept idea of open-ended blocks: `o[A] == [A\`. Here, `\` is our open block terminator, with the behavior that `\[` cancels, such that `o[A][B] == [A\[B] == [AB]`. As an optimization, we may also delete `o[]` or `[\`. 
- 
-In the presence of open-ended blocks, we must extend our rewrite rules:
-
-<code><pre>-- Easy!
-d[A\ == d
-q[A\ == [[A\\q
-i[A\ == Ai
+-- mechanically trivial rewrites
+ \[  == 
+o[A] == [A\
 o[A\ == [A\o
-a[ops][B\ == [B\ a[ops]
-w[ops][B\ == [B\ w[ops]
+q[A] == [[A]]
+q[A\ == [[A\\q
+d[A] ==
+d[A\ == d
+i[A] == A
+i[A\ == Ai
+b    == oa[q]
 
--- Problematic!
-a[[X\Y == a[o]w[X]a[Y
-w[[X\Y == a[ok]w[X]w[Y
-c[[X\Y == oka[a[ok]w]c[X]c[Y
+-- `xyz` fits processor memory
+a[xyz][B] == [B]xyz
+a[xyz][B\ == [B\a[xyz]
+w[xyz][B] == [B][xyz]
+w[xyz][B\ == [B\w[xyz]
+c[xyz]    == [xyz][xyz]
 
--- Auxiliary (just for symmetry)
-k[A] == [[A\]    (k = b[o])</pre></code>
+-- divide-and-conquer tactics
+a[XY    == a[X]a[Y
+a[[X]Y  == iw[X][a[q]w]a[Y
+a[[X\Y  == iw[X][a[o]w]a[Y
 
-I described three cases as problematic. In SLRP, a rule such as `w[[X]Y == a[oq]w[X]w[Y` can be mechanically implemented by first recognizing `w[[` then immediately printing prefix `a[oq]w[` then all of `X`, detecting the end via counting delimiters. Importantly, that prefix was decided at `w[[`. However, to handle open-ended blocks, the three problematic cases need a different prefix. Fortunately, this is easily resolved: we define a prefix like `iw[` that defers the actual prefix decision. The modified divide-and-conquer rules for open blocks:
+w[XY    == a[o]w[X]w[Y
+w[[X]Y  == iw[X][a[oq]w]w[Y
+w[[X\Y  == iw[X][a[ok]w]w[Y
+    where k = o[o]q
 
-<code><pre>a[[X]Y == iw[X]  [w]           a[Y
-a[[X\Y == iw[X]  [a[o]w]       a[Y
-w[[X]Y == iw[X]  [a[oq]w]      w[Y
-w[[X\Y == iw[X]  [a[ok]w]      w[Y
-c[[X]Y == iw[X]  [oqa[a[oq]w]  c[X]c[Y
-c[[X\Y == iw[X]  [oka[a[ok]w]  c[X]c[Y</pre></code>
+c[XY    == oa[a[o]w]c[X]c[Y
+c[[X]Y  == iw[X][oqa[a[oq]w]c]c[Y
+c[[X\Y  == iw[X][oka[a[ok]w]c]c[Y
+    where k = o[o]q
+</code></pre>
 
-Performance of data-plumbing aside, the above set of combinators gives us Turing complete, confluent computation and a concatenative syntax. We could easily construct large computations using component-based programming style with deep inlining. Also, for those more familiar with lambda calculus, we can very easily <a href="https://awelonblue.wordpress.com/2016/11/15/lambdas-in-tacit-code/">compile lambda expressions</a> to use these tacit `a b c d` operators.
+To overcome the limitation that our SLRP processor generally cannot see the end of an operator's first operand, I introduce open-ended blocks, terminated by `\`. Formally, we have `<code>[A\ == o[A]</code>`, so `\` is a valid block terminator where it counts.
 
-An SLRP machine code benefits from several more extensions.
+Note that several rewrites have two cases depending in whether a block ends in `\` vs `]`. Note also that, in each such case, that particular block has the same output prefix. Thus, we're only deciding on some conditional behavior after we reach the block terminator.
 
-A delay operator: `~[A][B == [A][B`. Delay represents an intention to wait for two operands, allowing the second operand to be open-ended. When `[A]` is small, our processor can simply look ahead in its buffer. If `[A` is large, we could instead rewrite `~[A` to `dwa[~[]][A`. A delay operator allows programmers to control evaluation strategy, represent call-by-need computations and codata via `[ctor~[Arg]]`, or embed comments via `d~[comment]`. 
+Swap, copy, and apply are complicated in the general case, requiring divide-and-conquer tactics. However, in practice we will mostly use the base-case where `<code>xyz</code>` fits our processor's input buffer. A larger memory will improve data plumbing performance.
 
-A strict fixpoint combinator: `z[F][X] == F[z[F]][X]`. We could implement this directly as `z = ic~[iwba[c]b[ic~a[~]]]~`. However, a dedicated operator will reduce overheads and simplify recognition of loops for tight-loop optimizations within a processor. If a processor cannot see the end of `[F` we might rewrite via a generalized rule `z[F == ia[b[z]]c~[F`. 
+Performance of data-plumbing aside, the above set of combinators gives us Turing complete, confluent computation. The machine code is concatenative, which is very convenient for modularizing and constructing programs - e.g. concatenation of machine-code files corresponds to a composition of functions. For those who favor a lambda calculus, we can very easily <a href="https://awelonblue.wordpress.com/2016/11/15/lambdas-in-tacit-code/">compile lambda expressions</a> to use tacit `<code>a b c d</code>` operators.
+
+I immediately recommend two more operators for convenience:
+
+A delay operator: `<code>~[A][B == [A][B</code>`. Delay represents an intention to wait for two operands, allowing the second operand to be open-ended. A delay operator allows programmers to control partial evaluations and represent call-by-need computations and codata (such as infinite, procedurally generated trees) via `<code>[ctor~[Arg]]</code>`. It can also be used to embed comments via `<code>d~[comment]</code>`. If our first operand is too large, we can rewrite `<code>~[A == dwa[~[]][A</code>`. 
+
+A strict fixpoint combinator: `<code>z[F][X] == F[z[F]][X]</code>`. We could implement this by hand: `<code>z = ic~[iwba[c]b[ic~a[~]]]~</code>`. However, a dedicated loop combinator can reduce overheads and simplify recognition of loops by a processor that might want to perform internal optimizations. If the function operand is too large, we can rewrite `<code>z[F == ia[o[z]q]c~[F</code>`.
 
 I'm sure we can find more operators that improve expressiveness or performance. However, two items deserve special attention: data and effects!
 
 <em>SLRP Data</em>
 
-For high-level data structures, a Mogensen-Scott encoding isn't bad. However, as a low-level language, SLRP must support a reasonably efficient embedding, processing, and extraction for binary and numeric data.
+For high-level data structures (trees, stream values, etc.), a Mogensen-Scott encoding isn't bad. However, it isn't suitable for lower-level data IO. So we'll extend our SLRP language with binary data types.
 
-Fortunately, it is not difficult to extend SLRP with binary data embeddings. A header that indicates size can distinguish binaries from normal SLRP code. For example, header `F` might indicate a four-byte IEEE floating point representation. In this case, `F]]]]` represents the number 996937981862346752 instead of four block terminals. To simplify data plumbing, we'll box every binary value within a block, like `[F....]`.
+To embed binaries in SLRP, it's sufficient to use a sized header such as `F` before a four-byte floating point. This way, our processor knows that `<code>F]]]]</code>` represents the number <code>996937981862346752</code> instead of four block terminators. Besides floats, we could support double-precision floats and integers of common sizes (1,2,4,8 bytes, signed and unsigned). Further, it's feasible to support vectors and simple pairs of fixed-width elements such that `V32PBF` would represent the header for an sequence of 32 byte-float pairs.
 
-Besides floats, we can easily adopt other common number types. Further, we might support a few simple combinatorial types such as `V` for vectors and `P` for pairs, such that `V32PBF` would indicate a vector of 32 byte-float pairs, followed by 160 bytes of binary data.
+Encoding type information with our binary is convenient for safety, for rendering and debugging our streams, and for polymorphic manipulations - e.g. such that `+F....` is implicitly a floating-point add. It is feasible to achieve some collections-oriented programming features with dedicated manipulations of vectors, or adding a float to a vector implicitly adding to every element.
 
-After we're satisfied with our binary data embedding, we must develop operators to manipulate it. We can provide common mathy operations such as `+` and `-` and `*`, and make these polymorphic in our types such that `+[F....]` might require the second operation to also be a float.
-
-Intriguingly, it's feasible to squeeze some APL or J style collections-oriented programming from SLRP processors. Adding a float to a vector of floats might add it to every entry. We could develop specialized operators for arithmetic scans and folds over a vector. 
+Our drop, quote, swap, and copy operations must be extended to handle binary data. (We cannot apply or inline a binary.) Swap and copy may need divide-and-conquer tactics for large binaries, which might be achieved using vector and pair manipulations (split, append, etc.). 
 
 <em>Effectful SLRP</em>
 
-An SLRP processor may have side channels for interaction with the external environment - disk, display, sensor, network, etc.. An SLRP stream may act as a 'driver' for these channels, with some rewrites invoking interaction with the environment. We can add a request-response operator to our SLRP language:
+SLRP processors may have side channels for interaction with the external environment - disk, display, sensor, network, etc.. The SLRP stream may act as a 'driver' for these channels, with a subset of rewrites involving interaction with the environment. I propose a request operator `!` for this role:
 
 <code><pre>![ChannelID][Request] => [Response]</pre></code>
 
-Operator `!` tells our processor to push a request down the specified channel, then replaces the request by the response (if any). The channel identifier must be a simple binary type. The request and response will frequently be binaries, but that isn't necessarily the case.
+Operator `!` tells our processor to push a request down the specified channel, then replaces the request by the response, if any. The channel identifier should be a binary type. The request and response will often be binaries, but that may depend on the channel.
 
-We can easily leverage effects for performance reasons, e.g. moving vectors of floats to a GPGPU for high performance computing.
-
-Requests in SLRP streams are opportunistic and unordered. Further, copy and drop operations might replicate or remove a request. We won't solve this at the SLRP layer. Application programmers should use a monadic programming pattern or some other pattern to control effects when it matters. 
-
-Centralizing effects to a single operator `!` hugely simplifies security. We can trivially enforce capability-security for compiled apps, forbidding `!` in the app logic, then instead supply a set of effectful methods as an argument to the application.
+Requests in SLRP streams are opportunistic and unordered. Further, copy and drop operations might replicate or remove a request before it executes. Insofar as this is a problem, SLRP just leaves it to application programmers, who could use patterns such as monadic programming to control use of effects.
 
 <em>Virtual Memory for SLRP</em>
 
-The conventional notion of 'virtual memory' mapping an address space does not apply to SLRP streams (which are not addressed). However, we can adapt the idea: we can offload a volume of our stream through a side-channel, leaving a placeholder. When the code or data is needed again, we can load the data back into our stream.
+The conventional notion of 'virtual memory' mapping an address space does not apply to SLRP streams (which are not addressed). However, we can adapt the idea: we offload a volume of our stream through a side channel, leaving behind a placeholder. When the code or data is needed again, we can load the data back into our stream.
 
-There are many benefits for virtual memory in SLRP: We can reduce data-plumbing overheads, passing large objects by a reference to virtual memory. We can support a cheaper, higher-latency memory for code and data that we aren't using frequently. We can virtualize 'active' regions of a stream to either delay computation or move it to a remote processor.
+There are several benefits for virtual memory in SLRP: The placeholder may be much smaller than the data it replaces, allowing for more efficient data plumbing. We can offload to a cheap, high-latency memory to simulate larger memory. We could evaluate the offloaded region on remote processors, thus using virtual memory to partition a parallel computation.
 
-Virtual memory must be implemented effectfully, and could use the `!` operator and a request channel. But, properly implemented, the only observable impact to the SLRP computation should be performance, and there are some optimizations we might want. So dedicated operators would make sense.
+Virtual memory will be implemented effectfully. But, properly implemented, the only observable impact to the SLRP computation should be performance. We might wish to specialize handling of virtual memory to further improve performance. I'm inclined to develop dedicated operators for this purpose.
 
 <em>SLRP Hardware and Virtualization</em>
 
-An SLRP processor has a fixed amount of memory. However, larger memory can significantly improve performance. There are two reasons for this: First, the base case for many data plumbing rewrites such as `a[ops][B] == [B]ops` depends on input buffer size. Second, we can maintain a large output buffer and use it to backtrack. This allows our processor to focus attention and effort on tight loops and computations within each full-stream pass.
+SLRP processors have a fixed amount of memory. I imagine this quantity to be at least tens of kilobytes. A larger processor memory will allow more data plumbing to be handled by base case rewrite `<code>a[xyz][B] == [B]xyz</code>`, which is much more efficient than divide-and-conquer techniques. Further, processors may buffer output and backtrack, computing multiple passes within a 'sliding window' over the larger input stream. Doing so can greatly improve efficiency for tight loops, allows the processor to focus effort where progress is visible.
 
-Where SLRP shines is multi-processor systems. We can pipeline an SLRP stream through dozens of processors, thus doing parallel work per step. We can use virtual memory to partition and schedule an SLRP stream across remote processor groups.
+However, where SLRP shines is multi-processor systems. We can pipeline our SLRP stream through dozens of processors, thus achieving a great deal of parallel work per full-memory pass. Further, we can use virtual memory to partition and schedule fragments of SLRP streams across distinct processor groups, further improving parallelism and concurrency.
 
-Intriguingly, we can support heterogeneous multi-processor systems where different processors support different request channels. Then we could heuristically schedule and migrate code on the processors that can handle pending requests, thus supporting remote-procedure-calls and mobile code within SLRP's linear-stream semantics.
+In a heterogeneous multi-processor system, where different processors support different request channels, we could heuristically arrange for code to move to the processor that can handle a given request. This would simulate remote procedure calls or mobile code, while preserving SLRP's simple stream rewriting semantics.
 
-SLRP systems can easily integrate 'virtual' processors, implemented in software. Obviously this is an economic necessity to get SLRP off the ground. However, even assuming SLRP has its day and grows into a popular hardware architecture, virtualized processors would be convenient for integrating effects that we're unready or unwilling to implement in hardware - like GUI layers.
+SLRP systems may integrate 'virtual' processors, implemented in software. This is an economic necessity to get SLRP started. However, even assuming SLRP grows into a popular hardware architecture, virtualized processors might prove convenient for integrating 'effects' channels that we're unready or unwilling to implement in hardware - such as higher level GUI layers, or sandboxes.
 
 <em>Aside:</em> SLRP processors are free to optimize rewrites, such as fusing `oa[ops]` or `ow[ops]` into a single rewrite, simply erasing `a[]` and `ww`. Such optimizations are welcome, especially as the technology matures. But I feel we shouldn't rely too much on these little tricks.
 

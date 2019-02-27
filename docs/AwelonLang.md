@@ -7,13 +7,13 @@ Awelon is a programming language and environment designed to empower individuals
 
 Major design elements:
 
-* A scalable concrete codebase, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This filesystem-like structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, atomic updates, and prefix-aligned sharing. Further, we can amortize physical storage and network costs within a community via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network).
+* A scalable concrete codebase, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This filesystem-like structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, and atomic updates. Further, we can amortize physical storage and network costs within a community via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network).
 
-* A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated under [rewriting](https://en.wikipedia.org/wiki/Rewriting) semantics to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering intermediate and final terms.
+* A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated via [rewriting](https://en.wikipedia.org/wiki/Rewriting) semantics to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering. We aren't limited to final outputs: intermediate results may also be rendered, even animated.
 
-* Automation is achieved by defining [bots](https://en.wikipedia.org/wiki/Software_agent) in the dictionary. Bots operate on a transactional memory environment, which may reflect the codebase. Concretely, bots are modeled as transactions that repeat indefinitely, implicitly waiting when unproductive. Effects are asynchronous through manipulation of system variables, e.g. adding a task to a system queue or some data to a network output buffer. This design is fail-safe, resilient, idempotent, securable, extensible, and safe to modify at runtime - which is convenient for live coding, runtime upgrade, and robust administrative process control.
+* Automation is achieved by defining [bots](https://en.wikipedia.org/wiki/Software_agent) in the dictionary. Bots in Awelon are modeled as transactions that repeat indefinitely, implicitly waiting when unproductive. Effects are asynchronous via manipulation of system variables, such as adding a task to a system queue or some data to a network output buffer. This design is fail-safe, resilient, idempotent, securable, extensible, and safe to modify at runtime - which is convenient for live coding, runtime upgrade, and robust administrative process control.
 
-* User interfaces leverage [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) over the transactional memory environment and codebase. Through projections, users can manipulate code and state graphically through tables, graphs, forms, and widgets. Some projections may be application specific, where pushing a button adds a task to a queue. Where projections share variables, edits to one projection should reactively influence the others. Users can also transactionally edit multiple projections before commiting, which simplifies extensibility and input validation. Importantly, we can leverage the rewriting semantics of our language to provide a consistent user-interface for code and data.
+* User interfaces build upon [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) over code and transactional memory. This design allows us to easily extend our interface with additional views and controllers. The relationship between a projection and the underlying data is easily inspected for comprehension. Further, combined with rewriting semantics, we can project not only code and results but every intermediate step for debugging. Conventional GUIs can be supported indirectly by 'editing' a task queue that's handled by a bot shortly after we commit.
 
 The Awelon language is a just one aspect of the Awelon system. Its lightweight syntax and local rewrite semantics are essential in context of Awelon's vision and design goals. In contrast, performance and static type safety were secondary concerns, although still valuable (and addressed below).
 
@@ -40,11 +40,10 @@ Words identify functions in Awelon. Aside from the four primitive functions, wor
 
 Syntactically, Awelon words are intended to be URL friendly and visually distinct. Unicode was rejected because it's easy to have distinct encodings that are visually similar, which hinders debugging. However, it is feasible to leverage *Projectional Editing* to support CJK or iconographic words, or to render some words (or structures) using punctuation. Regex:
 
-        Word = F('-' F)*
-        F = [a-z]+N?
-        N = '0'|[1-9][0-9]*
+        Word = [a-z]+(Nat)?('-'Word)*
+        Nat = '0'|[1-9][0-9]*
 
-Semantically, a defined word is equivalent to its definition. Structurally, valid definitions must be acyclic. Thus, we could transitively expand a defined word into a finite stream. However, evaluation will tend to rewrite words lazily, preserving human-meaningful symbols and structure. Because definitions must be acyclic, *Loops* will be expressed by defining a fixpoint combinator.
+Semantically, a defined word is equivalent to its definition. Definitions must be acyclic. Thus, we could transitively expand a defined word into a finite stream. However, evaluation will tend to rewrite words lazily, preserving human-meaningful symbols and structure. Because definitions must be acyclic, *Loops* will be expressed by defining a fixpoint combinator.
 
 An Awelon system may enforce ad-hoc constraints on words and definitions. For example, an integrated development environment might assume that `foo-meta-doc` should define documentation for `foo`. The IDE could complain to the programmer if this word has a type that it does not recognize as documentation. Similarly, a linter might simulate package private definitions by complaining if `foo-local-*` words are used outside of `foo-*`. In some sense, the Awelon dictionary gives words their *denotation* while the Awelon environment gives words their *connotation*.
 
@@ -156,8 +155,8 @@ However, Awelon systems can represent package-based software distribution by ali
 
 Awelon disfavors recursive definitions. Instead, we use fixpoint combinators:
 
-        [X][F]z == [X][[F]z]F
-        z = (a2)[[[(a2)] a (a2) c i] b (eq-z) [c] a b w i](a2) c i
+        [X][F]z == [[F]z]F
+        z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
 
         assuming:
             [def of foo](eq-foo) == [foo]
@@ -192,13 +191,9 @@ Primitives rewrite by simple pattern matching:
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words simply rewrite to their evaluated definitions. However, this rewrite should be lazy, deferred if it does not result in progress of the computation. The motive for lazy rewriting of words is to retain human-meaningful symbols and structure in the evaluated results, enabling humans to grok the result and supporting graphical projections of the results using the same *Projectional Editing* models. By 'progress' we certainly need more than inlining a word's definition. Preferably, rewriting a word results in at least one value available for further computation.
+Words rewrite to their evaluated definitions. Under normal conditions, words rewrite 'lazily' based on arity (see *Arity Annotations*). The motive for lazy rewriting is to retain human-meaningful symbols, structure, and projected views for evaluated results. Although arity is the default condition for both ease of implementation and user control, other annotations may also influence a word's evaluation.
 
-Evaluation of loops should be tail-call optimized where feasible. In context of Awelon, we might implement this by recognizing common `a d` sequences at the end of a function, or at least building tail-calls into accelerators. However, working with relatively large stacks also shouldn't be a problem for Awelon programs.
-
-Developers may guide evaluation strategy through annotations. For example, we might use `(par)` to request parallel computation of a value. We might use `[F](jit)` to request compilation for a function or loop body. We could use `(lazy)` and `(eval)` to recommend call-by-need or eager evaluation. By making performance annotations explicit, we can also avoid silent performance degradation by raising a warning or error when the annotation cannot be implemented.
-
-*Aside:* Many languages have experimented with user-defined rewrite rules. The typical example is equivalent to `[F] map [G] map == [F G] map`. It is feasible to extend Awelon with rewrite rules, driven by annotations, leaving the burden of proof to the developers. However, I'm inclined to discourage this because such optimizations are fragile to abstraction and rules-set extension. Instead, I would suggest constructing an intermediate DSL as a data type, then rewriting it via function.
+Awelon does not specify an evaluation strategy. That is, neither strictness nor laziness are part of Awelon's semantics. Program developers should guide evaluation through annotations such as `(par)`, `(lazy)`, and `(eval)` where it's important.
 
 ### Arity Annotations
 
@@ -208,23 +203,23 @@ Arity annotations are useful for Awelon, and have simple rewrite rules:
         [C][B][A](a3) == [C][B][A]
         ...
 
-Arity annotations can be used to help control rewriting and partial evaluation. For example, consider a swap function `w = (a2) [] b a`. If our runtime has a naive view of 'progress', we might rewrite `[A]w => [[A]]a`, which is not 'useful' progress from perspective of a human observer. With the arity annotation, `[A]w` does not evaluate further, instead `[B][A]w` evaluates directly to `[A][B]`. 
+Arity annotations are useful to control rewriting and partial evaluation. For example, consider a swap function `w = [] b a` vs `w = (a2) [] b a`. In the former case, we might evaluate `[A]w => [[A]]a`. However, this isn't particularly useful to a human or an optimizer, so we might favor the latter where `[A]w` would not evaluate further because `w` is still lacking an operand. 
 
-Arity annotations can also support call-by-need computation. For example, `[[A](a2)F]` has the observable behavior and type of `[[A]F]`, but the former defers computation until the result is required.
+Arity annotations also support call-by-need computation. For example, `[[A](a2)F]` has the same observable behavior and type of `[[A]F]`, but the former will clearly computation until another operand is supplied.
 
-*Note:* Positional arguments do not scale nicely. Users too easily lose track of argument order, and what's on the stack. A linter should probably call out functions that observe or produce more than three stack elements - not counting arguments polymorphic in stack type or package-local utility functions. If needed, developers can leverage tuples or records to group arguments.
+*Note:* Positional arguments do not scale nicely. Beyond three arguments - at least for a public API - we should consider use of tuples or records to aggregate data.
 
 ## Garbage Collection
 
-Awelon has explicit copy and drop, so garbage collection is not a strong requirement. Theoretically, we could deep-copy and deep-drop data. However, copy is a common operation, so for performance it might be wiser to shallow-copy, leveraging either reference counting or tracing garbage collection. Reference counting GC should work very well because it's impossible in Awelon to construct a cyclic data dependency. 
+Awelon has explicit copy and drop, and garbage collection is not a strong requirement. However, copy is a very common operation in Awelon. Thus, for performance, it can be convenient to either use tracing GC or reference counting. Awelon cannot form cyclic value structures, which simplifies GC.
 
 ## Memoization
 
-Annotations can easily indicate [memoization](https://en.wikipedia.org/wiki/Memoization).
+We can support [memoization](https://en.wikipedia.org/wiki/Memoization) via annotations.
 
-For example, `[Function](memo2)` might express that we should memoize the function together with its next two arguments. The runtime would find or create a memoization table specific to the function, likely specialized for the expected argument type. Of course, memoization does impose some overheads, so it must be applied carefully or performance will suffer. Effective incremental computing requires use of memoization together with cache-friendly patterns: compositional views over persistent data structures, stable *Stowage* identifiers, etc..
+For example, `[Function](memo2)` might express that we should memoize the function together with its next two arguments. The runtime would find or create a memoization table specific to the function. Of course, memoization does impose significant overheads, especially in context of parallel or lazy arguments. Thus, it must be applied carefully or performance will suffer. 
 
-*Aside:* Awelon systems are purely functional, but memoization over time-series data can model many stateful applications.
+Awelon can weakly support incremental computing via caching of a word's evaluated definition. However, full support for incremental computing requires use of explicit memoization together with cache-friendly patterns: compositional views over persistent data structures, use of stowage for shared tree nodes, etc..
 
 ## Error Reporting
 
@@ -307,7 +302,9 @@ Beyond textual projections, graphical projections are feasible - forms with slid
 
 ### Named Local Variables
 
-Although tacit programming styles are suitable for many problems, they make an unnecessary chore of sophisticated data shuffling. Fortunately, we can support conventional let and lambda expressions as a projection. Consider a lightweight syntax where `\x` indicates we'll "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current definition or block (modulo shadowing). Thus `[\x EXPR]` becomes equivalent to `(λx.EXPR)`, while `[X] \x BODY` effectively simulates `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
+We can implement let and lambda expressions as an editable projection. 
+
+Consider a lightweight syntax where `\x` indicates we "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current definition or block (modulo shadowing). Thus `[\x EXPR]` serves the same role as `(λx.EXPR)`, while `[X] \x BODY` serves the same role as `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
 
         \x EXPR == (var-x) T(x,EXPR) 
           assuming `x` represents a value
@@ -320,33 +317,29 @@ Although tacit programming styles are suitable for many problems, they make an u
             | only G contains x             == [F] a T(x,G)
             | F and G contain x             == c [T(x,F)] a T(x,G)
 
-This design is robust and independent of user definitions. It could be extended, perhaps with lightweight support for tuples, or `\[x]` for implicit inlining of `x`. 
+This projection is robust and independent of user definitions.
 
-Unfortunately, this is not optimal for conditional behaviors: we might naively copy `x` and bind it into each branch of the conditional behavior, rather than leaving `x` on the stack where exactly one conditional path will access it. Copying, in turn, could hinder linear references and in-place mutations. This could be mitigated by specializing the projection for a common set of conditional behaviors, or by subsequent optimization. But for the short term, we can hand-optimize data plumbing for conditional behaviors.
+Unfortunately, it is not optimal for conditional behaviors where use of a variable in an if-then block would result in closures. This could eventually be solved by a more cohesive projection with built-in knowledge of common conditionals. Meanwhile, we should optimize by hand.
 
-Despite those caveats, there are contexts where support for named locals will certainly prove more convenient than explicit data shuffling (swap, tuck, etc.) on the stack. Named locals were, at least to me, the first convincing proof that sufficiently advanced *Projectional Editing* is a viable alternative to sophisticated built-in syntax.
+Despite caveats, local variables are a convenient projection in cases where tacit programming becomes a mess of data-shuffling, or for larger programs where the user will have difficulty tracking the stack.
 
 ### Infix and Prefix Operators
 
-Infix and prefix expression of operations can be convenient insofar as they reduce explicit nesting and contribute to concision, legibility, and familiarity. Thus, this may be worth pursuing in as an editable projection over Awelon code. 
+Infix and prefix expression of operations can be convenient insofar as they reduce explicit nesting and contribute to concision, legibility, and familiarity. They may be worth pursuing in sophisticated textual projections over Awelon code. For projections over singular operators, we have three options:
 
-As an example of utility, a concise projection of lists using two operators:
+        A + B == [A] [B] plus           (infix)
+          + B ==     [B] plus           (prefix)
+          +   ==         plus           (postfix)
+
+In context of Awelon, I favor prefix and trivial postfix operators rather than true infix. Prefix operators don't affect anything we see before the operator and thus don't interfere with a *Named Local Variables* projection. We can do a lot with prefix operations, such as a lightweight projection over lists:
 
         , B == [B] cons
         .   == [null] cons
         [1,2,3.] == [1 [2 [3 [null] cons] cons] cons]
 
-For projections with singular operators, we basically have two options:
+The cost of introducing prefix or infix operators is some need to deal with precedence and associativity, and to occasionally work around it. We could favor parentheses for precedence and escape our annotations (e.g. `#(trace)`).
 
-        A + B == [A] [B] plus           (infix)
-          + B ==     [B] plus           (prefix)
-
-In context of Awelon, I've found it useful to favor prefix operators where feasible. This allows a more flexible dataflow from left to right, enabling *Named Local Variables* defined in `A` to bind over the operator.
-So we either have `[1 \x x] [x] plus`, which is probably an error, or `1 \x x [x] plus`, which is what we'd expect. The list projection above and *Monadic Programming* below both use prefix operators.
-
-The cost of operators is complicated *precedence* and *associativity*. If we have more than two or three operators, we'll need a table to track everything. And we'll want those parentheses for cases that violate precedence, like `(x + x) * y`, so we might be escaping annotations (via `#(anno)` or similar). 
-
-*Aside:* A weakness of Awelon is that we cannot *overload* words or operators. We can mitigate this with context-dependent projections (specialize syntax to the problem) or by targeting broadly useful intermediate data structures (free algebras, etc.).
+*Note:* Awelon cannot overload words or operators. In some cases, a context-dependent projection might be appropriate. But *Generic Programming* requires separate attention.
 
 ### Namespaces
 
@@ -416,11 +409,9 @@ It is not difficult to model functional objects via types similar to:
 
         type Object = Request → (Response * Object)
 
-However, in context of static type analysis, the response type should ideally depend upon the request. This allows requests to represent 'method calls' with distinct behavior and return type. Further, to model imperative objects will additionally require a monadic effect type, supporting permitting interaction with an external environment. 
+However, in context of static type analysis, we ideally want 'requests' to represent method calls and 'responses' to have a return type specific to the method. Further, in the general case, methods may need a monadic effect type. To represent this in the general case would require dependent types. However, it's feasible to develop a simpler type model specialized for object-interfaces, analogous to the monadic effect types described at *Monadic Programming*. We'd require static method labels. Of course, we could also support dynamic OOP without type safety.
 
-We could develop a specialized type model where we describe an object's interface with a record of method types. Each method would have a request-effect-response type, monadic effects optional. And we'd need to ensure method selection is static. Alternatively, good support for existential types or dependent types could solve this.
-
-Aside from types, we may develop some lightweight projections for expression of interface types, classes, object instantiation, and method invocations.
+Assuming types are supported to our satisfaction, we can develop a few projections around classes, constructors, interfaces, and method invocations.
 
 ## Data Representation
 
@@ -455,7 +446,7 @@ For Awelon, we approach HPC via *Acceleration*. This constrains us to purely fun
 
 To utilize GPGPU hardware from Awelon, we can model an abstract remote processor specialized for structured binaries. For example, we might push two binaries representing floating point matrices, ask the processor to multiply them, then request the result as another binary. 
 
-In Awelon, we could model this remote processor as a functional object. See *Object Oriented Awelon* for more on this. Importantly, we can accelerate an object if we're careful to ensure the same, accelerated handler function is used for every request and the internal object state is not exposed. Pseudocode: 
+In Awelon, we could model this remote processor as a purely functional object (see *Object Oriented Awelon*). Importantly, we can accelerate an object if we arrange for the same accelerated handler function to be used for every request with a hidden internal state. Pseudocode: 
 
         type Object = Request -> (Object * Response)
 
@@ -464,15 +455,19 @@ In Awelon, we could model this remote processor as a functional object. See *Obj
             let (st',resp) = ... a pure computation ...
             ((process st'), resp)
 
-Here, `process` would be accelerated, and the `State` type is hidden within the object, allowing an accelerator to compute an alternative internal state, so long as observable behavior is equivalent.
+Here, `process` would be accelerated, and the `State` type (beyond the initial state) is hidden from external observers, which allows our accelerator to compute alternative state values, assuming observable behavior is preserved.
 
-So, we accelerate an object whose requests are easy to implement efficiently on GPGPU hardware. Most of the design work, ultimately, is developing this set of requests. One important form of request is to push 'code' to be invoked later. This would allow compilation of abstract machine code before we invoke it, and would allow multiple invocations to be performed more efficiently than would sending the code each time.
+For accelerated vector processing, we must use requests and state model that are easy to implement on a GPGPU. Most of our design effort would be developing this set of requests.
 
-*Aside:* We can extend our processor to a network of communicating processors with streaming binaries, using a model like *Kahn Process Networks* to preserve observable determinism. This would allow partitioning a computation across multiple GPGPUs. We might also benefit from an abstract processor for low-level bit-banging.
+However, one especially important consideration is our ability to register some code with the remote processor, such that we can invoke it later. By registering code ahead of time, we benefit in two ways: we can invoke the code many times without repeating the load effort, and our accelerated implementation of the processor may compile and cache code for the physical hardware.
+
+*Aside:* We can extend our processor to a network of communicating processors with streaming binaries, using a model like *Kahn Process Networks* to preserve observable determinism. This would allow partitioning of a streaming computation across multiple GPGPUs. We might also benefit from an abstract processor for low-level bit-banging.
 
 ### Kahn Process Networks
 
-[Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) model deterministic, distributed computation. KPNs are excellent for event stream processing, task parallelism, and cloud computing. KPNs are monotonic, so it's feasible to interactively add input and extract output while the computation is ongoing in the background. A KPN process could be developed against a monadic API:
+[Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) model deterministic, distributed computation. KPNs are excellent for event stream processing, task parallelism, and cloud computing. KPNs are monotonic, so it's feasible to interactively add input and extract output while the computation is ongoing in the background. 
+
+A KPN process could be developed against a monadic API. Here, we use second-class port and process names instead of first-class channels and processes in order to simplify connectivity and abstraction.
 
         read : Port -> KPN Msg
         write : Port -> Msg -> KPN ()
@@ -480,11 +475,13 @@ So, we accelerate an object whose requests are easy to implement efficiently on 
         fork : ProcName -> KPN () -> KPN ()
         type Port = Outer PortName | Inner (ProcName * PortName)
 
-The second-class names for ports and child processes enable us to control connectivity, which . We can fork child processes and declaratively wire inputs to outputs. The process may imperatively read input ports and write output ports that haven't been wired. In classic KPNs, read is the only synchronous operation: it waits for data if none is available. We could further extend this API with bounded write buffers (so writes can wait), logical time (so reads can time out), and logical copy and drop of ports (for performance).
+We can fork child processes and declaratively wire inputs to outputs. The process may monadically read or write ports that haven't been wired. In classic KPNs, read is the synchronous operation: it waits for data if none is available. We could extend this API with bounded buffers (so writes can wait), logical time (so reads can time out), and perhaps logical copy and drop of ports (for performance).
 
-For evaluation, we define a `runKPN : KPN () -> Object` function, returning an accelerated object (see *Accelerated Vector Processing*). Requests to this object would represent as reads and writes to external ports of the given KPN. Returning a KPN object allows long-lived, interactive computation with a process running in the background. An accelerated implementation could leverage a thread per forked child, shared mutable queues for wires, and distributed processing assuming the runtime is configured for it.
+When we're done describing our KPN, we develop `runKPN : KPN () -> Object`. 
 
-Static type safety for a KPN would ideally permit different message types for different ports, and give us a static error if we try to read or write a port after wiring it. I doubt we'll solve this using fancy type systems any time soon. But it is feasible to develop a dedicated static analysis and annotations for KPNs.
+Here, we're not interested in a KPN's return value. Instead, we'd interact with an accelerated object via read and write requests (cf *Accelerated Vector Processing*). This would allow us to leverage the monotonic structure of KPNs for interaction with long-running computations. The accelerated object would use threads and queues under the hood. We only need to be careful about copying the object, which may require a copy-on-write strategy (cf *Arrays and In-Place Mutation*).
+
+A significant challenge for KPNs is developing a suitable type safety analysis. We might want `(kpn)` annotations and specialized analysis to ensure ports are used with consistent message types, ports aren't used after declarative wiring, we aren't obviously stuck, etc.. However, even without static type safety, we could accelerate KPNs.
 
 ## Bots, Effects, and Applications
 
