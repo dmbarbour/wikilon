@@ -7,9 +7,9 @@ Awelon is a programming language and environment designed to empower individuals
 
 Major design elements:
 
-* A scalable concrete codebase, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This filesystem-like structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, and atomic updates. Further, we can amortize physical storage and network costs within a community via proxy or [CDN](https://en.wikipedia.org/wiki/Content_delivery_network).
+* A scalable concrete codebase, represented as a [log-structured merge tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) over [content addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage) with [prefix-aligned indexing](https://en.wikipedia.org/wiki/Radix_tree). This data structure can support massive volumes, lazy downloads, incremental synchronizations, lightweight backups, and atomic updates. Further, we can amortize physical storage and network costs within a community via proxy or [content delivery network](https://en.wikipedia.org/wiki/Content_delivery_network).
 
-* A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated via [rewriting](https://en.wikipedia.org/wiki/Rewriting) semantics to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering. We aren't limited to final outputs: intermediate results may also be rendered, even animated.
+* A [purely functional](https://en.wikipedia.org/wiki/Purely_functional_programming) language evaluated via [rewriting](https://en.wikipedia.org/wiki/Rewriting) semantics to encode structured data and computations. The intention is to simplify sharing, caching, multi-stage programming, and user ability to inspect and comprehend computation through deterministic replay and rendering. Source, intermediate states, and final values can all use the same tooling.
 
 * Automation is achieved by defining [bots](https://en.wikipedia.org/wiki/Software_agent) in the dictionary. Bots in Awelon are modeled as transactions that repeat indefinitely, implicitly waiting when unproductive. Effects are asynchronous via manipulation of system variables, such as adding a task to a system queue or some data to a network output buffer. This design is fail-safe, resilient, idempotent, securable, extensible, and safe to modify at runtime - which is convenient for live coding, runtime upgrade, and robust administrative process control.
 
@@ -19,20 +19,16 @@ The Awelon language is a just one aspect of the Awelon system. Its lightweight s
 
 ## Language Basics
 
-Awelon builds upon a foundation of four primitive concatenative combinators:
+Awelon builds upon a semantic foundation of four concatenative combinators:
 
         [B][A]a == A[B]         (apply)
         [B][A]b == [[B]A]       (bind)
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
 
-These few primitives form a Turing complete computation language. Programmers will further define a dictionary of words, which are trivially equivalent to their inline definitions. Awelon also has limited support for embedded data - natural numbers, texts, and binary large objects - with implicit definitions (see below). Awelon evaluates by rewriting, but can usefully be understood as a purely functional [stack-based programming language](https://en.wikipedia.org/wiki/Stack-oriented_programming) with special handling in case of stack underflow (a program `[A]a` simply won't evaluate further). 
+Besides these primitives, Awelon has specialized support for efficient embedding of data - natural numbers, texts, and binaries. Further, programmers may define a directed acyclic graph of words in a dictionary. Overall, Awelon has the look and feel of a stack-oriented programming language. However, evaluation is based on rewriting. Thus, a program that is shorted some arguments, such as `[A]a`, is not an error - it simply doesn't rewrite further.
 
-An Awelon compiler or interpreter will further recognize a set of *Annotations*, represented by parenthetical words such as `(par)`, `(trace)`, `(nat)`, or `(error)`. Unlike user-defined words, annotations always have the same formal meaning: identity. That is, adding or removing annotations should not affect a program's formal behavior. But it can affect a lot of informal behaviors - evaluation strategy, memoization, data representation, quotas, guidance for JIT compilation, static analysis, fail-fast assertions, debugger integration, rendering hints, and so on. Annotations can express *programmer intentions*.
-
-*Accelerators* are a critical subset of performance annotations. Accelerators enable Awelon systems to be extended with new performance primitives - floating point arithmetic, arrays, SIMD vector processing, etc.. The premise is that we can replace a naive Awelon model by an equivalent compiler or interpreter supported built-in. For example, lists can be considered a model of arrays. An `(array)` annotation could tell our compiler to represent a list as a compact array under-the-hood. Then use of `[list-index](accel-array-index)` can use an efficient offet-based index to the list represented as an array.
-
-Awelon's lightweight syntax is intended for use with *Projectional Editing*. We can render a program as a rich user-interface. After we evaluate by rewriting, we can render the result using the same projections. We can also partially evaluate and render intermediate states. Without projections, Awelon's syntax does not scale nicely, though it's adequate for one-liner queries or simple debugging REPLs.
+The minimal syntax and semantics supports stability, projections, and rewriting. However, for practical use, Awelon further supports *Annotations* indicated by parenthetical words such as `(par)` or `(trace)`. Annotations formally have identity semantics, like whitespace. However, they may influence performance, static analysis, debugging, and rendering. *Accelerators* are an important subset of annotations that request a function be replaced by a built-in equivalent. Accelerators enable an interpreter or compiler to extend Awelon with performance primitives.
 
 ## Words
 
@@ -47,6 +43,8 @@ Syntactically, Awelon words are intended to be URL friendly, visually distinct, 
 Semantically, a defined word is equivalent to its definition. Definitions must be acyclic. Thus, we could transitively expand any Awelon program into a finite stream of primitives. However, evaluation normally rewrites words lazily, preserving human-meaningful symbols and structure, and avoiding exponential expansion. Because definitions must be acyclic, loops are expressed through a fixpoint combinators (see *Loops*).
 
 An Awelon system may enforce ad-hoc constraints on words and definitions. For example, an integrated development environment might assume that `foo-meta-doc` should define documentation for `foo`. The development environment might complain to the programmers if this word computes a value that it does not recognize as documentation. Similarly, we can simulate package private definitions by warning when `foo-local-*` words are used outside of `foo-*`. In some sense, the Awelon dictionary gives words a *denotation* while the development environment gives words their *connotation*.
+
+*Aside:* Depending on context, it may be convenient to think of words as compressing a program stream, words as hypertext links within a smart filesystem, and words as functions or software components. Unlike conventional PLs, Awelon encourages embedding of data - forums, almanacs, databases, full text of books, etc. - within the dictionary.
 
 ## Natural Numbers
 
@@ -264,7 +262,7 @@ We should combine this with a restriction that `foo-local-*` words should only b
 
 In context of compile-time metaprogramming (input macros, templates, embedded DSLs, etc.) it can be convenient to defer static type analysis until after partial evaluation with some static program inputs. When a template statically computes a simply-typed program, we can eliminate the need for advanced 'dependent' types.
 
-In a conventional language, we might use a distinct API-level syntax for static parameters vs runtime parameters - such that invokations are like `foo<bar>(baz,qux)`. In Awelon, we might instead introduce an annotation like `[A](static) => [A]` to insist that `[A]` is computed statically or only depends on static inputs. A type analysis could then require explicit, contagious use of these annotations, such that a linter complains for every word where a static dependency depends on a non-static input.
+In a conventional language, we might use a distinct API-level syntax for static parameters vs runtime parameters - such that invokations are like `foo<bar>(baz,qux)`. In Awelon, we must introduce an annotation like `[A](static) => [A]` to insist that `[A]` is computed statically or depends only on parameters marked static in the caller (giving us a simple contagion model). 
 
 ### Advanced Types and Gradual Typing in Awelon
 
@@ -339,7 +337,7 @@ In context of Awelon, I favor prefix and trivial postfix operators rather than t
         .   == [null] cons
         [1,2,3.] == [1 [2 [3 [null] cons] cons] cons]
 
-The cost of introducing prefix or infix operators is some need to deal with precedence and associativity, and to occasionally work around it. We could favor parentheses for precedence and escape our annotations (e.g. `#(trace)`).
+The cost of introducing prefix or infix operators is eventual need to deal with precedence and associativity, and to occasionally work around it. We could favor parentheses for precedence and escape our annotations (e.g. `#(trace)`). Or we could just require explicit blocks and inlining. 
 
 *Note:* Awelon cannot overload words or operators. In some cases, a context-dependent projection might be appropriate. But *Generic Programming* requires separate attention.
 
@@ -430,13 +428,15 @@ Multi-stage programming (MSP) is about explicit, robust control of *when* a comp
 
 A step is complete when it has a value. A stage is complete when all steps in that stage are complete. These annotations allow us to describe our staging assumptions and assert that a stage should be complete, but do not directly implement any software patterns to simplify staging. We might additionaly leverage monadic programming or intermediate DSLs to support staging.
 
-*Aside:* In addition to controlling computation, MSP may benefit from control over just-in-time compilation (JIT). This could be supported via `[F](jit)` annotations. Controlling JIT can improve performance stability compared to the ad-hoc tracing JIT seen in conventional languages.
+For the more common case where we're only interested in runtime vs compile-time stages, we could use `[A](static) => [A]` to insist that a computation either completes at compile-time or only depends on static parameters.
 
 ## Generic Programming
 
-Awelon supports polymorphism. We can implement lists once for many data types, or an operational monad for many operation types. This supports a weak form of generic programming. However, Awelon does not support overloading of symbols. For example, we cannot have one `add` symbol that automatically selects the appropriate function based on whether the arguments are natural numbers, floating point, or matrices.
+Generic programming is about developing programs in terms of requirements, the abstraction or deferral of non-essential details. Awelon directly supports a limited form of generic programming: parametric polymorphism. However, I'm very interested in more advanced forms analogous to multi-methods or type-classes. In Awelon, we should not tightly couple generic programming to any global registry or 
 
-This could feasibly be mitigated by *Multi-Stage Programming*: we could develop a stage that propagates type information and other static metadata. This would allow `add` to select the appropriate function based on context. Projectional editors could further help, making it more convenient to work with `add<T>` functions where `T` represents our static metadata.
+This requires a model - ideally, one that supports abstraction, testing, parallel computation, and incremental computing.
+
+I have some ideas for this related to monads, constraint systems, and multi-stage programming. However, I'm still hammering out the details. See [Generics.md](Generics.md).
 
 ## High Performance Computing
 
@@ -516,8 +516,6 @@ The `try` and `abort` operations support hierarchical transactions with strong e
 
 The `fork` operation specifies a 'one-off' operation to attempt in unspecified order upon commit. This is intended for use in read-fork patterns, where the operation may be repeated until a variable observed by the parent transaction changes. With recursive use of read-fork, we can form a tree with read-write loops at the leaves, expand a single bot into multiple component bots. This supports task-concurrency, multi-stage programming, and convenient packaging of behaviors. (If used from a read-write transaction, we can simply reject the transaction.)
 
-We might further extend this API to control or optimize dataflow using specialized variable models, read-only or write-only variables, write-once variables, specialized channels, and so on. We might also simplify memory management via attached destructors or 'weak refs' for GC. But there's no rush.
-
 Bots are installed by simply defining `app-*` words in the dictionary. This ensures that the set of active behaviors in an Awelon system is easily discovered, managed, and extended. In the general case, we can modify bot definitions at runtime, which supports live programming, continuous deployment, and system administration. 
 
 ### Effectful Environment
@@ -531,6 +529,14 @@ A typical environment might support network access, a pseudo-filesystem or datab
 For performance and maintenance reasons, this environment is mostly *ephemeral*. That is, we can logically or physically 'reset' the system to use a fresh, new `forall v. Env v` environment. This improves performance insofar as it allows us to work with variables containing linear, lazy, or parallel values. This simplifies maintenance by providing a convenient worst-case recovery from "bad states" produced by buggy bots. A subset of variables may be backed by durable storage, rather like a memory-mapped file. Reflective writes to the dictionary, certain volumes of the filesystem, etc. could survive resets. To preserve performance, synchronizing to disk should be modeled as an explicit request rather than implicit upon commit.
 
 Security is a relevant concern. Fortunately, the `forall v` constraint provides strong [capability security](https://en.wikipedia.org/wiki/Capability-based_security) for bot definitions: a bot is limited to the provided environment. Consequently, it is trivial to wrap a distrusted definition and control its access to the environment, to model a sandbox or chroot jail. In concrete terms, I propose to represent references as `[ref-debugname1123-hmac]`. The serialized representation is necessary in contexts such as debugging, reflection, stowage, memoization, and distributed computing. The HMAC will be based on *ephemeral* entropy, cryptographically unique per system reset. Further, a linter could warn when `ref-*` words are observed in the normal dictionary.
+
+### Time Dependent Behavior
+
+Assume we have a current time environment variable that contains a timestamp. Logically, we have a system clock that is blindly writing this variable. In concrete terms, it might be lazily computed when read. Either conflict analysis must be precise for blind writes, or we must simplify analysis by sharing the timestamp for concurrent transactions.
+
+Interaction between a system clock and transaction-based process control can be awkward. To avoid a busy wait loop, we must not read time as part of a 'stable' transaction. A read-fork transaction must not read system time. A read-abort behavior should abort *before* reading current time to avoid immediate retry. Developers must work with time like any other variable having a high rate of change.
+
+Waiting on time is a common requirement. Although we have transactional process control, that doesn't work for external network resources or human interactions. To wait for time, my idea is to write a future value to the current time variable. This would cause the transaction to wait until at least the specified time before committing. Thus, we can represent timeouts or network polling.
 
 ### User Interfaces
 

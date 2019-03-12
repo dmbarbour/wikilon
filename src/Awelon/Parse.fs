@@ -11,8 +11,8 @@ open Stowage
 // Program = (Block | Token)*
 // Block = '[' Program ']'
 // Token = Word | Annotation | Nat | Text
-// Word = WF ('-' WF)*
-// WF = [a-z]+(Nat)?
+// Word = Frag('-'Frag)*
+// Frag = [a-z]+(Nat)?
 // Annotation = '(' Word ')'
 // Nat = '0' | [1-9][0-9]*
 // Text = '"' (not '"')* '"'
@@ -40,11 +40,13 @@ module Parser =
     /// A Word is represented by a ByteString but should have some
     /// internal structure according to regex: 
     ///
-    ///    Word = F('-'F)* 
-    ///    F = [a-z]+N?
-    ///    N = '0' | [1-9][0-9]*
+    ///    Word = Frag('-'Frag)*
+    ///    Frag = [a-z]+(Nat)?  
+    ///    Nat  = '0' | [1-9][0-9]*
     ///
-    /// That is, a word consists of hyphenated fragments. Each fragment
+    /// That is, a word can be some text, optionally followed by a
+    /// number, optionally followed by a hyphenated word. (We might
+    /// make the hyphens optional, but for  
     /// has some lower-case characters followed by an optional natural
     /// number.
     type Word = ByteString
@@ -91,35 +93,45 @@ module Parser =
 
     /// Validate an alleged natural number token.
     let inline isValidNat (n:NatTok) : bool =
-        (not (BS.isEmpty n)) && ((parseNatLen n) = (BS.length n))
+        (not (BS.isEmpty n)) && ((BS.length n) = (parseNatLen n))
 
-    /// Return count of bytes that parse as a word fragment. ([a-z]+(Nat)?)
-    let parseWFLen s =
+    /// Return count of bytes in a word fragment [a-z]+(Nat)?
+    let parseWordFragLen s =
         let struct(az,rem) = BS.span isLowerAlpha s
         if BS.isEmpty az then 0 else
-        ((BS.length az) + (parseNatLen rem))
+        (BS.length az) + (parseNatLen rem)
 
-    // return byte count for ('-'WF) if matched
-    let inline private parseWFExtLen s =
-        if (BS.isEmpty s) || ((byte '-') <> (BS.unsafeHead s)) then 0 else
-        let wfLen = parseWFLen (BS.unsafeTail s)
-        if (0 = wfLen) then 0 else (1 + wfLen)
+    let inline private hasWordExt s =
+        ((BS.length s) >= 2) 
+            && ((byte '-') = (s.[0])) 
+            && (isLowerAlpha (s.[1]))
 
-    // return byte count for `('-'WF)*` with accumulator
-    let rec private parseWordLenExtLoop acc s =
-        let xwfLen = parseWFExtLen s
-        if (0 = xwfLen) then acc else
-        parseWordLenExtLoop (xwfLen + acc) (BS.drop xwfLen s)
+    // tail-recursive loop for word length
+    let rec private parseWordLenLoop acc s =
+        let wfLen = parseWordFragLen s
+        if (0 = wfLen) then acc else
+        let acc' = wfLen + acc
+        let s' = BS.drop wfLen s
+        if (not (hasWordExt s')) then acc' else
+        parseWordLenLoop (1 + acc') (BS.unsafeTail s')
 
-    /// Return count of bytes that parse as a word (WF ('-'WF)*).
-    let parseWordLen s =
-        let wfLen = parseWFLen s
-        if (0 = wfLen) then 0 else
-        parseWordLenExtLoop wfLen (BS.drop wfLen s)
+    /// Return count of bytes that match a valid word. 
+    let parseWordLen s =  parseWordLenLoop 0 s 
+    
+    let rec private parseWordLenLoop acc s =
+        let struct(az,rem) = BS.span isLowerAlpha s
+        if BS.isEmpty az then acc else
+        let nlen = parseNatLen rem
+        let s' = BS.drop nlen rem
+        let acc' = acc + (BS.length az) + nlen
+        if not (hasWordExt s') then acc' else
+        parseWordLenLoop (1 + acc') (BS.unsafeTail s')
+
+    let parseWordLen s = parseWordLenLoop 0 s
 
     /// Validate an alleged word token.
     let inline isValidWord (w:Word) : bool =
-        (not (BS.isEmpty w)) && ((parseWordLen w) = (BS.length w))
+        (not (BS.isEmpty w)) && ((BS.length w) = (parseWordLen w))
 
     /// Return number of valid embedded-text bytes within a string.
     /// (Texts allow ASCII modulo C0, DEL, and double quotes (34).)
@@ -313,8 +325,7 @@ module Parser =
     ///  * inlining a word's definitions
     ///  * erasing undesirable annotations
     /// 
+    /// Mostly, it's intended for renaming words.
     let tokenRewrite (rw:(Token -> Program)) (p:Program) : Program =
         RewriteTokens.stepIni rw id p 
-
-
 

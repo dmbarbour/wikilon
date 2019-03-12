@@ -3,12 +3,12 @@ open Data.ByteString
 
 // We can support local variables - lets and lambdas of conventional
 // languages - using a projection. This LocalVars module provides a
-// preliminary and reference implementation, so we can use this view
-// early in development.
+// preliminary implementation, albeit without any specialization for
+// conditional behaviors or pattern matching. 
 //
-// However, my intention is to define views within Awelon dictionaries,
-// where users can modify and extend them. So this shouldn't be in use
-// too much. 
+// Long term, most projections over Awelon should be represented in
+// Awelon code. Any specializations can be supported at that layer.
+// So this implementation is for short-term and debug fallback use. 
 module LocalVar =
     open Parser
 
@@ -44,7 +44,7 @@ module LocalVar =
 
         // Test whether a word is contained within a program, albeit
         // in a manner sensitive to name shadowing behind (pop-*)
-        // annotations.
+        // annotations (thus token sequence search is no good).
         let containsWord w prog = cwLoop [] w prog
 
         let rec appendRev xs dst =
@@ -75,9 +75,6 @@ module LocalVar =
         let inline isPrimOpC c = ((byte 'd') >= c) && (c >= (byte 'a'))
         let inline isPrimOp w = (1 = BS.length w) && (isPrimOpC (w.[0]))
 
-        // Not all symbols we can represent in `(var-*)` are valid words.
-        // And even some valid words might be rejected, if they match our
-        // primitive words or are already used within our program.
         let validVar w = (Parser.isValidWord w) && (not (isPrimOp w))
         let acceptVar w p = (validVar w) && (not (containsWord w p))
 
@@ -186,34 +183,24 @@ module LocalVar =
     ///        | only G contains x             => [F] a T(x,G)
     ///        | F and G contain x             => c [T(x,F)] a T(x,G)
     ///
-    /// Effectively, this supports local let and lambda variables within
-    /// our textual projections. The `(var-x)` annotations provide hints
-    /// to reconstruct the original projection via viewLocalVars.
-    ///
-    /// Todo: I'd like better support for incremental programming, where
-    /// we might include some undefined 'holes' in our program. Holes must
-    /// capture all variables. In that context, linear variables, ability
-    /// to explicitly end a variable scope, could also be useful.
+    /// See `viewLocalVars`. 
     let hideLocalVars (p:Program) : Program = Impl.pullVars id [] p
 
-    /// Our LocalVars projection is computed by rewriting `(var-x)` 
-    /// annotations to `(pop-x) x` then propagating the `x` as a 
-    /// value across Awelon's primitive `a b c d` operations. All
-    /// `(var-x)` annotations are rewritten, excepting those that
-    /// introduce some ambiguity.
+    /// Given source code containing `(var-x)` annotations, we can 
+    /// rewrite to `(pop-x) x` then propagate `x` as a value using 
+    /// Awelon's primitive a,b,c,d operations. We will exclude any
+    /// annotations that would result in ambiguity.
     ///
-    /// A higher projection may render `(pop-x)` tokens as `\x` or
-    /// another concise and convenient syntax. This would support
-    /// lightweight lets and lambdas:
+    /// The `(pop-x)` annotations are not concise or attractive. We
+    /// can mitigate this in higher views, e.g. using `\x` for the
+    /// `(pop-x)` annotation. This supports lets and lambdas:
     ///
     ///     [X] \x EXPR         let x = [X] in EXPR         
-    ///     [\x EXPR]           (fun x -> EXPR)
+    ///     [\x EXPR]           (lambda x -> EXPR)
     ///
-    /// We can leverage locals where stack data shuffling is verbose
-    /// or might interfere with further projections.
-    ///
-    /// Note: Developers should be careful about accidental shadowing
-    /// of words that are hidden by higher projections, such as `cseq`.
+    /// Locals can simplify some data plumbing, especially where 
+    /// deep closures may be involved. However, it should be used
+    /// carefully around conditional behaviors. 
     let viewLocalVars (p:Program) : Program = Impl.pushVars id [] p
 
 

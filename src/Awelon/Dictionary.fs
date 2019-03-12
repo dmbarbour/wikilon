@@ -402,6 +402,41 @@ module Dict =
     let inline selectPrefix (p:Prefix) (d:Dict) : Dict = 
         prependPrefix p (extractPrefix p d)
 
+    // A naive ordering of words will sort `f60` before `f7`. Ideally,
+    // when displaying a list of words, we should respect numeric order
+    // in an absolute sense.
+    //
+    // This would be trivial if we 
+    //
+    // Further, I may wish to split a dictionary based on a key, rather
+    // than on prefix. In this case, I should also respect numeric order
+    // such that `a6` is to left of `a50` while `a499` is to the right.
+    //
+    // I may also want to find the 'largest' number, i.e. find `499`
+    // as fast as possible. 
+    //
+    // Numbers would be easy to work with if we add a size prefix. But
+    // I'd rather avoid affecting the dict or key structures.
+    module private NatSort =
+        
+        // The 
+
+        // should we organize 
+
+
+        // count digits in a key
+        let inline isDigit c = ((byte '9') >= c) && (c >= (byte '0'))
+        let rec dcLoop (acc:int) (s:ByteString) : int =
+            let stop = (BS.isEmpty s) || (not (isDigit (BS.unsafeHead s)))
+            if stop then acc else dcLoop (1+acc) (BS.unsafeTail s)
+        let digitCount (s:ByteString) : int = dcLoop 0 s
+            
+            
+
+
+
+
+
     // sequence definitions in context of prefix
     let rec private toSeqP (p:Prefix) (d0:Dict) : seq<Symbol * Def> =
         let d = mergeProto d0 
@@ -414,7 +449,11 @@ module Dict =
         Seq.append sv scs
         
     /// Compute a sequence of defined symbols. This will perform
-    /// erasures and updates incrementally, as needed. 
+    /// erasures and updates incrementally, as needed.
+    ///
+    /// TODO: This version of toSeq is unsuitable for human observers
+    /// because of cases like `a10` appearing before `a2`. I would 
+    /// like to make sequencing with numbers more convenient.
     let toSeq (d:Dict) : seq<Symbol * Def> = 
         Seq.delay (fun () -> toSeqP (BS.empty) d)
 
@@ -423,9 +462,15 @@ module Dict =
     /// properly handle entries that have been logically deleted.
     let inline isEmpty' (d:Dict) : bool = Seq.isEmpty (toSeq d)
 
+
     /// Partition the dictionary on a symbol, such that all symbols
     /// smaller are to the left and symbols equal or greater are to
     /// the right. Use with toSeq for indexed browsing.
+    ///
+    /// NOTE: This does not properly divide numeric words, e.g. for
+    /// key `k60` we have `k599` to the left and `k7` to the right.
+    /// I'd like to fix this
+ 
     let rec splitAtKey (k:Symbol) (d0:Dict) : struct(Dict * Dict) =
         if BS.isEmpty k then struct(empty,d0) else
         let d = mergeProto d0 // merge prefixes in path of key
@@ -455,6 +500,8 @@ module Dict =
     let inline toKey k d =
         let struct(dL,_) = splitAtKey k d
         dL
+
+    *)
 
     // translate options to VDiff
     let private diffOpt optA optB =
