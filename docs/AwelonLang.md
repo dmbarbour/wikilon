@@ -300,29 +300,6 @@ Ideally, projections must be designed in coordination with definitions and *Acce
 
 Beyond textual projections, graphical projections are feasible - forms with sliders, checkboxes, and buttons. A color picker widget for a color value, a date picker widget for a date value. By developing some specialized projections, we can effectively provide an application user-interface. We can project over multiple dictionary definitions, perhaps modeling a spreadsheet or worksheet. See *Bots, Effects, and Applications*.
 
-### Named Local Variables
-
-We can implement let and lambda expressions as an editable projection. 
-
-Consider a lightweight syntax where `\x` indicates we "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current definition or block (modulo shadowing). Thus `[\x EXPR]` serves the same role as `(λx.EXPR)`, while `[X] \x BODY` serves the same role as `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
-
-        \x EXPR == (var-x) T(x,EXPR) 
-          assuming `x` represents a value
-        
-        T(x,E) | E does not contain x       == d E
-        T(x,x)                              == 
-        T(x,[E])                            == [T(x,E)] b
-        T(x,F G)                            
-            | only F contains x             == T(x,F) G
-            | only G contains x             == [F] a T(x,G)
-            | F and G contain x             == c [T(x,F)] a T(x,G)
-
-This projection is robust and independent of user definitions.
-
-Unfortunately, it is not optimal for conditional behaviors where use of a variable in an if-then block would result in closures. This could eventually be solved by a more cohesive projection with built-in knowledge of common conditionals. Meanwhile, we should optimize by hand.
-
-Despite caveats, local variables are a convenient projection in cases where tacit programming becomes a mess of data-shuffling, or for larger programs where the user will have difficulty tracking the stack.
-
 ### Infix and Prefix Operators
 
 Infix and prefix expression of operations can be convenient insofar as they reduce explicit nesting and contribute to concision, legibility, and familiarity. They may be worth pursuing in sophisticated textual projections over Awelon code. For projections over singular operators, we have three options:
@@ -340,6 +317,31 @@ In context of Awelon, I favor prefix and trivial postfix operators rather than t
 The cost of introducing prefix or infix operators is eventual need to deal with precedence and associativity, and to occasionally work around it. We could favor parentheses for precedence and escape our annotations (e.g. `#(trace)`). Or we could just require explicit blocks and inlining. 
 
 *Note:* Awelon cannot overload words or operators. In some cases, a context-dependent projection might be appropriate. But *Generic Programming* requires separate attention.
+
+### Named Local Variables
+
+We can implement let and lambda expressions as an editable projection. 
+
+Consider a lightweight syntax where `\x` indicates we "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current definition or block (modulo shadowing). Thus `[\x EXPR]` serves the same role as `(λx.EXPR)`, while `[X] \x BODY` serves the same role as `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
+
+        \x EXPR == (var-x) T(x,EXPR) 
+          assuming `x` represents a value
+        
+        T(x,E) | E does not contain x       == d E
+        T(x,x)                              == 
+        T(x,[E])                            == [T(x,E)] b
+        T(x,F G)                            
+            | only F contains x             == T(x,F) G
+            | only G contains x             == [F] a T(x,G)
+            | F and G contain x             == c [T(x,F)] a T(x,G)
+
+This projection is robust and independent of user definitions. 
+
+Unfortunately, it is not optimal for conditional behaviors where use of a variable in an if-then block would result in closures. This could eventually be solved by a more cohesive projection with built-in knowledge of common conditionals. Meanwhile, we should optimize by hand.
+
+Despite caveats, local variables are a convenient projection in cases where tacit programming becomes a mess of data-shuffling, or for larger programs where the user will have difficulty tracking the stack.
+
+*Aside:* If we want explicit `let` or `where` clauses, we could feasibly develop further projections over structures such as `[\x EXPR] [X] where`, starting from lambdas.
 
 ### Namespaces
 
@@ -409,9 +411,11 @@ It is not difficult to model functional objects via types similar to:
 
         type Object = Request → (Response * Object)
 
-However, in context of static type analysis, we ideally want 'requests' to represent method calls and 'responses' to have a return type specific to the method. Further, in the general case, methods may need a monadic effect type. To represent this in the general case would require dependent types. However, it's feasible to develop a simpler type model specialized for object-interfaces, analogous to the monadic effect types described at *Monadic Programming*. We'd require static method labels. Of course, we could also support dynamic OOP without type safety.
+If we are unconcerned with static typing, this is almost sufficient. Requests and responses are just any message type. However, we might tweak this a little to model objects in a monadic environment.
 
-Assuming types are supported to our satisfaction, we can develop a few projections around classes, constructors, interfaces, and method invocations.
+However, in context of static type analysis, we ideally want 'requests' to represent method calls and 'responses' to have a return type specific to the method call. Further, in the general case, methods may need a monadic effect. To represent this precisely requires dependent types. However, it's feasible to develop a simpler type model specialized for object interface types, very similar to the monadic effect types described at *Monadic Programming* (the main difference being that object interface methods may have monadic effect types). Also similarly to monadic effects, all method names will need to be available for static analysis.
+
+Assuming types are supported to our satisfaction, we can develop a few projections around method invocations and class constructors. 
 
 ## Data Representation
 
@@ -432,11 +436,29 @@ For the more common case where we're only interested in runtime vs compile-time 
 
 ## Generic Programming
 
-Generic programming is about developing programs in terms of requirements, the abstraction or deferral of non-essential details. Awelon directly supports a limited form of generic programming: parametric polymorphism. However, I'm very interested in more advanced forms analogous to multi-methods or type-classes. In Awelon, we should not tightly couple generic programming to any global registry or 
+Generic programming is about developing programs in terms of requirements, the deferral of non-essential detail. Awelon directly supports parametric polymorphism, which is a very limited form of generic programming. Advanced forms will require explicit modeling. Unfortunately, conventional approaches to advanced generic programming, such as multi-methods or typeclasses, are awkward in Awelon. 
 
-This requires a model - ideally, one that supports abstraction, testing, parallel computation, and incremental computing.
+A viable solution involves monadic concurrent constraint systems. Constraints represent requirements, while the search space represents our options. The monad allows us to mix construction of a model with representation of requirements and a search space. Concurrency ameliorates the rigid ordering of monads.
 
-I have some ideas for this related to monads, constraint systems, and multi-stage programming. However, I'm still hammering out the details. See [Generics.md](Generics.md).
+A preliminary API:
+
+        type CC v a -- our concurrent constraint monad
+        new     : CC v (v a)            -- unassigned
+        write   : v a -> a -> CC v ()
+        read    : v a -> CC v a
+        fork    : CC v () -> CC v ()
+        fail    : CC v a
+        amb     : CC v a -> CC v a -> CC v a  
+
+        runCC   : forall v . CC v a -> Stream of a
+
+In this API, our variables are deferred single-assignment. Reads will wait. This gives us nice declarative behavior and allows deterministic concurrency up to amb which represents explicit non-determinism. By default, we'll prioritize the first choice, but we could extend this API with explicit weights or scores. Failure is occurs if we attempt to write a variable twice, datalock upon reading a variable that is never assigned, or explicitly fail. Fork allows us to defer requirements testing and decisions, and also to represent concurrent behavior. To represent requirements, forks remain attached: if a fork fails, its parent also fails.
+
+A common requirement for generic programming is a shared registry of resources, such as knowing all the multi-method instances or all the type-class instances. It is feasible, albeit awkward, to model such registries using choices and single-assignment variables. E.g. we can model a collection as a linked list with an unassigned 'tail' variable. To set a value, we can model a 'choice' of assignments: either we assign the first element, or (recursively) we assign a later element.
+
+Evaluation of the model is performed by some variation of `runCC`. This would be implemented as a pure function, and we can leverage annotations from *Multi-Stage Programming* to prevent escape of constraint variables. Unfortunately, acceleration is not feasible because there is no obviously 'correct' ordering for multiple solutions, and it's generally impossible to order by 'best' solutions. But a well designed evaluator could certainly analyze several solutions in parallel, and implement an intelligent search strategy.
+
+In context of generic programming, final result type `a` represents a program. However, this entire approach - using constraint programming as a basis for generic programming - is mostly untested in practice (though there are some examples of it such as [SFINAE](https://en.wikipedia.org/wiki/Substitution_failure_is_not_an_error) for template metaprogramming in C++). In any case, I intend to try this and see how it works and whether any tweaks are needed to improve it.
 
 ## High Performance Computing
 
@@ -504,15 +526,12 @@ Preliminary API in pseudo-Haskell:
         new     : DebugName -> a -> TX v e (v a)
         read    : v a -> TX v e a
         write   : v a -> a -> TX v e ()
-        modify  : (a -> a) -> v a -> TX v e ()
         delete  : v a -> TX v e ()
         try     : TX v e a -> TX v e' (Either e a)
         abort   : e -> TX v e a
         fork    : DebugName -> TX v e a -> TX v e' ()
 
-I assume the monadic API is manipulated through a suitable projection so isn't too different from conventional imperative programming. We can manipulate variables via imperative `read` and `write` operations. The `modify` operation is basically a composed read-write, but could be optimized to reduce concurrency conflicts. The `new` operation creates fresh variables. A `delete` operator could support explicit memory management. (Garbage collection may also be supported, but I'd rather not rely on it.) 
-
-The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `abort` value may carry ad-hoc information about why the transaction failed. The `try` operation only handles `abort`; it would not catch a type error or an attempt to read a deleted variable.
+I assume the monadic API is manipulated through a suitable projection so isn't too different from conventional imperative programming. We can manipulate variables via imperative `read` and `write` operations. The `new` operation creates fresh variables. A `delete` operator could support explicit memory management. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `abort` value may carry ad-hoc information about why the transaction failed. The `try` operation only handles `abort`; it would not catch a type error, for example.
 
 The `fork` operation specifies a 'one-off' operation to attempt in unspecified order upon commit. This is intended for use in read-fork patterns, where the operation may be repeated until a variable observed by the parent transaction changes. With recursive use of read-fork, we can form a tree with read-write loops at the leaves, expand a single bot into multiple component bots. This supports task-concurrency, multi-stage programming, and convenient packaging of behaviors. (If used from a read-write transaction, we can simply reject the transaction.)
 
@@ -528,7 +547,7 @@ A typical environment might support network access, a pseudo-filesystem or datab
 
 For performance and maintenance reasons, this environment is mostly *ephemeral*. That is, we can logically or physically 'reset' the system to use a fresh, new `forall v. Env v` environment. This improves performance insofar as it allows us to work with variables containing linear, lazy, or parallel values. This simplifies maintenance by providing a convenient worst-case recovery from "bad states" produced by buggy bots. A subset of variables may be backed by durable storage, rather like a memory-mapped file. Reflective writes to the dictionary, certain volumes of the filesystem, etc. could survive resets. To preserve performance, synchronizing to disk should be modeled as an explicit request rather than implicit upon commit.
 
-Security is a relevant concern. Fortunately, the `forall v` constraint provides strong [capability security](https://en.wikipedia.org/wiki/Capability-based_security) for bot definitions: a bot is limited to the provided environment. Consequently, it is trivial to wrap a distrusted definition and control its access to the environment, to model a sandbox or chroot jail. In concrete terms, I propose to represent references as `[ref-debugname1123-hmac]`. The serialized representation is necessary in contexts such as debugging, reflection, stowage, memoization, and distributed computing. The HMAC will be based on *ephemeral* entropy, cryptographically unique per system reset. Further, a linter could warn when `ref-*` words are observed in the normal dictionary.
+Security is a relevant concern. Fortunately, the `forall v` constraint provides strong [capability security](https://en.wikipedia.org/wiki/Capability-based_security) for bot definitions: a bot is limited to the provided environment. This can be statically enforced if we represent references as `[ref-debugname1123]` then statically reject `ref-*` words within the dictionary. We need this serializable representation for references in context of stowage, memoization, reflection, debugging, and distributed computation. If necessary for stronger protections, we could add an HMAC to the references and modify the API with built-in channels and read-only vs write-only facets.
 
 ### Time Dependent Behavior
 
@@ -540,7 +559,7 @@ Waiting on time is a common requirement. Although we have transactional process 
 
 ### User Interfaces
 
-In general, bots may publish some 'services' to a shared registry. Some of these services would be intended for other bots, but we could also register services that the user will interact with to obtain a projection over the environment. This supports tight integration between a projection and bot-created variables, active interfaces with notifications, and a simple security model insofar as administrators constrain bots and bots constrain lesser users.
+In general, bots may add some 'services' to a shared registry. Some of these services would be intended for other bots, but we would also register services that the user will interact with to obtain a projection over the environment. This supports tight integration between a projection and bot-created variables, active interfaces with notifications, and a simple security model insofar as administrators constrain bots and bots constrain lesser users.
 
 Users will be able to interact with multiple projections, e.g. across multiple widgets or windows. These projections may be provided by multiple different bots. However, they should all use the same transaction. That is, users should be able to perform updates in multiple windows then 'commit' them all together. Further, even before committing, every time we perform an edit we should be able to reactively observe the change in every other window that depends on the modified variables. This supports lightweight, robust extension of user interfaces with alternative views, controllers, macros, etc. by adding new bots. It also simplifies debugging - a debugger interface is essentially just another UI extension.
 
