@@ -6,29 +6,50 @@ Awelon directly supports parametric polymorphism, which is a useful but limited 
 
 I have some vague ideas involving a monadic constraint system. 
 
-Constraints are already close to generic programming: a constraint will express or refine a requirement. The difficulty is gathering requirements, efficient search, and constructing a result.
+Constraint systems are close in nature to generic programming: a constraint can express a requirement, or further refine one, while the search space serves as a registry of possible and partial solutions. With soft constraints, we can also model preferences. The monadic API would provide a framework for constructing our model, registering the requirements and options.
 
-The monadic API can be convenient for abstracting and composing our constraints. Unfortunately, it is somewhat awkward to 'defer' choice based on downstream requirements in the monadic API. This means we either must front-load our requirements (which is awkward) or find an alternative to true deferal (such as iterative search).
+A preliminary API:
+
+        type CX v a -- monadic
+        type V v a -- single assignment variables
+
+        -- model construction
+        alloc       : CX v (Var v a)
+        read        : Var v a -> CX v a
+        write       : Var v a -> a -> CX v a
+
+        -- constraint system
+        choice      : List of CX v a -> CX v a
+        fork        : CX v () -> CX v ()
+        weight      : Nat -> CX v ()
 
 
 
 
 
-somewhat awkward because we cannot conveniently modify any decisions after we observe them - doing so would result in some form of paradox. 
-
- due to committed choice: we must be careful about where we *observe* 
-
-constraints, but is a little bit awkward: downstream requirements cannot easily affect prior decisions. 
+The monadic API can be convenient for abstracting and composing our constraints. Unfortunately, it is somewhat awkward to 'defer' a choice based on downstream requirements in the monadic API. This means we either must front-load our requirements (which is awkward, but doable idiomatically) or find an alternative to true deferal (such as iterative search).
 
 
 
-I'm hoping that monads could help with this. If constraints are expressed within a monad
 
-With monads, a major challenge is that we cannot easily have 'downstream' requirements influence 'upstream' decisions insofar as we observe dependencies between the two. 
+In this design, we'll have a monad that supports 'search' via alternatives and failure, and also supports single-assignment variables. A variable may only be assigned once, but the assignment may be separated from variable declaration. The idea, then, is to express multiple alternative assignments as a search space, and to represent ad-hoc constraints by search failures. Importantly, variable assignments are interdependent. We'll consider only groups of assignments.
 
-A first thought is that I should pursue something 'weaker' than monads, such as applicatives, so we can examine the entire  before making decisions. However
+To this we might add a 'fork' operation that allows us to defer reads, decisions, requirements, and assignments. There is no return value from 'fork'. However, every fork must halt successfully for our constraint system to succeed.
 
-Applicative or Selective style might be a better fit, allowing us to examine the entire computation before making any decisions. 
+A reasonable question is how to model a shared collection, such as a list of plugins. My idea is this: we model our plugins as a linked list of single-assignment variables to which we might addend. Each addend is potentially the last one, so we represent this using a local alternative. This pattern is inefficient if implemented naively, but we could optimize it with a dedicated API extension.
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

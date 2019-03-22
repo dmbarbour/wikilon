@@ -229,7 +229,7 @@ Expected errors should instead be modeled as explicit return values, usually via
 
 Awelon debugging is based largely around replay. Because Awelon evaluates by local rewriting, it's easy to render (or even animate) the intermediate steps required to reach the current state. We also don't need breakpoints to introspect intermediate states. However, debugging by logging is also convenient, and we can support this via `(trace)` annotations, perhaps using `(trace-logname)` to allow easier filtering.
 
-In context of effectful code (per *Bots, Effects, and Applications*), the challenges of debugging stateful behavior is ameliorated by transactional memory, the simple application model, the free monad, and the abstract variable type. It is feasible to continuously test behavior under a variety of purely functional simulations.
+In context of effectful code (per *Bots, Effects, and Applications*), the challenges of debugging stateful behavior is ameliorated by transactional memory, the simple application model, and the ability to simulate execution of command sequences in a variety of sample environments.
 
 ## Static Typing and Safety Analysis
 
@@ -256,13 +256,22 @@ This would resist accidental access to data, and provide a better debugging expe
 
 We should combine this with a restriction that `foo-local-*` words should only be used from `foo-*`, so we can implement package-private utility functions to work with our package-private data types.
 
-*Aside:* These annotations operate on the top value of the stack. But we could have a variation that seals the entire stack type, modeling symbolic stack frames. Perhaps `(stack-seal-foo)` and `(stack-unseal-foo)`.
+*Aside:* These annotations operate on the top value of the stack. But we could have a variation that seals the entire stack type, to help guard stack 'frames'. Perhaps `(stack-seal-foo)` and `(stack-unseal-foo)`. 
+
+### Multi-Stage Programming
+
+Multi-stage programming (MSP) is about robust, type-safe control of *when* a compution occurs. This is useful for predictable performance. For Awelon, we might leverage annotations to express programmer intentions and assumptions. Consider paired annotations:
+
+        [A](step-foo) => [A]
+        [F](stage-foo) => [F]   iff [F] does not contain (step-foo)
+
+A step is complete when it has a value. A stage is complete when all steps in that stage are complete. These annotations allow us to describe some second-class staging assumptions and assert that a stage should be complete. In context of static safety analysis, we could warn the developer whenever we cannot easily prove at compile-time that a stage is complete. To effectively use MSP will further require abstractions and projections.
 
 ### Static Computation and Deferred Typing
 
-In context of compile-time metaprogramming (input macros, templates, embedded DSLs, etc.) it can be convenient to defer static type analysis until after partial evaluation with some static program inputs. When a template statically computes a simply-typed program, we can eliminate the need for advanced 'dependent' types.
+In context of compile-time metaprogramming (input macros, templates, embedded DSLs, etc.) it can be convenient to defer static type analysis until after partial evaluation with some static program inputs. This would allow "lightweight" dependent types that only depend on static values. 
 
-In a conventional language, we might use a distinct API-level syntax for static parameters vs runtime parameters - such that invokations are like `foo<bar>(baz,qux)`. In Awelon, we must introduce an annotation like `[A](static) => [A]` to insist that `[A]` is computed statically or depends only on parameters marked static in the caller (giving us a simple contagion model). 
+In a conventional language, we might use a distinct API-level syntax for static parameters vs runtime parameters - such that invokations are like `foo<bar>(baz,qux)`. In Awelon, we must introduce an annotation like `[A](static) => [A]` to insist that `[A]` can be computed statically or depends only on parameters explicitly marked static within the caller (giving us a simple contagion model). This is a lot easier to check than type information, and is a lot weaker than full multi-stage programming.
 
 ### Advanced Types and Gradual Typing in Awelon
 
@@ -294,7 +303,7 @@ Awelon's simple syntax must be augmented by [projectional editing](http://martin
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-In this example, I build one view upon another, but we also have a comprehensible representation in without the view. For example, if our projectional editor lacks support for rationals, users would still see the `[-4 #6 rational]` representation. This is convenenient for iterative development of extensible views. Further, if carefully designed our data views be normal forms (evaluate to themselves) such that we can also render `-7` as an *output* from a computation. This may involve careful use of arity annotations. Besides numeric towers, projections can support monadic programming, infix operators, lists and records, embedded comments via `"comment" (a2) d`, and other ad-hoc syntax extensions.
+In this example, I build one view upon another, but we also have a comprehensible representation in without the view. For example, if our projectional editor lacks support for rationals, users would still see the `[-4 #6 rational]` representation. This is convenenient for iterative development of extensible views. Further, if carefully designed our data views be normal forms (evaluate to themselves) such that we can also render `-7` as an *output* from a computation. This may involve careful use of arity annotations. Besides numeric towers, projections can support command sequences, infix operators, lists and records, embedded comments via `"comment" (a2) d`, and other ad-hoc syntax extensions.
 
 Ideally, projections must be designed in coordination with definitions and *Accelerators* to ensure the same projections can be reused after rewriting evaluations. A consistent projection for input, output, and intermediate computations contributes to Awelon's vision for user interfaces. This supports user comprehension and control, enabling users to trace displayed data to its source or extend processing with further computations.
 
@@ -341,7 +350,7 @@ Unfortunately, it is not optimal for conditional behaviors where use of a variab
 
 Despite caveats, local variables are a convenient projection in cases where tacit programming becomes a mess of data-shuffling, or for larger programs where the user will have difficulty tracking the stack.
 
-*Aside:* If we want explicit `let` or `where` clauses, we could feasibly develop further projections over structures such as `[\x EXPR] [X] where`, starting from lambdas.
+*Aside:* If we want explicit `let` or `where` clauses, we could feasibly develop further projections over structures such as `[\x EXPR] [X] where`, starting from lambdas. 
 
 ### Namespaces
 
@@ -357,17 +366,39 @@ Instead, I propose to move namespaces to the editor layer: an editor can track a
 
 *Aside:* I'm interested in use of color as an alternative to prefixes, e.g. such that `html-div` is written in a different color from `math-div`. This would give us a more concise notation.
 
+## Object Oriented Awelon
+
+Ignoring static analysis, we can easily model objects in a functional language:
+
+        type Object = Request → (Response * Object)
+
+It's just a function, albeit often with a fixpoint closure for stateful objects. 
+
+However, in context of static type safety, we usually want the response to depend on the request. This can be achieved by dependent types. But dependent types are more sophisticated than I would prefer to deal with in many cases. An alternative is to specialize type analysis for a `Request` model where requests include static method labels like `"draw-to-canvas"` as the top element on the stack. This essentially supports a 'lightweight' dependent type system where we only depend on static information.
+
+Beyond type safety, we mostly need projections common object invocation and constructor patterns. This would easily build upon the static method labels, e.g. with `!draw-to-canvas` representing a method call to the object on the top of our stack, or `x!draw-to-canvas` representing a linear method call in context of *Named Local Variables* (a convenient equivalent to `x !draw-to-canvas \x`). 
+
+Between fixpoint closures, lightweight dependent types, projections, and accelerators, Awelon can support most object-oriented patterns. We can further introduce *Command Sequences* to model shared objects, and objects that could interact with a network or other external device. 
+
+Intriguingly, an `[Object]` can support *Projectional Editing* at two layers. First, we can project over the object constructor - the `[Object]` string - like we do for any other value. Second, we build projections above the *interface* to the object, i.e. invoking `"draw-to-canvas"` to produce a view, or invoking some methods that rewrite the object to represent user input events. 
+
 ## Labeled Data
 
-Labeled data types, such as records and variants, are a staple of most programming languages. I've frequently contemplated built-in support for labeled data in Awelon. However, projections and accelerators should be adequate to the task without requiring new primitives.
+Labeled data types, such as records and variants, are a staple of conventional programming languages. I've frequently contemplated built-in support for labeled data in Awelon. However, projections and accelerators should be adequate to the task without requiring new primitives.
 
-For records, I propose we build upon abstract record constructors of form `[[A] "a" rset [B] "b" rset ...](rec)`, as opposed to a concrete representation like a trie or list. Importantly, the behavior of `rset` would determine the *observable properties* of records - commutative, and whether duplicate put is an error or idempotent. And the `(rec)` annotation can provide a hint for typing, projection, and acceleration. Type analysis for records should support heterogeneous types. A few simple projections like `:label == "label" rset` would cover symbolic data.
+Rather than a concrete trie or association list, I propose to model records as specialized objects that accept a specialized request. For example, we could use a model of the form:
 
-For variants, we can follow the example of Church-encoded sum types, where `type (A+B) = ∀r.((A → r) → (B → r) → r)`. That is, we must provide a handler for each case. The sum value itself selects one handler and applies it. Naturally, for labeled variants, our handler should be a record, with one label per case or perhaps paired with a default option. In any case, the resulting variant structure might have form `[[Val] "a" case](case)`.
+        [[A] "a" rset "b" [B] rset ...](rec)
+
+In this case, `rset` might be modeled a function that takes *three* arguments: a label-value pair `"a"` and `[A]`, followed by the request. The request will generally contain a fresh record and the label we're searching for or replacing. Each `rset` operation would handle and modify the request, so our final output is a modified form of the initial request, containing a copy of the record, less the extracted element (if any). A lightweight textual projection could render `"a" rset` as `:a` or similar. The `(rec)` annotation would provide hints for static typing and accelerated representation.
+
+Labeled variants are functions that extract and apply a 'handler' from a record. So this might be represented as `[[A] "a" case]` with `case` selecting the handler.
+
+Importantly, by avoiding use of a trie, association list, or other concrete representation, we greatly simplify reasoning about the observable properties of our record, which optimizations an accelerator may perform (such as reordering of labels) without affecting observable behavior, and our ability to abstract or compose records.
 
 ## Arrays and In-Place Mutation
 
-In Awelon, arrays can be supported as an accelerated list representation. We could have accelerated functions to access or edit the array at some offset. Naively, editing the array at some offset involves copying the array with the edit in place. However, if an array has only one memory reference, we could save ourselves some trouble and instead mutate in-place.
+In Awelon, arrays could be modeled as an accelerated list representation, or alternatively as an accelerated object similar to records. We could have accelerated functions to access or edit the array at some offset. Naively, editing the array at some offset involves copying the array with the edit in place. However, if an array has only one memory reference, we could save ourselves some trouble and instead mutate in-place.
 
 This is related to the concept of linear type systems and uniqueness types. However, this could be applied even in a dynamic system, implicitly performing copy-on-write for shared arrays. With a few annotations, we could express our assumptions and stabilize performance.
 
@@ -375,90 +406,85 @@ Support for in-place mutation of arrays would be valuable for a variety of data 
 
 *Aside:* Accelerators could theoretically use a [persistent array](https://en.wikipedia.org/wiki/Persistent_array) implementation. But I believe we should keep arrays simple, and discourage huge arrays. Developers can explicitly model a persistent data structure when they want one, to better interact with stowage, memoization, parallelism, and laziness.
 
-## Monadic Programming
+## Ephemeron Tables
 
-The [monad pattern](https://en.wikipedia.org/wiki/Monad_%28functional_programming%29) is convenient for explicit modeling of effects, exceptions, backtracking, lightweight APIs or DSLs, and multi-stage programs. However, this pattern requires syntactic support, lest it devolve into an illegible mess of deeply nested functions. Consider an editable projection with operator `;` for monadic command sequences:
+To model a system of variables in a purely functional system naively involves representing variable references as natural numbers, and variable state with a hashmap. Unfortunately, this naive approach swiftly encounters a performance problem: we cannot garbage-collect the variable state.
 
-        ; Cont == [Cont] cseq
-        X; Y; Z == X [Y;Z] cseq == X [Y [Z] cseq] cseq
+To solve this, it is feasible to support [ephemeron tables](https://en.wikipedia.org/wiki/Ephemeron) as an accelerated object with specialized type safety properties. Ephemeron tables should be value objects that accept requests to allocate, read, write, and perhaps compare opaque 'variables'. For more declarative styles, we might allocate associative variables 'between' other variables.
 
-This projection flattens the nesting, enabling a more direct expression of program logic. The command sequence combinator `cseq` binds our continuation `[Y;Z]` to the result of computing `X`. 
+However, variables references remain tied to the table in which they were initially allocated, or future versions via further allocations, writes, or copying. Attempting to use a variable reference with a different table should result in a type error (preferably static). Under this access restriction, it becomes safe to garbage-collect an entry in the table if all references to it are dropped.
 
-To complete our monad, we define `return` such that `return [Y] cseq` locally rewrites to `Y`. To fit Awelon's stack programming style, we return the implicit stack rather than an explicit value. This projection conveniently layers with *Named Local Variables*, such that `Z` may access variables defined at `X` or `Y`. Hence, we have convenient and near-conventional variable scoping with no extra effort.
+*Aside:* Ephemeron tables should also support efficient mutations, e.g. leveraging linearity where feasible. Linear ephemeron tables would allow Awelon to perform well for imperative or OOP models and simulations, while conveniently retaining a purely functional semantics.
 
-Awelon does not easily overload words. So, this projection conveniently supports only one monad. I propose a variant of the *operational monad*, which is adaptable and extensible through the operation type, and supports local definitions of effect handlers. See also [Operational Monad Tutorial](https://apfelmus.nfshost.com/articles/operational-monad.html) by Heinrich Apfelmus or [Free and Freer Monads](http://okmij.org/ftp/Computation/free-monad.html) by Oleg Kiselyov. The operational monad is sufficient for *all* monadic programming.
+## Pattern Matching
 
-We can model the operational monad by defining `yield` as our alternative to `return`. Before we yield, we place a representation of our request on the stack. The caller of the monad then receives this request together with a continuation. This provides an opportunity for interaction with the computation.
+Awelon does not have built-in support for pattern matching. However, it is feasible to model first-class patterns - and [parser combinators](https://en.wikipedia.org/wiki/Parser_combinator) in general - as simple compositions of first-class functions of type `source → (error + success)`. The error value could carry information about a partial match to improve efficiency of further efforts. 
+
+First-class patterns are expressive and extensible. The challenge is to develop some convenient and efficient projections that correspond to decomposing lists or records, handling variants, and support for pattern guards and active patterns. The weakness of first-class patterns is that we won't have much compiler optimization for pattern matching - we could only rely on partial evaluation or acceleration.
+
+*TODO:* Concrete examples, as they're developed.
+
+## Command Sequences
+
+A purely functional language can model interactive programs as functions that return either a command-continuation pair or a final result. The caller can interpret commands and provide results to the continuation, which is represents another interactive program. This creates an interaction loop. For interaction with the real-world, a runtime system can interpret a well defined API of commands.
+
+Command sequences are a lightweight projection to hide use of continuations and support imperative expression and procedural abstractions for interactive programs. A suitable projection is simple:
+
+        X ; Y ; Z == [X] [Y;Z] cseq == X [Y [Z] cseq] cseq
+
+Here, `cseq` must be the last operation within a subprogram for the projection to apply. We can understand `;` as a unary prefix operator (`; Y == [Y] cseq`), because `X` is untouched. For data plumbing between commands, I assume this projection is applied above *Named Local Variables*. Thus, variables 
+
+For procedural abstractions (including conditionals and loops), we assume any command `X` may transparently evaluate to a command sequence `X1 ; X2`. This requires *associativity*. That is, `X1 [X2] cseq [Y] cseq` must have the same observable behavior as `X1 [X2 [Y] cseq] cseq`. Further, the command sequence that merely returns its input should be an identity element, allowing abstraction of no-op behaviors. That is, `return;Y` and `Y;return` and `Y` should also share the same observable behavior.
+
+Performance is a critical concern. In context of procedural abstractions, it is not unusual to construct deep procedural "call stacks". For example, if `Z` calls `Y` calls `X` then our call stack might include `[X2] cseq [Y2] cseq [Z2] cseq`. A direct composition of continuations can reconstruct the call stack, such as `[X2 [Y2] cseq [Z2] cseq]`. However, this touches `[Z2]` for every operation in `X`, resulting in a cost per operation that is linear in call stack depth. This is very bad! Instead, we want constant-time overheads for continuation management. Thus, we should construct a continuation `[X2 [Y2 [Z2] cseq] cseq]`. Achieving this requires an intermediate representation.
+
+A minimum viable implementation:
 
         return = [none]
-        yield = [[null] some]
+        yield  = [[null] some]
         cseq = w [i] [w [cons] b b [some] b] if
 
-        Assuming:
+        Where:
             [L][R]none == L             none = w a d
             [L][R][X]some == [X]R       some = w b a d
             [C][L][R]if == [L][R]C      if = [] b b a i
             [F]i == F                   i = [] w a d
             [A][B]w == [B][A]           w = [] b a
 
-*Note:* In context of deep procedural abstractions and loops, we'll often have patterns like `yield [X] cseq [Y] cseq [Z] cseq`. In this implementation, we'd produce an intermediate list with `[Z]` at the head. The caller should fold this into a proper continuation `[X [Y [Z] cseq] cseq]`. The intermediate list is needed so we can move `[Z]` to the inner-most position, recovering the `[X;Y;Z]` projection and ensuring we don't touch `[Z]` again until we reach it.
+In this case, we assume a command is either `return` or `yield`, with the actual return value or command simply represented by the remainder of our stack. The intermediate representation for the continuation is a simple list. We would process this list to produce an efficient continuation. However, exposure of this list is an abstraction leak that may hinder acceleration or static safety analysis. A better implementation might directly encode a list fold into a yielded continuation constructor.
 
-Type safety of monadic programs is a significant concern. A viable solution: We can model an *effect type* as a record of function types. Each label like `"read"` or `"fork"` corresponds to a different effect. When we yield, we should have a static label at the top of our stack, followed by request parameters. Before we continue, the label and request parameters would be replaced by the corresponding response. A type checker with built-in knowledge of monadic command sequences could feasibly infer a partial effect type by observing yield and continuation types, or handlers. We may also explicitly assert a partial or complete type via annotation.
+In context of command sequence, we also have command models. A command model is a set of `yield` commands, each with with a type and documentation about intended consequences. Static safety analysis for command sequences would greatly benefit from a specialized extension that leverages static command labels like `"read"` vs `"fork"`. With this, a command model's type can be represented as a simple record type, albeit with a different header or annotation. 
 
-## Object Oriented Awelon
+*Note:* Command sequences can be understood as an free monad. However, I'm intentionally avoiding the monad abstraction or branding for Awelon, as it's historically been a tripping hazard for FP newcomers.
 
-It is not difficult to model functional objects via types similar to:
+## Constraint Logic Programming
 
-        type Object = Request → (Response * Object)
+Constraint and logic programming are convenient styles for some problems, albeit terribly inefficient for the general use case. We can leverage *Command Sequences* to interleave expression of a constraint model with processing into an acceptable return value. However, we'll need concurrency to mitigate our rigid sequence ordering. A preliminary command model:
 
-If we are unconcerned with static typing, this is almost sufficient. Requests and responses are just any message type. However, we might tweak this a little to model objects in a monadic environment.
-
-However, in context of static type analysis, we ideally want 'requests' to represent method calls and 'responses' to have a return type specific to the method call. Further, in the general case, methods may need a monadic effect. To represent this precisely requires dependent types. However, it's feasible to develop a simpler type model specialized for object interface types, very similar to the monadic effect types described at *Monadic Programming* (the main difference being that object interface methods may have monadic effect types). Also similarly to monadic effects, all method names will need to be available for static analysis.
-
-Assuming types are supported to our satisfaction, we can develop a few projections around method invocations and class constructors. 
-
-## Data Representation
-
-Assuming static typing is mature and robust, it is feasible to control data representations - e.g. to work with unboxed tuples and records and fixed-width numbers. This control could allow for more efficient computation and reduced memory pressure. However, developing Awelon's static type system to this extent, and developing compiler support for these representations, is a long-term project.
-
-Short term, we can achieve significant benefits at a fraction of the effort by focusing on accelerated computations over structured binary data. See *Accelerated Vector Processing*.
-
-## Multi-Stage Programming
-
-Multi-stage programming (MSP) is about explicit, robust control of *when* a compution occurs. This is useful for predictable performance. For Awelon, we can leverage annotations to express programmer intentions and assumptions. Consider paired annotations:
-
-        [A](step-foo) => [A]
-        [F](stage-foo) => [F]   iff [F] does not contain (step-foo)
-
-A step is complete when it has a value. A stage is complete when all steps in that stage are complete. These annotations allow us to describe our staging assumptions and assert that a stage should be complete, but do not directly implement any software patterns to simplify staging. We might additionaly leverage monadic programming or intermediate DSLs to support staging.
-
-For the more common case where we're only interested in runtime vs compile-time stages, we could use `[A](static) => [A]` to insist that a computation either completes at compile-time or only depends on static parameters.
-
-## Generic Programming
-
-Generic programming is about developing programs in terms of requirements, the deferral of non-essential detail. Awelon directly supports parametric polymorphism, which is a very limited form of generic programming. Advanced forms will require explicit modeling. Unfortunately, conventional approaches to advanced generic programming, such as multi-methods or typeclasses, are awkward in Awelon. 
-
-A viable solution involves monadic concurrent constraint systems. Constraints represent requirements, while the search space represents our options. The monad allows us to mix construction of a model with representation of requirements and a search space. Concurrency ameliorates the rigid ordering of monads.
-
-A preliminary API:
-
-        type CC v a -- our concurrent constraint monad
-        new     : CC v (v a)            -- unassigned
+        type CC v a -- concurrent constraints
+        new     : CC v (v a)
         write   : v a -> a -> CC v ()
         read    : v a -> CC v a
         fork    : CC v () -> CC v ()
+        amb     : CC v a -> CC v a -> CC v a
         fail    : CC v a
-        amb     : CC v a -> CC v a -> CC v a  
 
-        runCC   : forall v . CC v a -> Stream of a
+Single-assignment variables and fork support deterministic concurrency, allowing us to defer reads until information is available. The amb operator models a non-deterministic choice, and provides our search space. A computation may explicitly fail, indicating that requirements are not met. A computation will implicitly fail if it writes to an assigned variable, enters a datalock on read, or if a forked subcomputation fails. 
 
-In this API, our variables are deferred single-assignment. Reads will wait. This gives us nice declarative behavior and allows deterministic concurrency up to amb which represents explicit non-determinism. By default, we'll prioritize the first choice, but we could extend this API with explicit weights or scores. Failure is occurs if we attempt to write a variable twice, datalock upon reading a variable that is never assigned, or explicitly fail. Fork allows us to defer requirements testing and decisions, and also to represent concurrent behavior. To represent requirements, forks remain attached: if a fork fails, its parent also fails.
+Use of amb, fork, and single-assignment variables is quite expressive. For example, we can model a channel as a linked list with an unassigned variable at tail position. Writing a shared channel would involve amb to choose between writing vs reading the tail variable, iterating forward after read. The resulting channel would model all possible input permutations, including interactive ones between threads. Of course, searching all permutations is expensive. We could benefit from design patterns and command model extensions for guided search to hide irrelevant permutations.
 
-A common requirement for generic programming is a shared registry of resources, such as knowing all the multi-method instances or all the type-class instances. It is feasible, albeit awkward, to model such registries using choices and single-assignment variables. E.g. we can model a collection as a linked list with an unassigned 'tail' variable. To set a value, we can model a 'choice' of assignments: either we assign the first element, or (recursively) we assign a later element.
+        assoc   : v a -> v b -> CC v (v c)
+        cost    : Nat -> CC v ()
 
-Evaluation of the model is performed by some variation of `runCC`. This would be implemented as a pure function, and we can leverage annotations from *Multi-Stage Programming* to prevent escape of constraint variables. Unfortunately, acceleration is not feasible because there is no obviously 'correct' ordering for multiple solutions, and it's generally impossible to order by 'best' solutions. But a well designed evaluator could certainly analyze several solutions in parallel, and implement an intelligent search strategy.
+One extension that I find intriguing introduces associative variables for ad-hoc metadata, enabling an extensible dialog around a variable rather than within one. Another useful extension introduces a cost model so programmers may preferentially guide search towards a subset of solutions.
 
-In context of generic programming, final result type `a` represents a program. However, this entire approach - using constraint programming as a basis for generic programming - is mostly untested in practice (though there are some examples of it such as [SFINAE](https://en.wikipedia.org/wiki/Substitution_failure_is_not_an_error) for template metaprogramming in C++). In any case, I intend to try this and see how it works and whether any tweaks are needed to improve it.
+This command model will ultimately be interpreted by a pure function, perhaps of form `runCC : forall v . CC v a -> Stream of a`. Efficient implementation requires *Ephemeron Tables* to eliminate old variables as we evaluate. The order of results and efficiency of this computation will depend on search heuristics within `runCC`. Relevantly, we cannot observe race conditions between threads. We can parallelize the promising search paths, but the first solution computed is not necessarily the first reported.
+
+## Generic Programming
+
+Awelon directly supports [parametric polymorphism](https://en.wikipedia.org/wiki/Parametric_polymorphism), which serves as a simplistic form of [generic programming](https://en.wikipedia.org/wiki/Generic_programming). Together with *Multi Stage Programming* for static parameters, we could get quite far with parametric polymorphism. However, parametric polymorphism can be verbose and awkward for many use cases.
+
+*Constraint Logic Programming* offers an intriguing foundation for generic programming. Generic programming is essentially programming in terms of requirements, and constraints are as direct a representation of requirements as it's feasible to achieve without ad-hoc reflection. However, we would need to develop a layer above constraint programming to easily track shared registries and component metadata.
 
 ## High Performance Computing
 
@@ -491,23 +517,24 @@ However, one especially important consideration is our ability to register some 
 
 [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) model deterministic, distributed computation. KPNs are excellent for event stream processing, task parallelism, and cloud computing. KPNs are monotonic, so it's feasible to interactively add input and extract output while the computation is ongoing in the background. 
 
-A KPN process could be developed against a monadic API. Here, we use second-class port and process names instead of first-class channels and processes in order to simplify connectivity and abstraction.
+A KPN process could be developed against a command model. Here, we use second-class port and process names instead of first-class channels and processes in order to simplify connectivity and abstraction.
 
+        type KPN a -- command model for KPNs
         read : Port -> KPN Msg
         write : Port -> Msg -> KPN ()
         wire : Port -> Port -> (Msg -> Msg) -> KPN ()
         fork : ProcName -> KPN () -> KPN ()
         type Port = Outer PortName | Inner (ProcName * PortName)
 
-We can fork child processes and declaratively wire inputs to outputs. The process may monadically read or write ports that haven't been wired. In classic KPNs, read is the synchronous operation: it waits for data if none is available. We could extend this API with bounded buffers (so writes can wait), logical time (so reads can time out), and perhaps logical copy and drop of ports (for performance).
+We can fork child processes and declaratively wire inputs to outputs. The process may read or write ports that haven't been wired. In classic KPNs, read is the synchronous operation: it waits for data if none is available. We could extend this API with bounded buffers (so writes can wait), logical time (so reads can time out), and perhaps logical copy and drop of ports (for performance).
 
-When we're done describing our KPN, we implement an accelerated object to "run" the KPN. The API for this might be simple like `runKPN : KPN () -> Object` (cf *Accelerated Vector Processing*). This object should accept read and write requests for the external KPN ports, enabling pure code to interact with a deterministic process network computing in the background. The accelerated implementation can leverage threads and shared queues with in-place mutations, insofar as linearity is respected (cf *Arrays and In-Place Mutation*).
+When we're done describing our KPN, we implement an accelerated object to "run" the KPN. The API for this might be simple like `runKPN : KPN () -> Object` (cf *Accelerated Vector Processing*). This object should accept read and write requests for the outer KPN ports, enabling pure code to interact with a deterministic process network computing in the background. The accelerated implementation can leverage threads and shared queues with in-place mutations, insofar as linearity is respected (cf *Arrays and In-Place Mutation*).
 
-A significant challenge for KPNs is developing an adequate static safety analysis. Ideally, we want distinct message types per port, to statically forbid reading and writing of wired ports, and perhaps some variation on session types to ensure interactions won't get stuck. Like monadic effects and object interface types, this could benefit from specialized annotations and type descriptors. Minimally, we could tag KPN process descriptions with `(kpn)`. 
+A significant challenge for KPNs is developing an adequate static safety analysis. Ideally, we want distinct message types per port, to statically forbid reading and writing of wired ports, and perhaps some variation on session types to ensure interactions won't get stuck. Like command models and object interface types, this could benefit from specialized annotations and type descriptors. Minimally, we could tag KPN process descriptions with `(kpn)`. 
 
 ## Bots, Effects, and Applications
 
-Awelon applications are modeled as bots that publish an interface to the user.
+Awelon applications are modeled as bots that publish projections to users.
 
 ### Bot Definition
 
@@ -518,22 +545,22 @@ Process coordination is implicit: Deterministic repetition of a read-only or fai
 Preliminary API in pseudo-Haskell:
 
         type DebugName = String -- for debugging!
-        type TX v e a -- opaque, monadic
+        type TX v e a -- command model for bots
         type Env v = ... -- model of host system
         type Bot = forall v e a . Env v -> TX v e a
         type EQ a = a -> a -> Bool -- conservative equality
 
-        new     : DebugName -> a -> TX v e (v a)
-        read    : v a -> TX v e a
-        write   : v a -> a -> TX v e ()
-        delete  : v a -> TX v e ()
+        new     : DebugName -> TX v e (v a)
+        assoc   : v a -> v b -> TX v e (v c)
+        read    : v a -> TX v e (Maybe a)
+        write   : v a -> (Maybe a) -> TX v e ()
         try     : TX v e a -> TX v e' (Either e a)
         abort   : e -> TX v e a
         fork    : DebugName -> TX v e a -> TX v e' ()
 
-I assume the monadic API is manipulated through a suitable projection so isn't too different from conventional imperative programming. We can manipulate variables via imperative `read` and `write` operations. The `new` operation creates fresh variables. A `delete` operator could support explicit memory management. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `abort` value may carry ad-hoc information about why the transaction failed. The `try` operation only handles `abort`; it would not catch a type error, for example.
+We would construct *Command Sequences* that perform these operations. We can manipulate variables via `read` and `write` operations. The `new` operation creates fresh unassigned variables, while `assoc` supports declarative, associative variables for modeling relationships. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `abort` value may carry ad-hoc information about why the transaction failed. The `try` operation only handles `abort` - it would not catch a runtime type error or reading an unassigned variable.
 
-The `fork` operation specifies a 'one-off' operation to attempt in unspecified order upon commit. This is intended for use in read-fork patterns, where the operation may be repeated until a variable observed by the parent transaction changes. With recursive use of read-fork, we can form a tree with read-write loops at the leaves, expand a single bot into multiple component bots. This supports task-concurrency, multi-stage programming, and convenient packaging of behaviors. (If used from a read-write transaction, we can simply reject the transaction.)
+The `fork` operation specifies a 'one-off' operation to attempt in unspecified order upon commit. This is intended for use in read-fork patterns, where the operation may be repeated until a variable observed by the parent transaction changes. With recursive use of read-fork, we can form a tree with read-write loops at the leaves, expand a single bot into multiple component bots. This supports task-concurrency, multi-stage programming, and convenient packaging of behaviors. Use of assoc is convenient for declaration of variables from a read-fork transaction. *Note:* If fork is used from a read-write transaction, I propose to abort the transaction and warn the programmer.
 
 Bots are installed by simply defining `app-*` words in the dictionary. This ensures that the set of active behaviors in an Awelon system is easily discovered, managed, and extended. In the general case, we can modify bot definitions at runtime, which supports live programming, continuous deployment, and system administration. 
 
@@ -545,9 +572,11 @@ Effects, such as network access, are achieved through manipulation of specific e
 
 A typical environment might support network access, a pseudo-filesystem or database, reflection over the dictionary, a shared registry so bots can publish 'services' for other bots, and so on. Application state - anything that should survive transactions - must be recorded in this environment. We don't have true 'private' state per se because that would hinder ad-hoc extension, auditing, and debugging. Instead, we partition a 'home' directory from a pseudo-filesystem for each bot, and optionally use security patterns to restrict distrusted bots.
 
-For performance and maintenance reasons, this environment is mostly *ephemeral*. That is, we can logically or physically 'reset' the system to use a fresh, new `forall v. Env v` environment. This improves performance insofar as it allows us to work with variables containing linear, lazy, or parallel values. This simplifies maintenance by providing a convenient worst-case recovery from "bad states" produced by buggy bots. A subset of variables may be backed by durable storage, rather like a memory-mapped file. Reflective writes to the dictionary, certain volumes of the filesystem, etc. could survive resets. To preserve performance, synchronizing to disk should be modeled as an explicit request rather than implicit upon commit.
+For performance and maintenance reasons, this environment is *ephemeral*. That is, we may logically or physically 'reset' the system to use a fresh `forall v. Env v` environment. Assuming variables are ephemeral avoids costs related to serialization, and allows us to preserve nice properties like linear references or parallel background computation. Further, resetting is a convenient administrative solution to entering a bad state that wasn't caught by aborting a transaction.
 
-Security is a relevant concern. Fortunately, the `forall v` constraint provides strong [capability security](https://en.wikipedia.org/wiki/Capability-based_security) for bot definitions: a bot is limited to the provided environment. This can be statically enforced if we represent references as `[ref-debugname1123]` then statically reject `ref-*` words within the dictionary. We need this serializable representation for references in context of stowage, memoization, reflection, debugging, and distributed computation. If necessary for stronger protections, we could add an HMAC to the references and modify the API with built-in channels and read-only vs write-only facets.
+Of course, some parts of the environment may *reflect* over durable storage, similar to how writes over a memory-mapped file are durably backed. In these cases, we might model synchronization to durable storage as a separate request.
+
+Security is a relevant concern. Fortunately, the `forall v` constraint supports strong [capability security](https://en.wikipedia.org/wiki/Capability-based_security) for bot definitions: a bot is limited to the provided environment, and thus may easily be confined or sandboxed by simply wrapping the bot to intercept the environment. Type safety can be enforced using the same mechanisms as *Ephemeron Tables*. 
 
 ### Time Dependent Behavior
 
