@@ -333,7 +333,7 @@ We can implement let and lambda expressions as an editable projection.
 
 Consider a lightweight syntax where `\x` indicates we "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current definition or block (modulo shadowing). Thus `[\x EXPR]` serves the same role as `(λx.EXPR)`, while `[X] \x BODY` serves the same role as `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
 
-        \x EXPR == (var-x) T(x,EXPR) 
+        \x EXPR == (let-x) T(x,EXPR) 
           assuming `x` represents a value
         
         T(x,E) | E does not contain x       == d E
@@ -344,27 +344,17 @@ Consider a lightweight syntax where `\x` indicates we "pop" a value from the sta
             | only G contains x             == [F] a T(x,G)
             | F and G contain x             == c [T(x,F)] a T(x,G)
 
-This projection is robust and independent of user definitions. 
+This projection is robust and independent of user definitions.
 
 Unfortunately, it is not optimal for conditional behaviors where use of a variable in an if-then block would result in closures. This could eventually be solved by a more cohesive projection with built-in knowledge of common conditionals. Meanwhile, we should optimize by hand.
 
-Despite caveats, local variables are a convenient projection in cases where tacit programming becomes a mess of data-shuffling, or for larger programs where the user will have difficulty tracking the stack.
-
-*Aside:* If we want explicit `let` or `where` clauses, we could feasibly develop further projections over structures such as `[\x EXPR] [X] where`, starting from lambdas. 
+Despite caveats, local variables are a convenient projection in cases where tacit programming becomes a mess of closures or data-shuffling, or for larger programs where a user might have difficulty tracking the stack.
 
 ### Namespaces
 
-It is not difficult to recognize comments declaring qualified namespaces.
+It is trivial for a projection to support qualified namespaces, i.e. such that we declare `lp` to represent `long-prefix` for the remainder of a program. However, I don't recommend this! Namespace declarations too easily become boiler-plate overhead and an implicit, inconsistent context. 
 
-        using long-prefix as lp; lp-foo
-            becomes
-        "using long-prefix as lp"(a2)d long-prefix-foo
-
-However, I don't recommend this! Namespace declarations in code too easily become a form of boiler-plate (especially for one-liner functions). They also interact awkwardly with copy-paste. Further, namespaces fixated in code don't allow for much user customization.
-
-Instead, I propose to move namespaces to the editor layer: an editor can track a user's set of preferred nicknames together with other user-model data like a clipboard. Users can manage this set, perhaps switch between packages based on current project. It's up to each user and the editor's feature set. Further, it blends nicely into richer views - namespaces are essentially a very limited form of user-defined, pluggable view.
-
-*Aside:* I'm interested in use of color as an alternative to prefixes, e.g. such that `html-div` is written in a different color from `math-div`. This would give us a more concise notation.
+Instead, I propose to move namespaces to the editor layer. A projectional editor could be configured with a package of nicknames at the scope of a session, project, or user. This projection would offer a consistent view without the boiler-plate. Where necessary, we could model first-class namespaces as objects or records (see below).
 
 ## Object Oriented Awelon
 
@@ -376,7 +366,7 @@ It's just a function, albeit often with a fixpoint closure for stateful objects.
 
 However, in context of static type safety, we usually want the response to depend on the request. This can be achieved by dependent types. But dependent types are more sophisticated than I would prefer to deal with in many cases. An alternative is to specialize type analysis for a `Request` model where requests include static method labels like `"draw-to-canvas"` as the top element on the stack. This essentially supports a 'lightweight' dependent type system where we only depend on static information.
 
-Beyond type safety, we mostly need projections common object invocation and constructor patterns. This would easily build upon the static method labels, e.g. with `!draw-to-canvas` representing a method call to the object on the top of our stack, or `x!draw-to-canvas` representing a linear method call in context of *Named Local Variables* (a convenient equivalent to `x !draw-to-canvas \x`). 
+Beyond type safety, we mostly need projections common object invocation and constructor patterns. This would easily build upon the static method labels, e.g. with `!draw-to-canvas` representing a method call to the object on the top of our stack, or `x!draw-to-canvas` representing a linear method invocation in context of *Named Local Variables* (a convenient equivalent to `x !draw-to-canvas \x`).
 
 Between fixpoint closures, lightweight dependent types, projections, and accelerators, Awelon can support most object-oriented patterns. We can further introduce *Command Sequences* to model shared objects, and objects that could interact with a network or other external device. 
 
@@ -384,17 +374,17 @@ Intriguingly, an `[Object]` can support *Projectional Editing* at two layers. Fi
 
 ## Labeled Data
 
-Labeled data types, such as records and variants, are a staple of conventional programming languages. I've frequently contemplated built-in support for labeled data in Awelon. However, projections and accelerators should be adequate to the task without requiring new primitives.
+Labeled data types, such as records and variants (aka tagged unions) are a staple of conventional programming languages. I've frequently contemplated built-in support for labeled data in Awelon. However, projections and accelerators should be adequate to the task without requiring new primitives.
 
-Rather than a concrete trie or association list, I propose to model records as specialized objects that accept a specialized request. For example, we could use a model of the form:
+I propose to model records as accelerated objects. Concretely, we could represent a record as a function with a constructor of form:
 
-        [[A] "a" rset "b" [B] rset ...](rec)
+        [[A] "a" rset [B] "b" rset [C] "c" rset](rec)
 
-In this case, `rset` might be modeled a function that takes *three* arguments: a label-value pair `"a"` and `[A]`, followed by the request. The request will generally contain a fresh record and the label we're searching for or replacing. Each `rset` operation would handle and modify the request, so our final output is a modified form of the initial request, containing a copy of the record, less the extracted element (if any). A lightweight textual projection could render `"a" rset` as `:a` or similar. The `(rec)` annotation would provide hints for static typing and accelerated representation.
+Here `rset` would be a function that receives a label-value pair and a simple request, then outputs a modified record and perhaps an additional result. The semantics of records would be primarily determined by the `rset` definition. A projection could easily rewrite `"a" rset` to `:a` or similar. The final `(rec)` annotation would allow acceleration of this object, and perhaps a specialized type analysis.
 
-Labeled variants are functions that extract and apply a 'handler' from a record. So this might be represented as `[[A] "a" case]` with `case` selecting the handler.
+The Church-encoded sum type is essentially `type (A + B) = ∀r. (((A → r) * (B → r)) → r)`. That is, a sum is modeled by a function that receives a pair of handlers and picks one. Following this example, a labeled variant should receive a *record* of handlers and pick one. This might be concretely represented as something like `[[A] "a" case]`.
 
-Importantly, by avoiding use of a trie, association list, or other concrete representation, we greatly simplify reasoning about the observable properties of our record, which optimizations an accelerator may perform (such as reordering of labels) without affecting observable behavior, and our ability to abstract or compose records.
+Importantly, by using opaque objects instead of a concrete representation like a trie or association list, we can precisely control which properties of a record or variant are observable. This is convenient for acceleration, which must preserve observable behavior. With a sufficient level of acceleration, and a few simple projections, we could treat records and variants as a built-in feature of Awelon.
 
 ## Arrays and In-Place Mutation
 
@@ -410,33 +400,23 @@ Support for in-place mutation of arrays would be valuable for a variety of data 
 
 To model a system of variables in a purely functional system naively involves representing variable references as natural numbers, and variable state with a hashmap. Unfortunately, this naive approach swiftly encounters a performance problem: we cannot garbage-collect the variable state.
 
-To solve this, it is feasible to support [ephemeron tables](https://en.wikipedia.org/wiki/Ephemeron) as an accelerated object with specialized type safety properties. Ephemeron tables should be value objects that accept requests to allocate, read, write, and perhaps compare opaque 'variables'. For more declarative styles, we might allocate associative variables 'between' other variables.
+To solve this, it is feasible to support [ephemeron tables](https://en.wikipedia.org/wiki/Ephemeron) as an accelerated object with specialized type safety properties. Ephemeron tables would be value objects that accept requests to allocate, read, write, and compare opaque 'variables'. Further, we must constrain variable references for use with the tables in which they were allocated (or future versions thereof). This is vaguely similar to substructural or uniqueness typing, but I'm uncertain how to formalize it. 
 
-However, variables references remain tied to the table in which they were initially allocated, or future versions via further allocations, writes, or copying. Attempting to use a variable reference with a different table should result in a type error (preferably static). Under this access restriction, it becomes safe to garbage-collect an entry in the table if all references to it are dropped.
-
-*Aside:* Ephemeron tables should also support efficient mutations, e.g. leveraging linearity where feasible. Linear ephemeron tables would allow Awelon to perform well for imperative or OOP models and simulations, while conveniently retaining a purely functional semantics.
-
-## Pattern Matching
-
-Awelon does not have built-in support for pattern matching. However, it is feasible to model first-class patterns - and [parser combinators](https://en.wikipedia.org/wiki/Parser_combinator) in general - as simple compositions of first-class functions of type `source → (error + success)`. The error value could carry information about a partial match to improve efficiency of further efforts. 
-
-First-class patterns are expressive and extensible. The challenge is to develop some convenient and efficient projections that correspond to decomposing lists or records, handling variants, and support for pattern guards and active patterns. The weakness of first-class patterns is that we won't have much compiler optimization for pattern matching - we could only rely on partial evaluation or acceleration.
-
-*TODO:* Concrete examples, as they're developed.
+Between opaque structure and reference constraints, we can garbage collect variable state associated with references which have been dropped. Further, linear ephemeron tables could also support in-place mutation, like arrays. Between these properties, ephemeron tables could easily support single-threaded imperative algorithms or OOP.
 
 ## Command Sequences
 
-A purely functional language can model interactive programs as functions that return either a command-continuation pair or a final result. The caller can interpret commands and provide results to the continuation, which is represents another interactive program. This creates an interaction loop. For interaction with the real-world, a runtime system can interpret a well defined API of commands.
+A purely functional language can model interactive programs as functions that return either a command-continuation pair or a final result. The caller can interpret commands and provide results to the continuation, which is represents another interactive program. This creates an interaction loop. For interaction with the real-world, a runtime system will interpret a command model as an API.
 
 Command sequences are a lightweight projection to hide use of continuations and support imperative expression and procedural abstractions for interactive programs. A suitable projection is simple:
 
         X ; Y ; Z == [X] [Y;Z] cseq == X [Y [Z] cseq] cseq
 
-Here, `cseq` must be the last operation within a subprogram for the projection to apply. We can understand `;` as a unary prefix operator (`; Y == [Y] cseq`), because `X` is untouched. For data plumbing between commands, I assume this projection is applied above *Named Local Variables*. Thus, variables 
+Here, `cseq` must be the last operation within a subprogram for the projection to apply. We can understand `;` as a unary prefix operator (`; Y == [Y] cseq`), because `X` is untouched. For data plumbing between commands, I assume this projection is applied above *Named Local Variables*. Thus, variables defined in `X` are visible to `Y` or `Z`. 
 
-For procedural abstractions (including conditionals and loops), we assume any command `X` may transparently evaluate to a command sequence `X1 ; X2`. This requires *associativity*. That is, `X1 [X2] cseq [Y] cseq` must have the same observable behavior as `X1 [X2 [Y] cseq] cseq`. Further, the command sequence that merely returns its input should be an identity element, allowing abstraction of no-op behaviors. That is, `return;Y` and `Y;return` and `Y` should also share the same observable behavior.
+For procedural abstractions (including conditionals and loops), we must assume any command `X` may evaluate to a command sequence `X1 ; X2`. This requires *associativity*. That is, `X1 [X2] cseq [Y] cseq` must have the same observable behavior as `X1 [X2 [Y] cseq] cseq`. Further, we benefit from an *identity* element `return` such that `return;X` or `X;return` have the same observable behavior as `X`. This allows pure computations to be flexibly included in command sequences.
 
-Performance is a critical concern. In context of procedural abstractions, it is not unusual to construct deep procedural "call stacks". For example, if `Z` calls `Y` calls `X` then our call stack might include `[X2] cseq [Y2] cseq [Z2] cseq`. A direct composition of continuations can reconstruct the call stack, such as `[X2 [Y2] cseq [Z2] cseq]`. However, this touches `[Z2]` for every operation in `X`, resulting in a cost per operation that is linear in call stack depth. This is very bad! Instead, we want constant-time overheads for continuation management. Thus, we should construct a continuation `[X2 [Y2 [Z2] cseq] cseq]`. Achieving this requires an intermediate representation.
+Performance is a critical concern. In context of procedural abstractions, it is not unusual to construct deep procedural "call stacks". For example, if `Z` calls `Y` calls `X` then our call stack might include `[X2] cseq [Y2] cseq [Z2] cseq`. A direct composition of continuations can reconstruct the call stack, such as `[X2 [Y2] cseq [Z2] cseq]`. However, this touches `[Z2]` for every operation in `X`, resulting in a cost per operation that is linear in call stack depth. This is very bad! Instead, we want constant-time overheads for continuation management. Thus, we should construct a continuation `[X2 [Y2 [Z2] cseq] cseq]`. Achieving this requires an intermediate representation. Further, for partial evaluation it's convenient if we can locally collapse `return;` sequences.
 
 A minimum viable implementation:
 
@@ -457,6 +437,14 @@ In context of command sequence, we also have command models. A command model is 
 
 *Note:* Command sequences can be understood as an free monad. However, I'm intentionally avoiding the monad abstraction or branding for Awelon, as it's historically been a tripping hazard for FP newcomers.
 
+## Pattern Matching
+
+Awelon does not have built-in support for pattern matching. However, it is feasible to model first-class patterns - and [parser combinators](https://en.wikipedia.org/wiki/Parser_combinator) in general - as simple compositions of first-class functions of type `source → (error + success)`, perhaps modeled via command sequences that simply yield on error but might permit a `try : Match e a -> Match e' (e + a)` behavior. 
+
+First-class patterns are expressive and extensible. The challenge is to develop some convenient and efficient projections that correspond to common match behaviors, working with lists and records, handling variants, and support for pattern guards and active patterns. The weakness of first-class patterns is that we won't have much compiler support to optimize pattern matching, beyond what we can achieve by partial evaluation and conventional function optimizations.
+
+*TODO:* Concrete examples, as they're developed.
+
 ## Constraint Logic Programming
 
 Constraint and logic programming are convenient styles for some problems, albeit terribly inefficient for the general use case. We can leverage *Command Sequences* to interleave expression of a constraint model with processing into an acceptable return value. However, we'll need concurrency to mitigate our rigid sequence ordering. A preliminary command model:
@@ -471,14 +459,11 @@ Constraint and logic programming are convenient styles for some problems, albeit
 
 Single-assignment variables and fork support deterministic concurrency, allowing us to defer reads until information is available. The amb operator models a non-deterministic choice, and provides our search space. A computation may explicitly fail, indicating that requirements are not met. A computation will implicitly fail if it writes to an assigned variable, enters a datalock on read, or if a forked subcomputation fails. 
 
-Use of amb, fork, and single-assignment variables is quite expressive. For example, we can model a channel as a linked list with an unassigned variable at tail position. Writing a shared channel would involve amb to choose between writing vs reading the tail variable, iterating forward after read. The resulting channel would model all possible input permutations, including interactive ones between threads. Of course, searching all permutations is expensive. We could benefit from design patterns and command model extensions for guided search to hide irrelevant permutations.
+Use of amb, fork, and single-assignment variables is quite expressive. For example, we can model a channel as a linked list with an unassigned variable at tail position. Writing a shared channel would involve amb to choose between writing vs reading the tail variable, iterating forward after read. The resulting channel would model all possible input permutations, including interactive ones between threads. 
 
-        assoc   : v a -> v b -> CC v (v c)
-        cost    : Nat -> CC v ()
+Searching all permutations is too expensive. Performance would benefit from design patterns and command model extensions that guide search or swiftly eliminate irrelevant search. For example, we could introduce `cost : Nat -> CC v a` command to focus search on low-cost solutions, or `assoc : v a -> Label -> CC v (v b)` to support permutation-independent labels and extensible metadata when computing a variable. 
 
-One extension that I find intriguing introduces associative variables for ad-hoc metadata, enabling an extensible dialog around a variable rather than within one. Another useful extension introduces a cost model so programmers may preferentially guide search towards a subset of solutions.
-
-This command model will ultimately be interpreted by a pure function, perhaps of form `runCC : forall v . CC v a -> Stream of a`. Efficient implementation requires *Ephemeron Tables* to eliminate old variables as we evaluate. The order of results and efficiency of this computation will depend on search heuristics within `runCC`. Relevantly, we cannot observe race conditions between threads. We can parallelize the promising search paths, but the first solution computed is not necessarily the first reported.
+A constraint-logic command model will ultimately be interpreted, perhaps by a function of form `runCC : forall v . CC v a -> Stream of a`. Efficient implementation would benefit from *Ephemeron Tables* to erase intermediate states produced during evaluation. The order of results and efficiency of this computation will depend on search heuristics within `runCC`. Relevantly, we cannot observe race conditions between forked threads. 
 
 ## Generic Programming
 
@@ -550,15 +535,14 @@ Preliminary API in pseudo-Haskell:
         type Bot = forall v e a . Env v -> TX v e a
         type EQ a = a -> a -> Bool -- conservative equality
 
-        new     : DebugName -> TX v e (v a)
-        assoc   : v a -> v b -> TX v e (v c)
-        read    : v a -> TX v e (Maybe a)
-        write   : v a -> (Maybe a) -> TX v e ()
+        new     : DebugName -> a -> TX v e (v a)
+        read    : v a -> TX v e a
+        write   : v a -> a -> TX v e ()
         try     : TX v e a -> TX v e' (Either e a)
         abort   : e -> TX v e a
         fork    : DebugName -> TX v e a -> TX v e' ()
 
-We would construct *Command Sequences* that perform these operations. We can manipulate variables via `read` and `write` operations. The `new` operation creates fresh unassigned variables, while `assoc` supports declarative, associative variables for modeling relationships. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `abort` value may carry ad-hoc information about why the transaction failed. The `try` operation only handles `abort` - it would not catch a runtime type error or reading an unassigned variable.
+We will construct *Command Sequences* to abstract these operations. The initial `forall v . Env v` provides a set of variables. We can manipulate variables via `read` and `write` operations. The `new` operation creates fresh unassigned variables. The `try` and `abort` operations support hierarchical transactions with strong exception safety, which simplifies partial failure and graceful degradation. The `abort` value may carry ad-hoc information about why the transaction failed. The `try` operation only handles `abort` - it would not catch a runtime type error or reading an unassigned variable.
 
 The `fork` operation specifies a 'one-off' operation to attempt in unspecified order upon commit. This is intended for use in read-fork patterns, where the operation may be repeated until a variable observed by the parent transaction changes. With recursive use of read-fork, we can form a tree with read-write loops at the leaves, expand a single bot into multiple component bots. This supports task-concurrency, multi-stage programming, and convenient packaging of behaviors. Use of assoc is convenient for declaration of variables from a read-fork transaction. *Note:* If fork is used from a read-write transaction, I propose to abort the transaction and warn the programmer.
 
@@ -570,25 +554,15 @@ Bots operate upon a collection of environment variables, `forall v . Env v`.
 
 Effects, such as network access, are achieved through manipulation of specific environment variables. For example, the environment may include a system task queue. After the write is committed, the system may process the request. A response is written back into the environment - a location would usually be specified in the request. This would be accessed by a future bot transaction. Hence, effects are always asynchronous.
 
-A typical environment might support network access, a pseudo-filesystem or database, reflection over the dictionary, a shared registry so bots can publish 'services' for other bots, and so on. Application state - anything that should survive transactions - must be recorded in this environment. We don't have true 'private' state per se because that would hinder ad-hoc extension, auditing, and debugging. Instead, we partition a 'home' directory from a pseudo-filesystem for each bot, and optionally use security patterns to restrict distrusted bots.
+A typical environment might support network access, a pseudo-filesystem or database, a time service to defer simple operations, reflection over the dictionary, a shared registry so bots can publish 'services' for other bots, and so on. Any state that should survive a transaction should be written to this environment.
 
-For performance and maintenance reasons, this environment is *ephemeral*. That is, we may logically or physically 'reset' the system to use a fresh `forall v. Env v` environment. Assuming variables are ephemeral avoids costs related to serialization, and allows us to preserve nice properties like linear references or parallel background computation. Further, resetting is a convenient administrative solution to entering a bad state that wasn't caught by aborting a transaction.
+By default, variables are ephemeral, not durable. A subset of variables may be backed by a durable store, e.g. our pseudo-filesystem or database variables, similar to memory-mapped files. For those cases, we could support explicit synch requests to ensure writes are committed. There are significant performance benefits when we defer serialization - i.e. we preserve accelerated representations, parallelism, linearity. We benefit from batched updates, and we avoid serializing intermediate states. Further, an ephemeral environment can safely be 'reset' after it enters a bad state.
 
-Of course, some parts of the environment may *reflect* over durable storage, similar to how writes over a memory-mapped file are durably backed. In these cases, we might model synchronization to durable storage as a separate request.
-
-Security is a relevant concern. Fortunately, the `forall v` constraint supports strong [capability security](https://en.wikipedia.org/wiki/Capability-based_security) for bot definitions: a bot is limited to the provided environment, and thus may easily be confined or sandboxed by simply wrapping the bot to intercept the environment. Type safety can be enforced using the same mechanisms as *Ephemeron Tables*. 
-
-### Time Dependent Behavior
-
-Assume we have a current time environment variable that contains a timestamp. Logically, we have a system clock that is blindly writing this variable. In concrete terms, it might be lazily computed when read. Either conflict analysis must be precise for blind writes, or we must simplify analysis by sharing the timestamp for concurrent transactions.
-
-Interaction between a system clock and transaction-based process control can be awkward. To avoid a busy wait loop, we must not read time as part of a 'stable' transaction. A read-fork transaction must not read system time. A read-abort behavior should abort *before* reading current time to avoid immediate retry. Developers must work with time like any other variable having a high rate of change.
-
-Waiting on time is a common requirement. Although we have transactional process control, that doesn't work for external network resources or human interactions. To wait for time, my idea is to write a future value to the current time variable. This would cause the transaction to wait until at least the specified time before committing. Thus, we can represent timeouts or network polling.
+All `app-*` root bots will initially receive the same global environment. This greatly simplifies extension and auditing of system behavior. However, we can leverage patterns to sandbox distrusted bot behavior and restrict direct access to the environment. In practice, bot behaviors should be developed against extended command models and restricted environments which we indirectly configure and interpret to the `forall v . Env v -> TX v e a` model. (This would transitively apply to forked behaviors.)
 
 ### User Interfaces
 
-In general, bots may add some 'services' to a shared registry. Some of these services would be intended for other bots, but we would also register services that the user will interact with to obtain a projection over the environment. This supports tight integration between a projection and bot-created variables, active interfaces with notifications, and a simple security model insofar as administrators constrain bots and bots constrain lesser users.
+In general, bots may add some 'services' to a shared registry. Some of these services would be intended for other bots (as a plug-in pattern), but we would also register services that the user will interact with to obtain a projection over the environment. This supports tight integration between a projection and bot-created variables, active interfaces with notifications, and a simple security model insofar as administrators constrain bots and bots constrain lesser users.
 
 Users will be able to interact with multiple projections, e.g. across multiple widgets or windows. These projections may be provided by multiple different bots. However, they should all use the same transaction. That is, users should be able to perform updates in multiple windows then 'commit' them all together. Further, even before committing, every time we perform an edit we should be able to reactively observe the change in every other window that depends on the modified variables. This supports lightweight, robust extension of user interfaces with alternative views, controllers, macros, etc. by adding new bots. It also simplifies debugging - a debugger interface is essentially just another UI extension.
 

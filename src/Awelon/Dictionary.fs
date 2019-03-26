@@ -119,24 +119,40 @@ module Dict =
             loop (ix + 1)
         loop 0
 
-    // adds contextual prefix to compute entries in dictionary
-    let rec private toSeqEntP (p:Prefix) (d:Dict) : seq<DictEnt> =
-        let spd = 
-            match d.pd with
-            | None -> Seq.empty
-            | Some dir -> Seq.singleton (Direct(p,dir))
-        let svu =
-            match d.vu with
-            | None -> Seq.empty
-            | Some du -> Seq.singleton (Define(p,du))
-        let sc (ix,struct(p',c)) = toSeqEntP (joinBytes p ix p') c
-        let scs = Seq.concat (Seq.map sc (Map.toSeq (d.cs)))
-        Seq.append spd (Seq.append svu scs)
-    
-    /// Translate a dictionary to a sequence of local entries. This
-    /// has a moderate overhead to reconstruct symbols and prefixes.
+    module private SeqEnt =
+        // For Seq.unfold with entries
+
+        type PT = (struct(Prefix * Dict))
+        type SS = PT list
+        let rec step (ss0:SS) : (DictEnt * SS) option =
+            match ss0 with
+            | (struct(p,d)::ssRem) -> 
+                match d.pd with
+                | Some dir ->
+                    let ss' = 
+                        let bDone = Option.isNone (d.vu) && Map.isEmpty (d.cs)
+                        if bDone then ssRem else
+                        struct(p, { d with pd = None }) :: ssRem
+                    Some (Direct(p,dir), ss')
+                | None ->
+                    match d.vu with
+                    | Some du ->
+                        let ss' = 
+                            let bDone = Map.isEmpty (d.cs) 
+                            if bDone then ssRem else
+                            struct(p, { d with vu = None }) :: ssRem
+                        Some (Define(p,du), ss')
+                    | None ->
+                        let onChild ix (struct(cp,c)) ss' =
+                            let p' = joinBytes p ix cp
+                            (struct(p',c))::ss'
+                        let ss' = Map.foldBack onChild (d.cs) ssRem
+                        step ss'
+            | [] -> None
+
+    /// Translate a dictionary to a sequence of local entries.
     let toSeqEnt (d:Dict) : seq<DictEnt> = 
-        Seq.delay (fun () -> toSeqEntP (BS.empty) d)
+        Seq.unfold (SeqEnt.step) (struct(BS.empty,d)::[])
 
     let inline mkDict pd vu cs = { pd = pd; vu = vu; cs = cs }
 
@@ -190,7 +206,7 @@ module Dict =
 
     /// Test for obviously empty dictionary - no entries. This does
     /// not recognize whether a dictionary is empty due to pending
-    /// deletions. For that, favor isEmpty'.
+    /// deletions. For that, use isEmpty'.
     let isEmpty (d:Dict) : bool =
         (Map.isEmpty (d.cs) && Option.isNone (d.vu) && Option.isNone (d.pd))
 
@@ -402,81 +418,52 @@ module Dict =
     let inline selectPrefix (p:Prefix) (d:Dict) : Dict = 
         prependPrefix p (extractPrefix p d)
 
-    // A naive ordering of words will sort `f60` before `f7`. Ideally,
-    // when displaying a list of words, we should respect numeric order
-    // in an absolute sense.
-    //
-    // This would be trivial if we 
-    //
-    // Further, I may wish to split a dictionary based on a key, rather
-    // than on prefix. In this case, I should also respect numeric order
-    // such that `a6` is to left of `a50` while `a499` is to the right.
-    //
-    // I may also want to find the 'largest' number, i.e. find `499`
-    // as fast as possible. 
-    //
-    // Numbers would be easy to work with if we add a size prefix. But
-    // I'd rather avoid affecting the dict or key structures.
-    module private NatSort =
-        
-        // The 
-
-        // should we organize 
-
-
-        // count digits in a key
-        let inline isDigit c = ((byte '9') >= c) && (c >= (byte '0'))
-        let rec dcLoop (acc:int) (s:ByteString) : int =
-            let stop = (BS.isEmpty s) || (not (isDigit (BS.unsafeHead s)))
-            if stop then acc else dcLoop (1+acc) (BS.unsafeTail s)
-        let digitCount (s:ByteString) : int = dcLoop 0 s
+    module private SeqDef =
+        // for Seq.unfold with Symbol * Def pairs
+        type PT = (struct(Prefix * Dict))
+        type SS = PT list
+        let rec step (ss0 : SS) : ((Symbol * Def) * SS) option =
+            match ss0 with
+            | (struct(p,d0)::ssRem) ->
+                let d = mergeProto d0
+                match d.vu with
+                | Some (Some def) ->
+                    let ss' = 
+                        if Map.isEmpty (d.cs) then ssRem else
+                        struct(p, { d with vu = None }) :: ss
+                    Some ((p,def),ss')
+                | None ->
+                    let onChild ix (struct(cp,c)) ss' =
+                        let p' = joinBytes p ix cp
+                        (struct(p',c))::ss'
+                    let ss' = Map.foldBack onChild (d.cs) ssRem
+                    step ss'
+            | [] -> None
             
-            
-
-
-
-
-
-    // sequence definitions in context of prefix
-    let rec private toSeqP (p:Prefix) (d0:Dict) : seq<Symbol * Def> =
-        let d = mergeProto d0 
-        let sv =
-            match (d.vu) with
-            | Some (Some def) -> Seq.singleton (p,def)
-            | _ -> Seq.empty
-        let seqChild (ix,struct(p',c)) = toSeqP (joinBytes p ix p') c
-        let scs = Seq.concat (Seq.map seqChild (Map.toSeq (d.cs)))
-        Seq.append sv scs
-        
-    /// Compute a sequence of defined symbols. This will perform
-    /// erasures and updates incrementally, as needed.
+    /// Compute a sequence of defined symbols.
     ///
-    /// TODO: This version of toSeq is unsuitable for human observers
-    /// because of cases like `a10` appearing before `a2`. I would 
-    /// like to make sequencing with numbers more convenient.
+    /// Note: This version is as efficient as I could make it. But it
+    /// is rather ugly: `f2` will appear before `f10`. So this is not
+    /// suitable for rendering a dictionary to humans, which may need
+    /// a more heuristic approach.
     let toSeq (d:Dict) : seq<Symbol * Def> = 
-        Seq.delay (fun () -> toSeqP (BS.empty) d)
+        let ss0 = (struct(BS.empty,d))::[]
+        Seq.unfold (SeqDef.step) ss0
 
     /// Test whether a dictionary is empty. This version is more
     /// precise but less efficient than `isEmpty` because it will
-    /// properly handle entries that have been logically deleted.
+    /// properly account for pending deletions.
     let inline isEmpty' (d:Dict) : bool = Seq.isEmpty (toSeq d)
-
 
     /// Partition the dictionary on a symbol, such that all symbols
     /// smaller are to the left and symbols equal or greater are to
-    /// the right. Use with toSeq for indexed browsing.
-    ///
-    /// NOTE: This does not properly divide numeric words, e.g. for
-    /// key `k60` we have `k599` to the left and `k7` to the right.
-    /// I'd like to fix this
- 
+    /// the right. Use with toSeq for incremental browsing.
     let rec splitAtKey (k:Symbol) (d0:Dict) : struct(Dict * Dict) =
         if BS.isEmpty k then struct(empty,d0) else
         let d = mergeProto d0 // merge prefixes in path of key
         let ix = BS.unsafeHead k
-        let lcs = Map.filter (fun k _ -> (k < ix)) (d.cs)
-        let rcs = Map.filter (fun k _ -> (ix < k)) (d.cs)
+        let lcs = Map.filter (fun ixc _ -> (ixc < ix)) (d.cs)
+        let rcs = Map.filter (fun ixc _ -> (ix < ixc)) (d.cs)
         let struct(lcs',rcs') = // split and include ix
             match Map.tryFind ix (d.cs) with
             | None -> struct(lcs,rcs)
@@ -500,8 +487,6 @@ module Dict =
     let inline toKey k d =
         let struct(dL,_) = splitAtKey k d
         dL
-
-    *)
 
     // translate options to VDiff
     let private diffOpt optA optB =

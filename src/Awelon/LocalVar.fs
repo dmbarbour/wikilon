@@ -8,14 +8,19 @@ open Data.ByteString
 //
 // Long term, most projections over Awelon should be represented in
 // Awelon code. Any specializations can be supported at that layer.
-// So this implementation is for short-term and debug fallback use. 
+// This implementation is intended as short-term scaffolding, or as
+// a debugging fallback. 
 module LocalVar =
     open Parser
 
     module private Impl =
         type Var = Word
         let ppop = BS.fromString "pop-"
-        let pvar = BS.fromString "var-"
+        let plet = BS.fromString "let-"
+        let inline mkPop x = Atom (tokAnno (BS.append ppop x))
+        let inline mkLet x = Atom (tokAnno (BS.append plet x))
+        let inline mkVar x = Atom (tokWord x)
+
         let inline matchPrefix p w = 
             (p = (BS.take (BS.length p) w))
         let inline extractPrefix p w =
@@ -67,7 +72,7 @@ module LocalVar =
             | _ -> None
 
         // Test for `(var-x)` patterns, extracting 'x'.
-        let (|Var|_|) op = extractAtomSuffix (TT.Anno) pvar op
+        let (|Var|_|) op = extractAtomSuffix (TT.Anno) plet op
 
         // Test for `(pop-x)` patterns, extracting 'x'.
         let (|Pop|_|) op = extractAtomSuffix (TT.Anno) ppop op
@@ -99,22 +104,20 @@ module LocalVar =
                 pushVar x u' [] b
             | ((CharOp 'c') :: r') ->
                 // push variable twice into remaining program
-                pushVar x (pushVar x u l) []  r'
+                pushVar x (pushVar x u l) [] r'
             | ((CharOp 'd') :: r') ->
                 // drop the variable 
                 u (appendRev l r') 
             | _ ->
                 // inject the variable
-                let xOp = Atom (struct(TT.Word,x))
-                u (appendRev l (xOp::r))
+                u (appendRev l ((mkVar x)::r))
 
-        // Rewrite (var-*) entries to (pop-*) from left to right
+        // Rewrite (let-*) entries to (pop-*) from left to right
         let rec pushVars (u:U) (l:L) (r:P) : P =
             match r with
             | ((Var x) :: r') when acceptVar x r' ->
                 // push `x` into `r'`, then continue from there.
-                let pop_x = Atom (tokAnno (BS.append ppop x))
-                pushVar x (pushVars u (pop_x :: l)) [] r'
+                pushVar x (pushVars u ((mkPop x) :: l)) [] r'
             | ((Block b) :: r') -> // deep rewrite within blocks
                 let ub b' = pushVars u ((Block b')::l) r'
                 pushVars ub [] b
@@ -155,13 +158,12 @@ module LocalVar =
                 pullVar x uCopy (List.rev varOps) r
             else u (List.append varOps r)
 
-        // Extract (pop-*) entries from right to left. 
+        // Extract (pop-*) entries from right to left.
         let rec pullVars (u:U) (l:P) (r:P) : P =
             match r with
             | ((Pop x) :: r') when validVar x -> 
-                // extract `x` from r', prepend `(var-x)`
-                let var_x = Atom (tokAnno (BS.append pvar x))
-                let u' pf = u (appendRev l (var_x :: pf))
+                // extract `x` from r', prepend `(let-x)`
+                let u' pf = u (appendRev l ((mkLet x) :: pf))
                 pullVars (pullVar x u' []) [] r'
             | ((Block b) :: r') -> // deep rewrite within blocks
                 let ub b' = pullVars u ((Block b')::l) r'
@@ -172,7 +174,7 @@ module LocalVar =
 
     /// The input is code containing `(pop-x)` tokens, which serve as
     /// placeholders for assigning a variable (not valid annotations).
-    /// The output replaces `(pop-x) EXPR` by `(var-x) T(x,EXPR)` with
+    /// The output replaces `(pop-x) EXPR` by `(let-x) T(x,EXPR)` with
     /// the following rewrite algorithm:
     ///
     ///     T(x,E) | E does not contain x      => d E
@@ -186,21 +188,22 @@ module LocalVar =
     /// See `viewLocalVars`. 
     let hideLocalVars (p:Program) : Program = Impl.pullVars id [] p
 
-    /// Given source code containing `(var-x)` annotations, we can 
+    /// Given source code containing `(let-x)` annotations, we can 
     /// rewrite to `(pop-x) x` then propagate `x` as a value using 
     /// Awelon's primitive a,b,c,d operations. We will exclude any
-    /// annotations that would result in ambiguity.
+    /// annotations that would result in ambiguous use of `x`.
     ///
-    /// The `(pop-x)` annotations are not concise or attractive. We
-    /// can mitigate this in higher views, e.g. using `\x` for the
-    /// `(pop-x)` annotation. This supports lets and lambdas:
+    /// I assume the `(pop-x)` annotations will be further projected
+    /// for concision and aesthetics, perhaps as `\x`. This supports
+    /// lightweight lets and lambdas:
     ///
-    ///     [X] \x EXPR         let x = [X] in EXPR         
+    ///     [X] \x EXPR         let x = [X] in EXPR
     ///     [\x EXPR]           (lambda x -> EXPR)
     ///
-    /// Locals can simplify some data plumbing, especially where 
-    /// deep closures may be involved. However, it should be used
-    /// carefully around conditional behaviors. 
+    /// Local variables can simplify data plumbing, especially when 
+    /// deep closures become involved. However, it should be used
+    /// carefully around conditional behaviors to avoid copying the
+    /// variable into each conditional path.
     let viewLocalVars (p:Program) : Program = Impl.pushVars id [] p
 
 
