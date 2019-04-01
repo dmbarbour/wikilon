@@ -768,7 +768,7 @@ module Dict =
     let inline compact (db:Stowage) (d:Dict) : Dict =
         Codec.compact node_codec db d
 
-    /// Obtain a Directory representation for a Dictionary. This will
+    /// Obtain a directory representation for a Dictionary. This will
     /// just use the existing `/ secureHash` directory if it's a single
     /// entry, otherwise will allocate a directory in Stowage. Does not
     /// compact the dictionary, and can result in very small nodes. It 

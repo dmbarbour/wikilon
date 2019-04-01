@@ -153,22 +153,6 @@ Awelon does not optimize for package-based software distribution. Instead, I enc
 
 However, Awelon systems can represent package-based software distribution by aligning packages with word prefixes. For example, a one-line entry `/packagename- secureHash` can install or update a specific version for an entire package. This might be suitable in cases where packages involve special licenses or subscriptions. *Namespaces* can be supported via projectional editing to mitigate verbosity from hierarchical names. For dynamic systems, developers can arrange for a bot to synchronize packages from a trusted source (see *Bots, Effects, and Applications*).
 
-## Loops
-
-Awelon disfavors recursive definitions. Instead, we use fixpoint combinators:
-
-        [X][F]z == [[F]z]F
-        z = [[(a3) c i] b (eq-z) [c] a b w i](a3) c i
-
-        assuming:
-            [def of foo](eq-foo) == [foo]
-            [B][A]w == [A][B]       w = (a2) [] b a
-               [A]i == A            i = [] w a d
-
-Other loop combinators can be built upon `z`. For example, we can develop a `foreach` function that processes a list or stream. We could similarly preserve the name `foreach` in partially evaluated loops via `foreach = [(eq-foreach) ...]z`. Use of the *Named Locals* projection might help when defining new loop combinators.
-
-*Aside:* I've frequently contemplated support for recursive word definitions. However, there are some persuasive arguments for avoiding them: inline all the things semantics, programs as finite sequences rather than graphs, no need for an external reference concept to explain or construct loops. Further, after we develop a library of loop combinators and common collections types, most use cases would be covered.
-
 ## Stowage
 
 By annotation, large values could be moved from memory to environment:
@@ -193,25 +177,43 @@ Primitives rewrite by simple pattern matching:
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated definitions. Under normal conditions, words will rewrite based on available input and this can be controlled via *Arity Annotations* (see below). The motive to defer rewriting is to retain human-meaningful symbols, structure, and projected views for evaluated results. Also, it avoids exponential expansion, and simplifies partial evaluation.
+Words simply rewrite to their definitions. However, for both performance and projections, we'll generally avoid rewriting a word unless doing so heuristically results in useful progress. These heuristics may be runtime dependent, and guided by annotations - *Arity Annotations* are especially useful in this role. Ultimately, evaluated programs will usually contain user-defined words.
 
-Awelon does not specify an evaluation strategy. That is, neither strictness nor laziness are part of Awelon's semantics. Program developers should guide evaluation through annotations such as `(par)`, `(lazy)`, and `(eval)` where it's important.
+Awelon does not specify an evaluation strategy. Neither strictness nor laziness are part of Awelon's semantics. Program developers may guide evaluation through annotations such as `(par)`, `(lazy)`, and `(eval)` where it's important for consistent performance.
 
 ### Arity Annotations
 
-Arity annotations are useful for Awelon, and have simple rewrite rules:
+Arity annotations help control evaluation. They have simple rewrite rules:
 
         [B][A](a2) == [B][A]
         [C][B][A](a3) == [C][B][A]
         ...
 
-Arity annotations are useful to control rewriting and partial evaluation. For example, consider a swap function `w = [] b a` vs `w = (a2) [] b a`. In the former case, we might evaluate `[A]w => [[A]]a`. However, this isn't particularly useful to a human or an optimizer, so we might favor the latter where `[A]w` would not evaluate further because `w` is still lacking an operand. Arity annotations also support call-by-need computation. For example, `[[A](a2)F]` has the same observable behavior and type of `[[A]F]`, but the former will defer computation until another operand is supplied.
+Arity annotations can mitigate poor heuristics for early evaluation of words. For example, given swap function `w = [] b a`, we might evaluate `[A]w => [[A]]a`. However, since this isn't very useful, we could instead define `w = (a2) [] b a` to ensure we have two arguments before we rewrite. Arity annotations also support call-by-need computation. For example, `[[A](a2)F]` has the same observable behavior and type of `[[A]F]`, but the former will defer computation until another operand is supplied.
 
 *Note:* Positional arguments do not scale nicely for human usability. Beyond three arguments, developers should favor aggregation of data into structures, at least for public APIs.
 
-## Garbage Collection
+### Loops
 
-Awelon has explicit copy and drop, and garbage collection is not a strong requirement. However, copy is a very common operation in Awelon. Thus, for performance, it can be convenient to either use tracing GC or reference counting. Awelon cannot form cyclic value structures, which simplifies GC.
+Awelon rejects recursive definitions. Instead, we build on fixpoint combinators:
+
+        [X][F]z == [X][[F]z]F
+        z = [[(a3) c i] b (eq-z) [c] a b w i] (a3) c i
+
+        assuming:
+            [def of foo](eq-foo) == [foo]
+            [B][A]w == [A][B]       w = (a2) [] b a
+               [A]i == A            i = [] w a d
+
+This defines the strict fixpoint combinator, commonly called the z-combinator. We use `(eq-z)` to recover the `z` name, and we use arity annotations to prevent premature expansion of `[F]z`. We can develop further loop combinators above `z` using simple patterns like `foreach = (a2) [[[(a2)] a i] b (eq-foreach) foreach-body]z` to control arity and recover the loop combinator name in each iteration.
+
+Explicit use of fixpoint combinators is awkward. In practice, this isn't what normal programmers should be doing. Instead, we'll develop a few widely useful loop combinators as part of our dictionary, akin to the `for` or `while` loops of imperative languages, then use those to implement specific loops as needed. Also, we could pursue collections-oriented programming styles, building upon a few common collection types.
+
+*Aside:* The benefit of avoiding recursive definitions is that Awelon's semantics are simpler. An Awelon program may be understood as a finite stream or tree of primitives, logically disentangled from the codebase. Conversely, the codebase can be understood as a compression model for concrete Awelon streams.
+
+### Garbage Collection
+
+Awelon does not specify garbage collection. In theory, we could deeply copy values and recover memory on drop. In practice, deep copy of large values is inefficient, so we'll favor shallow reference copy. In that case, reference counting garbage collection is a natural fit with Awelon's explicit copy and drop operations and acyclic value structure. An implementation of Awelon could use reference counting or any other model (tracing, hybrid, etc.) to recover memory resources.
 
 ## Memoization
 
@@ -331,24 +333,25 @@ The cost of introducing prefix or infix operators is eventual need to deal with 
 
 We can implement let and lambda expressions as an editable projection. 
 
-Consider a lightweight syntax where `\x` indicates we "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current definition or block (modulo shadowing). Thus `[\x EXPR]` serves the same role as `(λx.EXPR)`, while `[X] \x BODY` serves the same role as `let x = [X] in BODY`. We can represent this via bidirectional rewriting:
+Consider a lightweight syntax where `\x` indicates we "pop" a value from the stack and assign it to a local variable `x`, scoped to the remainder of our current definition or block (modulo shadowing). Thus `[\x EXPR]` serves the same role as `(λx.EXPR)`, while `[X] \x BODY` serves the same role as `let x = X in BODY`. We can represent this via bidirectional rewriting:
 
         \x EXPR == (let-x) T(x,EXPR) 
-          assuming `x` represents a value
+          assuming `x` represents a function value
         
         T(x,E) | E does not contain x       == d E
-        T(x,x)                              == 
+        T(x,[x])                            == 
+        T(x,x)                              == [[]] a a d
         T(x,[E])                            == [T(x,E)] b
         T(x,F G)                            
             | only F contains x             == T(x,F) G
             | only G contains x             == [F] a T(x,G)
             | F and G contain x             == c [T(x,F)] a T(x,G)
 
-This projection is robust and independent of user definitions.
+In this projection, `[x]` refers to the original value, while naked `x` refers to an inline call. This is simply the arrangement I've found convenient in practice. To ensure a robust interpretation, the above projection does not use any user-defined words. However, to improve concision, we could easily tweak the projection to use the word `i` in place of `[[]] a a d`.
 
-Unfortunately, it is not optimal for conditional behaviors where use of a variable in an if-then block would result in closures. This could eventually be solved by a more cohesive projection with built-in knowledge of common conditionals. Meanwhile, we should optimize by hand.
+Unfortunately, this projection is not optimal for conditional behaviors (if then else, match case, etc.) because it will copy the `x` into each path as a closure. What we usually want is closer to leaving `x` on the stack at a predictable location then ensuring each branch knows where to find it. To solve this, we would need to integrate common conditional expressions with the local variables projection. Meanwhile, programmers must carefully handle conditionals.
 
-Despite caveats, local variables are a convenient projection in cases where tacit programming becomes a mess of closures or data-shuffling, or for larger programs where a user might have difficulty tracking the stack.
+Despite caveats, local variables are a convenient projection for cases where tacit programming would become a mess of closures and data shuffling words.
 
 ### Namespaces
 
@@ -406,23 +409,19 @@ Between opaque structure and reference constraints, we can garbage collect varia
 
 ## Command Sequences
 
-A purely functional language can model interactive programs as functions that return either a command-continuation pair or a final result. The caller can interpret commands and provide results to the continuation, which is represents another interactive program. This creates an interaction loop. For interaction with the real-world, a runtime system will interpret a command model as an API.
+*Command Sequences* are a projection for sequential interactive programs. The interactive model is a function that returns either a command-continuation pair or a final result. For example, a command might be `"read foo.txt"`. The host should interpret the command then provide file content (or error) as an argument to the continuation. However, explicit continuations easily result in a deeply nested mess of syntax. The command sequence projection will flatten the nesting and hide the continuation management.
 
-Command sequences are a lightweight projection to hide use of continuations and support imperative expression and procedural abstractions for interactive programs. A suitable projection is simple:
+        X ; Y ; Z == X [Y;Z] cseq == X [Y [Z] cseq] cseq
 
-        X ; Y ; Z == [X] [Y;Z] cseq == X [Y [Z] cseq] cseq
+In general, we assume that each command `X` may also be a command sequence `X1 ; X2`. We will want *associativity* such that `X1 [X2] cseq [Y] cseq` has the same observable behavior as `X1 [X2 [Y] cseq] cseq`. For terminal behaviors, we might `return` a value or `yield` a command. To faithfully abstract the empty sequence, it is convenient if `return` is an *identity* element, such that `return ; Y` and `Y ; return` have the same observable behavior as `Y`.
 
-Here, `cseq` must be the last operation within a subprogram for the projection to apply. We can understand `;` as a unary prefix operator (`; Y == [Y] cseq`), because `X` is untouched. For data plumbing between commands, I assume this projection is applied above *Named Local Variables*. Thus, variables defined in `X` are visible to `Y` or `Z`. 
-
-For procedural abstractions (including conditionals and loops), we must assume any command `X` may evaluate to a command sequence `X1 ; X2`. This requires *associativity*. That is, `X1 [X2] cseq [Y] cseq` must have the same observable behavior as `X1 [X2 [Y] cseq] cseq`. Further, we benefit from an *identity* element `return` such that `return;X` or `X;return` have the same observable behavior as `X`. This allows pure computations to be flexibly included in command sequences.
-
-Performance is a critical concern. In context of procedural abstractions, it is not unusual to construct deep procedural "call stacks". For example, if `Z` calls `Y` calls `X` then our call stack might include `[X2] cseq [Y2] cseq [Z2] cseq`. A direct composition of continuations can reconstruct the call stack, such as `[X2 [Y2] cseq [Z2] cseq]`. However, this touches `[Z2]` for every operation in `X`, resulting in a cost per operation that is linear in call stack depth. This is very bad! Instead, we want constant-time overheads for continuation management. Thus, we should construct a continuation `[X2 [Y2 [Z2] cseq] cseq]`. Achieving this requires an intermediate representation. Further, for partial evaluation it's convenient if we can locally collapse `return;` sequences.
+Performance is a significant concern. In context of deep procedural abstractions, patterns such as `[X2] cseq [Y] cseq [Z] cseq` are common, corresponding to a call stack. Naive composition of continuations will rebuild this call stack directly, and thus touch `[Z]` for every operation in `X`, resulting in per-operation overheads that depend on call stack depth. To avoid this, we should instead rewrite our continuation as `[X2 [Y [Z] cseq] cseq]`. Further, for partial evaluation optimizations, it is convenient if `return ; Y` locally rewrites to `Y`.
 
 A minimum viable implementation:
 
-        return = [none]
-        yield  = [[null] some]
-        cseq = w [i] [w [cons] b b [some] b] if
+        return  = [none] 
+        yield   = [[null] some]
+        cseq    = w [i] [w [cons] b b [some] b] if
 
         Where:
             [L][R]none == L             none = w a d
@@ -431,23 +430,35 @@ A minimum viable implementation:
             [F]i == F                   i = [] w a d
             [A][B]w == [B][A]           w = [] b a
 
-In this case, we assume a command is either `return` or `yield`, with the actual return value or command simply represented by the remainder of our stack. The intermediate representation for the continuation is a simple list. We would process this list to produce an efficient continuation. However, exposure of this list is an abstraction leak that may hinder acceleration or static safety analysis. A better implementation might directly encode a list fold into a yielded continuation constructor.
+This constructs an intermediate list of `cseq` continuations, which the host may fold into the desired `[X2 [Y [Z] cseq] cseq]` form. However, exposing this list is semantically awkward, difficult to accelerate or type check. We can address this concern by merging the list fold directly into the intermediate continuation.
 
-In context of command sequence, we also have command models. A command model is a set of `yield` commands, each with with a type and documentation about intended consequences. Static safety analysis for command sequences would greatly benefit from a specialized extension that leverages static command labels like `"read"` vs `"fork"`. With this, a command model's type can be represented as a simple record type, albeit with a different header or annotation. 
+        return  = [none]
+        yield   = [[[return][]if] some]
+        cseq    = (a2) [[[(a2)] a i] b (eq-cseq) cseq-body] z
+        cseq-body = \c
 
-*Note:* Command sequences can be understood as an free monad. However, I'm intentionally avoiding the monad abstraction or branding for Awelon, as it's historically been a tripping hazard for FP newcomers.
+A remaining concern is static type safety. A command sequence should have a corresponding *command model* that describes commands in terms of parameters, expected result type, and intended consequences. To simplify static type checking, we could utilize static method labels like `"read"` vs `"fork"`, similarly to how we propose to type objects (see *Object Oriented Awelon*).
+
+*Note:* Command sequences can be understood as an free monad. However, I'm intentionally avoiding the monad abstraction or branding for Awelon, as it's historically been a tripping hazard for FP newcomers. We only need one concrete implementation of command sequences.
 
 ## Pattern Matching
 
-Awelon does not have built-in support for pattern matching. However, it is feasible to model first-class patterns - and [parser combinators](https://en.wikipedia.org/wiki/Parser_combinator) in general - as simple compositions of first-class functions of type `source → (error + success)`, perhaps modeled via command sequences that simply yield on error but might permit a `try : Match e a -> Match e' (e + a)` behavior. 
+Awelon does not have built-in support for pattern matching. However, it is feasible to model first-class patterns - and [parser combinators](https://en.wikipedia.org/wiki/Parser_combinator) in general - using command sequences with a try/abort command model:
 
-First-class patterns are expressive and extensible. The challenge is to develop some convenient and efficient projections that correspond to common match behaviors, working with lists and records, handling variants, and support for pattern guards and active patterns. The weakness of first-class patterns is that we won't have much compiler support to optimize pattern matching, beyond what we can achieve by partial evaluation and conventional function optimizations.
+        type M e a -- a match that fails with `e` or returns `a`
+        try     : M e a -> (e -> M e' a) -> M e' a
+        abort   : e -> M e a 
+        return  : a -> M e a
+
+The failure result `e` may provide metadata to optimize the fallback behavior.
+
+First-class patterns are expressive and extensible. The challenge is to develop convenient and efficient projections for working with lists and records, handling variants, and support for pattern guards and active patterns. The weakness of first-class patterns is that we won't have much compiler support to optimize pattern matching, beyond what we can achieve by partial evaluation and conventional function optimizations.
 
 *TODO:* Concrete examples, as they're developed.
 
 ## Constraint Logic Programming
 
-Constraint and logic programming are convenient styles for some problems, albeit terribly inefficient for the general use case. We can leverage *Command Sequences* to interleave expression of a constraint model with processing into an acceptable return value. However, we'll need concurrency to mitigate our rigid sequence ordering. A preliminary command model:
+Constraint and logic programming are convenient styles for some problems, albeit terribly inefficient for the general use case. We can leverage command sequences to interleave expression of a constraint model with processing into an acceptable return value. However, we'll need concurrency to mitigate our rigid sequence ordering. A preliminary command model:
 
         type CC v a -- concurrent constraints
         new     : CC v (v a)
@@ -538,7 +549,7 @@ Preliminary API in pseudo-Haskell:
         new     : DebugName -> a -> TX v e (v a)
         read    : v a -> TX v e a
         write   : v a -> a -> TX v e ()
-        try     : TX v e a -> TX v e' (Either e a)
+        try     : TX v e a -> (e -> TX v e' a) -> TX v e' a
         abort   : e -> TX v e a
         fork    : DebugName -> TX v e a -> TX v e' ()
 

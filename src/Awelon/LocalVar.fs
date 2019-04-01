@@ -14,12 +14,8 @@ module LocalVar =
     open Parser
 
     module private Impl =
-        type Var = Word
         let ppop = BS.fromString "pop-"
         let plet = BS.fromString "let-"
-        let inline mkPop x = Atom (tokAnno (BS.append ppop x))
-        let inline mkLet x = Atom (tokAnno (BS.append plet x))
-        let inline mkVar x = Atom (tokWord x)
 
         let inline matchPrefix p w = 
             (p = (BS.take (BS.length p) w))
@@ -49,68 +45,74 @@ module LocalVar =
 
         // Test whether a word is contained within a program, albeit
         // in a manner sensitive to name shadowing behind (pop-*)
-        // annotations (thus token sequence search is no good).
+        // annotations for idempotence.
         let containsWord w prog = cwLoop [] w prog
 
-        let rec appendRev xs dst =
-            match xs with
-            | (x::xs') -> appendRev xs' (x::dst)
-            | [] -> dst
+        type P = Program // a program
+        type L = P       // a reverse-ordered program
+        type U = P -> P // ad-hoc continuation
 
-        // for convenient pattern matching of Awelon keywords
-        // todo: figure out how to make this parameterized to
-        // avoid allocation on matching
-        let (|CharOp|_|) op =
-            match op with
-            | Atom (struct(TT.Word,w)) when (1 = BS.length w)  -> Some (char (w.[0]))
-            | _ -> None
-
+        // Test for `(let-x)` patterns, extracting 'x'.
         let inline extractAtomSuffix ttReq p op =
             match op with
             | Atom (struct(tt,w)) when (ttReq = tt) && (matchPrefix p w) ->
                 Some (BS.drop (BS.length p) w)
             | _ -> None
 
-        // Test for `(var-x)` patterns, extracting 'x'.
-        let (|Var|_|) op = extractAtomSuffix (TT.Anno) plet op
-
-        // Test for `(pop-x)` patterns, extracting 'x'.
+        let (|Let|_|) op = extractAtomSuffix (TT.Anno) plet op
         let (|Pop|_|) op = extractAtomSuffix (TT.Anno) ppop op
 
         let inline isPrimOpC c = ((byte 'd') >= c) && (c >= (byte 'a'))
         let inline isPrimOp w = (1 = BS.length w) && (isPrimOpC (w.[0]))
+        let inline acceptLet x p = (isValidWord x) && not ((isPrimOp x) || (containsWord x p))
 
-        let validVar w = (Parser.isValidWord w) && (not (isPrimOp w))
-        let acceptVar w p = (validVar w) && (not (containsWord w p))
+        let rec appendRev xs dst =
+            match xs with
+            | (x::xs') -> appendRev xs' (x::dst)
+            | [] -> dst
 
-        type P = Program // a program
-        type L = P       // a reverse-ordered program
-        type U = P -> P // ad-hoc continuation
+        // For partial evaluation pattern matching, we must easily
+        // recognize our `a b c d` operators without allocations.
+        let (|CharOp|NotCharOp|) (c:char) op =
+            match op with
+            | Atom (struct(TT.Word,w)) when (1 = BS.length w) && ((byte c) = w.[0])) -> CharOp
+            | _ -> NotCharOp
 
-        // Inject a singular stack-value variable into a program, 
-        // by evaluating the Awelon primitive operators in context.
-        //
-        // In this case, I keep a reverse-ordered list of operations
-        // to the left. This allows efficient processing of `[F] a`
-        // block inlining. 
-        let rec pushVar (x:Var) (u:U) (l:L) (r:P) : P =
+        // This specifically recognizes the `[[]] a a d` sequence, then
+        // returns the suffix if matched.
+        let (|InlineP|_|) p =
+            match p with
+            | (Block [Block []] :: CharOp 'a' :: CharOp 'a' :: CharOp 'd' :: p') -> Some p'
+            | _ -> None
+
+        // Inject a variable word into a program. In this case, the `x`
+        // variable word corresponds to a block `[x]`. This is performed
+        // immediately, so variables are processed in a single pass. 
+        // 
+        // Inlining a block `[[]] a a d` is recognized directly, so we
+        // don't use a full evaluator for this.
+        let rec pushVar (x:Word) (u:U) (l:L) (r:P) : P =
             match r with
-            | ((Block b) :: (CharOp 'a') :: r') -> 
-                // block will skip over variable + inline content
-                pushVar x u (appendRev b l) r'
-            | ((Block b) :: (CharOp 'b') :: r') ->
+            | (InlineP r') ->
+                // inject `x` inline then return
+                u (appendRev l (Atom (tokWord x) :: r'))
+            | ((Block ops) :: (CharOp 'a') :: r') -> 
+                // apply `[ops]` over `[x]`, continue pushing `[x]`
+                pushVar x u (appendRev ops l) r'
+            | ((Block ops) :: (CharOp 'b') :: r') ->
                 // bind variable into the current block, keep remainder
-                let u' b' = u (appendRev l ((Block b') :: r'))
-                pushVar x u' [] b
+                let u' ops' = u (appendRev l ((Block ops') :: r'))
+                pushVar x u' [] ops
             | ((CharOp 'c') :: r') ->
-                // push variable twice into remaining program
+                // simply push variable twice into remaining program
                 pushVar x (pushVar x u l) [] r'
             | ((CharOp 'd') :: r') ->
-                // drop the variable 
+                // drop the variable and return
                 u (appendRev l r') 
             | _ ->
-                // inject the variable
-                u (appendRev l ((mkVar x)::r))
+                // inject the variable as `[x]`
+                let xOp = Block [Atom (tokWord x)]
+                u (appendRev l (xOp::r))
 
         // Rewrite (let-*) entries to (pop-*) from left to right
         let rec pushVars (u:U) (l:L) (r:P) : P =
@@ -173,31 +175,38 @@ module LocalVar =
 
 
     /// The input is code containing `(pop-x)` tokens, which serve as
-    /// placeholders for assigning a variable (not valid annotations).
-    /// The output replaces `(pop-x) EXPR` by `(let-x) T(x,EXPR)` with
-    /// the following rewrite algorithm:
+    /// placeholders for assigning a variable. The output replaces 
+    /// `(pop-x) EXPR` by `(let-x) T(x,EXPR)` with transform `T` such
+    /// that `[x] T(x,EXPR) == EXPR` independent of dictionary.
     ///
+    ///     T(x,[x])                           => 
+    ///     T(x,x)                             => [[]] a a d
     ///     T(x,E) | E does not contain x      => d E
-    ///     T(x,x)                             => 
     ///     T(x,[E])                           => [T(x,E)] b
     ///     T(x,F G)                            
     ///        | only F contains x             => T(x,F) G
     ///        | only G contains x             => [F] a T(x,G)
     ///        | F and G contain x             => c [T(x,F)] a T(x,G)
     ///
-    /// See `viewLocalVars`. 
+    /// We use Awelon primitive words `a b c d` to ensure independence
+    /// from the dictionary. This transform is not the most concise for
+    /// the `T(x,x)` case, but it's simple, robust, and consistent.
+    ///
+    /// See `viewLocalVars` for the other direction.
     let hideLocalVars (p:Program) : Program = Impl.pullVars id [] p
 
-    /// Given source code containing `(let-x)` annotations, we can 
-    /// rewrite to `(pop-x) x` then propagate `x` as a value using 
-    /// Awelon's primitive a,b,c,d operations. We will exclude any
-    /// annotations that would result in ambiguous use of `x`.
+    /// Given source code containing `(let-x)` annotations, we rewrite
+    /// to `(pop-x) [x]` then partially evaluate `[x]` using Awelon's 
+    /// primitive `a b c d` operations. This is much weaker than a full
+    /// evaluator, and only needs to reverse hideLocalVars. 
+    /// 
+    /// For safety, we omit the rewrite if `x` would be ambiguous.
     ///
     /// I assume the `(pop-x)` annotations will be further projected
     /// for concision and aesthetics, perhaps as `\x`. This supports
     /// lightweight lets and lambdas:
     ///
-    ///     [X] \x EXPR         let x = [X] in EXPR
+    ///     [X] \x EXPR         let x = X in EXPR
     ///     [\x EXPR]           (lambda x -> EXPR)
     ///
     /// Local variables can simplify data plumbing, especially when 
